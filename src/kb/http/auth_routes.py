@@ -40,7 +40,7 @@ import contextlib
 import datetime as dt
 import logging
 from collections.abc import Callable, Iterator
-from typing import Any, Final
+from typing import Any, Final, Protocol
 
 from fastapi import APIRouter, Header, HTTPException, Query, Request, Response
 from fastapi.responses import JSONResponse, RedirectResponse
@@ -73,6 +73,17 @@ DEFAULT_RETURN_TARGET: Final[str] = "/"
 #: Error bodies. Fixed strings, no provider text, no token, no exception repr.
 _BODY_UNAUTHENTICATED: Final[dict[str, Any]] = {"error": "not_authenticated"}
 _BODY_CSRF: Final[dict[str, Any]] = {"error": "csrf_token_required"}
+
+
+class SessionSource(Protocol):
+    """What the routes need from the session store.
+
+    :class:`kb.access.session.SessionStore` is the only implementation. Naming
+    it as a protocol keeps the two things that matter in the type: the routes
+    read a session out of the database, and they never hold one in memory.
+    """
+
+    def load(self, cookie_value: str | None, *, now: dt.datetime) -> Session: ...
 
 
 def login_cookie_name(settings: AuthSettings) -> str:
@@ -129,7 +140,7 @@ def _error(code: str, status: int) -> JSONResponse:
 def create_auth_router(
     *,
     flow: AuthorizationCodeFlow,
-    store: Any,
+    store: SessionSource,
     settings: AuthSettings,
     clock: Callable[[], dt.datetime],
 ) -> APIRouter:
@@ -233,7 +244,7 @@ def create_auth_router(
 
 
 def require_principal(
-    store: Any,
+    store: SessionSource,
     settings: AuthSettings,
     clock: Callable[[], dt.datetime],
 ) -> Callable[..., Principal]:
@@ -244,9 +255,9 @@ def require_principal(
     omission: the dependency is the only way to reach a ``Principal``, and the
     session it returns is already the authenticated one.
 
-    ``store`` is any object with ``load(cookie, now=...) -> Session``;
-    :class:`kb.access.session.SessionStore` is the only implementation, and it
-    is the reason this works across gateway restarts.
+    ``store`` is a :class:`SessionSource`; the only implementation is
+    :class:`kb.access.session.SessionStore`, and that is precisely why this
+    survives a gateway restart.
     """
 
     def dependency(

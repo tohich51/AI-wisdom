@@ -18,7 +18,7 @@
   },
   "source_after": {
     "git_sha": "dc6f0b4e92b1f2e766ffb58d13043b00a27bb5ff",
-    "manifest_sha256": "9467e75807779e0e0190b4d91e76191b4892d83a211e71859ff0e0949f23d365"
+    "manifest_sha256": "8a2cf0dfc2816715356e83983ac607cb068a2111be3d1360498114a10ec7c29f"
   },
   "changed_paths": [
     "deploy/identity/README.md",
@@ -60,7 +60,7 @@
     },
     {
       "path": "src/kb/http/auth_routes.py",
-      "sha256": "16689894d1773b29baa8c687e921974452f5804a815b92c1b8c669ef797ba637"
+      "sha256": "30d8d5562acc686bad0b7d8357f73e73cf8704f4e3d13975afa73c82274f2065"
     },
     {
       "path": "deploy/identity/realm-knowledge-hub.json",
