@@ -15,6 +15,7 @@ import argparse
 import json
 import pathlib
 import re
+import subprocess
 import sys
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
@@ -47,6 +48,10 @@ def bootstrap(srv, *, organisation: str, owner_principal: str) -> dict:
 
 
 def _lit(value: str) -> str:
+    """SQL string literal. Single quotes are doubled, which is the whole
+    defence here; the caller must not concatenate anything else."""
+    if "\x00" in value:
+        raise ValueError("NUL is not allowed in a SQL literal")
     return "'" + value.replace("'", "''") + "'"
 
 
