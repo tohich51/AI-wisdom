@@ -19,8 +19,8 @@
     "note": "manifest is scripts/handoff.py::tree_manifest() over the worktree with the C15 paths excluded; docs/handoff-input/ is gitignored and absent from the worktree, so HANDOFF-MANIFEST.json could not be hashed here"
   },
   "source_after": {
-    "git_sha": "SELF",
-    "manifest_sha256": "POST_COMMIT"
+    "git_sha": "6253726a510d43b84625d4e52d34b8e06c92b056",
+    "manifest_sha256": "a445cad2671bb794b3e9d9933aa200f6b36654e63b3cf25f392eb6386cfa67ca"
   },
   "changed_paths": [
     "migrations/0004_provisioning.sql",
