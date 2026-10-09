@@ -1,0 +1,237 @@
+{
+  "schema_version": "1.0",
+  "task_id": "C10",
+  "status": "implemented_checked",
+  "review_status": "not_reviewed",
+  "workspace_absolute": "/workspace/knowledge-hub/.worktrees/feature-c10-upload",
+  "branch": "feature-c10-upload",
+  "executor": {
+    "product": "MiniMax Cloud",
+    "model_observed": null,
+    "model_observed_reason": "not observable from inside the agent. No environment variable, config file or API response in this workspace reports the resolved model id or provider, and AGENTS.md rule 2 forbids declaring a setting confirmed on the strength of the prompt alone. Recorded as null rather than copied forward from C09's entry, which was written by a different session with different visibility.",
+    "thinking_observed": null,
+    "thinking_observed_reason": "same reason as model_observed; no runtime surface reports the thinking setting",
+    "provider_contract_verified": false,
+    "model_substitution_occurred": false,
+    "paid_api_or_byok_used": false
+  },
+  "source_before": {
+    "git_sha": "16e00c37b2b58932249897960225a5f7807b5633",
+    "manifest_sha256": "0bd852b2011af3fd7daad42c02bda490f501c24816e0d0bf0abe8f662c10a0a1",
+    "note": "the manifest hash is dist/source-manifest.json produced by `just package` on the pre-change tree; the zip itself was rebuilt after the change and is listed under artifacts"
+  },
+  "source_after": {
+    "git_sha": "COMMIT_SHA_PLACEHOLDER",
+    "manifest_sha256": "MANIFEST_SHA_PLACEHOLDER"
+  },
+  "changed_paths": [
+    "migrations/0004_uploads.sql",
+    "src/kb/catalog/storage.py",
+    "src/kb/catalog/upload.py",
+    "src/kb/catalog/upload_fetch.py",
+    "src/kb/catalog/upload_data.py",
+    "src/kb/http/uploads.py",
+    "tests/integration/upload/conftest.py",
+    "tests/integration/upload/test_blob_store.py",
+    "tests/integration/upload/test_data_boundary.py",
+    "tests/integration/upload/test_interrupted_upload.py",
+    "tests/integration/upload/test_upload_api.py",
+    "tests/integration/upload/test_url_ingestion.py",
+    "docs/handoff/results/C10.json"
+  ],
+  "scope_note": "Every changed path is inside the card's allowed list: src/kb/catalog/storage*, src/kb/catalog/upload*, src/kb/http/uploads*, tests/integration/upload/**, migrations/0004_uploads.sql, plus this result file. 0001, 0002 and 0003 were read and never edited; `git diff --name-only HEAD~1` at commit time lists only the files above. `src/kb/http/libraries.py` is imported by the uploads router for the shared Db/Me/mapped_errors dependencies, exactly as C09's projects router imports them; it was not modified. No `src/kb/http/deps.py` was added, so no shared identity dependency had to be written outside the card's paths. docs/handoff/checkpoint.json was deliberately not written: it is a single shared file and other workers are on their own branches; the integrator owns that merge.",
+  "artifacts": [
+    {
+      "path": "migrations/0004_uploads.sql",
+      "sha256": "8c33ea29b3becc9c74235a815166fcfd8ff195443cd16cd1d7285073c0333ee8",
+      "note": "new migration, exactly the mandated filename. Creates kb.storage_backend, kb.object_manifest and kb.ingest, adds one INSERT-only policy to kb.source_version, and touches no existing object. 0001/0002/0003 unmodified."
+    },
+    {
+      "path": "src/kb/catalog/storage.py",
+      "sha256": "4184dfed4141267d1bbe6455c6100ba8f58f41134225d65a85e93f6827b7eed4"
+    },
+    {
+      "path": "src/kb/catalog/upload.py",
+      "sha256": "d19782f62dacca17525f1d5adf2e70bd943cdde98997e686dfe1f98793283ad9"
+    },
+    {
+      "path": "src/kb/catalog/upload_fetch.py",
+      "sha256": "4648a6c1687ca5390938f96d6c66d5a63df5576291487a71cfdc0000a01d8037"
+    },
+    {
+      "path": "src/kb/catalog/upload_data.py",
+      "sha256": "f6b63f9a133e460feebf54811fb7c790be0fc044f0ec49c7718b729598882329"
+    },
+    {
+      "path": "src/kb/http/uploads.py",
+      "sha256": "5cc1aac754a3c2b7ebc12d3de9cd6c566fd41b04b080b1a7f3d4f7321dc58603"
+    },
+    {
+      "path": "tests/integration/upload/",
+      "sha256": "per-file hashes in docs/handoff/results/C10.json are recorded in the check entries; the directory holds conftest.py and five test modules, 140 tests",
+      "note": "real PostgreSQL 16.2 (pgserver) in database kb_c10, migrations 0001-0004 applied once per session, real local filesystem store under tmp_path"
+    },
+    {
+      "path": "dist/knowledge-hub-source.zip",
+      "sha256": "c92875557bafbafa29f67a0d92998d4033ee65c22e8e790ff1923ea2eb6a936e",
+      "note": "`just package`, source only, 88 files. Packaging only — nothing pushed, deployed or published. dist/ is gitignored, so the bundle is not part of the commit."
+    }
+  ],
+  "what_was_built": {
+    "store": "kb.catalog.storage.LocalBlobStore — content-addressed, append-only, fsync + atomic rename + directory fsync, staging area inside the store root so os.replace never degrades to a copy. A key is validated against the same regex as the manifest CHECK and resolved inside the root, so containment is a property of the join rather than of the string.",
+    "object_key": "blobs/<library-hex>/<aa>/<bb>/<sha256>. Immutable, derived from the digest, never a mutable path. The library scope is deliberate and is explained in findings_for_the_next_owner.",
+    "routes": "POST /libraries/{id}/sources/upload (multipart), POST /libraries/{id}/sources/from-url (JSON), GET /sources/{id}/original (whole body or a single byte Range).",
+    "schema": "kb.storage_backend (routing registry, seeded with the 'local' adapter), kb.object_manifest (the only path from an object key to a readable source, FK to kb.source(object_key)), kb.ingest (one submission attempt, UNIQUE (library_id, idempotency_key)).",
+    "url_ingestion": "http/https only; no credentials in the URL; no numeric address forms; every resolved address checked; IP literals checked without consulting a resolver; every redirect hop re-validated from scratch; hops capped at 5; the address actually connected to compared with the approved set.",
+    "deduplication": "scoped to the library. A re-upload of identical bytes resolves to the source that already holds them, with no second source row and no second manifest. A reply never mentions any other library.",
+    "data_boundary": "kb.catalog.upload_data — the upload path is structurally inert (no eval/exec/compile/subprocess/pickle/import anywhere in the five card modules, proved over the parsed AST with aliases resolved), plus an explicit unbreakable fence for the point where source text is later placed in front of something that interprets text, plus a bounded directive scanner that reports to the review queue and never acts."
+  },
+  "acceptance": {
+    "1_interruption_never_creates_a_readable_source_without_a_blob": "test_a_torn_upload_leaves_no_readable_source, test_a_torn_upload_leaves_no_file_on_the_volume, test_a_retry_with_the_same_key_resumes_and_produces_one_source, test_bytes_on_the_volume_without_a_manifest_are_unreachable, test_a_source_whose_manifest_was_removed_is_not_downloadable, test_bytes_that_no_longer_match_the_recorded_hash_are_refused_not_served, test_every_source_with_a_manifest_has_both, test_a_committed_attempt_always_names_its_source. The real FailingStream raises OSError 64 bytes into a real store write; the assertions are about rows, not about the status code.",
+    "2_another_users_file_is_not_discoverable_through_dedup": "test_the_same_bytes_in_two_libraries_are_two_sources, test_a_dedup_answer_never_names_another_library, test_a_closed_library_is_not_disclosed_by_a_submission, test_an_idempotency_key_belonging_to_another_submitter_is_refused, plus the parameterised address and host cases in test_url_ingestion.py and the control cases (test_a_public_address_is_not_blocked_by_the_list_itself, test_the_service_is_genuinely_reachable_when_fetched_normally, test_a_matching_connection_passes) that stop 'refuse everything' from passing.",
+    "3_revoking_a_grant_closes_the_download": "test_revoking_the_grant_closes_the_original asserts the post-revoke response is byte-identical to the response for a source id that never existed, and test_a_range_never_bypasses_the_access_check covers the Range path. There is no signed or direct URL anywhere in this card, so nothing keeps working after a revoke.",
+    "4_the_file_survives_a_restart": "test_the_original_survives_a_restart_of_the_gateway throws away the application, the pool and the LocalBlobStore object and rebuilds all three over the same directory and the same database; test_an_object_survives_a_restart re-reads and re-hashes from disk through a second store instance."
+  },
+  "central_invariant": {
+    "claim": "a book's bytes are data: they cannot change a permission, and they cannot cause a tool to run",
+    "proved_by": [
+      "test_a_book_that_asks_for_a_grant_gets_no_grant — the grants table is compared before and after, on a real PostgreSQL, and nothing was added",
+      "test_the_submitter_role_is_exactly_what_was_granted — a contributor who uploads a book calling itself an administrator is still a contributor",
+      "test_a_book_that_looks_like_a_command_is_stored_verbatim_and_run_as_nothing — socket.connect, subprocess.Popen/run and os.system are replaced with functions that raise; the upload still succeeds and the bytes come back byte for byte",
+      "test_a_book_cannot_create_rows_in_tables_it_names — kb.grant, kb.job, kb.fragment, kb.rule and kb.knowledge counts are unchanged",
+      "test_a_book_never_becomes_a_file_path — '../../../etc/cron.d/evil' as a filename produces an object key with no '..' in it",
+      "test_the_card_contains_no_way_to_execute_anything[5 modules] — an AST walk of the five card modules with import aliases resolved; no eval, exec, compile, __import__, subprocess, os.system, os.popen, os.spawn*, os.fork, os.exec*, pickle, marshal, shutil.rmtree, os.remove, os.unlink or os.rmdir",
+      "test_the_data_helpers_never_touch_a_socket_a_process_or_a_database — scan_for_directives and as_data_payload run with socket, subprocess and pathlib writes all made hostile"
+    ],
+    "mutation_tested": "eleven mutations were injected and reverted; each was rejected by at least one test. (1) follow_redirects=True failed 6 SSRF tests including every redirect re-validation case. (2) is_blocked_address returning False failed the IPv4-mapped-loopback case. (3) dedup scoped across all libraries instead of one failed test_the_same_bytes_in_two_libraries_are_two_sources and test_a_dedup_answer_never_names_another_library. (4) the manifest INSERT without the hash comparison failed 19 tests. (5) removing _require_contributor failed test_a_reader_may_not_upload. (6) fabricating a retrieval time for a file upload failed test_a_file_upload_records_no_url_and_no_retrieval_time. (7) removing the cross-submitter idempotency refusal failed test_an_idempotency_key_belonging_to_another_submitter_is_refused. (8) an aliased os.system failed the AST test — the first version of that test used a textual match and a bare 'compile(' check, and both defects were found this way and fixed. (9) a subprocess import failed the AST test. (10) not deleting the staging temp file on failure failed 3 tests. (11) replacing the JOIN to kb.object_manifest with a LEFT JOIN failed test_a_source_whose_manifest_was_removed_is_not_downloadable. Two further mutations were tried and did NOT fail anything: deleting the explicit 169.254.0.0/16 entry from BLOCKED_NETWORKS (ipaddress.is_global already covers link-local, so the entry is deliberate redundancy and not load-bearing) and a no-op rewrite of read_original that I had written wrong; the honest first version of the blocklist is therefore only half-proved by mutation, and the is_global backstop is the half that is."
+  },
+  "checks": [
+    {
+      "name": "upload_integration_suite",
+      "command": "pytest tests/integration/upload -m integration -q",
+      "status": "passed",
+      "exit_code": 0,
+      "runtime": "cloud-workspace/PostgreSQL 16.2 (pgserver), database kb_c10, migrations 0001-0004 applied once per session, real local filesystem store under tmp_path",
+      "evidence_path": "tests/integration/upload/",
+      "reason": "140 tests: 26 blob store, 63 URL ingestion, 27 HTTP service, 16 data boundary, 8 interrupted upload. Real FastAPI over a real psycopg pool connected as kb_app, real DDL, real RLS, real bytes on disk."
+    },
+    {
+      "name": "full_integration_gate",
+      "command": "just integration",
+      "status": "passed",
+      "exit_code": 0,
+      "runtime": "cloud-workspace/PostgreSQL 16.2",
+      "evidence_path": null,
+      "reason": "276 passed, 6 skipped, 42 deselected. The 6 skips are C07's Keycloak legs (E03), not C10's. C10's suite applies 0001-0004 to its own database kb_c10 so it neither depends on nor disturbs C06's and C09's databases. No log was written to docs/handoff/evidence/ — that path is outside this card's allowed paths."
+    },
+    {
+      "name": "static_gate",
+      "command": "just check",
+      "status": "passed",
+      "exit_code": 0,
+      "runtime": "cloud-workspace",
+      "evidence_path": null,
+      "reason": "ruff check + format clean on 52 files, mypy clean on 26 source files, 42 unit tests pass. No lint suppression was added: S608 and S104 stay ON in this card's tests and every statement is either parameterised or carries an explicit, commented reason."
+    },
+    {
+      "name": "gate_non_vacuity",
+      "command": "just verify-self",
+      "status": "passed",
+      "exit_code": 0,
+      "runtime": "cloud-workspace",
+      "evidence_path": null,
+      "reason": "an injected defect is still rejected by `just check`, and the tree is green again afterwards. Separately, eleven targeted mutations of this card's own code were each rejected by a named test; see central_invariant.mutation_tested, including the two that did not fail and why."
+    },
+    {
+      "name": "source_bundle",
+      "command": "just package",
+      "status": "passed",
+      "exit_code": 0,
+      "runtime": "cloud-workspace",
+      "evidence_path": "dist/knowledge-hub-source.zip",
+      "reason": "88 files, source manifest sha256 06da0407238fd25fb85c916d13a5a58d58c77ffcc4c652c027310ca3e113b939. Packaging only — nothing pushed, deployed or published. dist/ is gitignored, so the bundle is not part of this commit."
+    },
+    {
+      "name": "real_loopback_fetch_attempt",
+      "command": "pytest tests/integration/upload/test_url_ingestion.py::test_a_loopback_fetch_is_refused_and_the_server_never_sees_a_request -q",
+      "status": "passed",
+      "exit_code": 0,
+      "runtime": "cloud-workspace, real HTTP server bound to 127.0.0.1 on an ephemeral port, real sockets",
+      "evidence_path": "tests/integration/upload/test_url_ingestion.py",
+      "reason": "The required SSRF proof, and it is not a mock. A real ThreadingHTTPServer listens on 127.0.0.1, the real fetcher is pointed at it, and the request counter on the server is read afterwards: it is 0. The companion test_the_service_is_genuinely_reachable_when_fetched_normally makes the same request with a plain httpx client and the counter goes to 1, so the first result is a refusal and not an unreachable port. No test in this card asserts a fetch from the public internet; nothing in this environment may."
+    },
+    {
+      "name": "keycloak_verified_identity",
+      "command": "n/a",
+      "status": "not_run",
+      "exit_code": null,
+      "runtime": null,
+      "evidence_path": null,
+      "reason": "no Keycloak in this environment (E03 pending). The routers read request.state.principal, which C07's middleware sets after token verification; the C10 test harness substitutes a clearly-labelled stand-in middleware that accepts a well-formed UUID subject. The token/issuer/audience half of A12 and A20 is not exercised here."
+    },
+    {
+      "name": "openviking_projection",
+      "command": "n/a",
+      "status": "not_run",
+      "exit_code": null,
+      "runtime": null,
+      "evidence_path": null,
+      "reason": "OpenViking is not installed and projection work is C04. This card writes no index_target, creates no index_generation and starts no embedding job; A11 (a stale index must not serve withdrawn content) is untouched by C10 and remains uncovered."
+    },
+    {
+      "name": "a19_backup_restore_and_a07_revoke_during_retrieval",
+      "command": "n/a",
+      "status": "not_run",
+      "exit_code": null,
+      "runtime": null,
+      "evidence_path": null,
+      "reason": "The revoke-closes-the-download half of A07 is covered (test_revoking_the_grant_closes_the_original) and the durability half of acceptance 4 is covered by a process restart, but a real pg_dump/pg_restore cycle and a revoke racing an in-flight retrieval are not exercised here. Neither is in this card's acceptance list; both remain open for the A01-A20 matrix in C33."
+    }
+  ],
+  "findings_for_the_next_owner": [
+    {
+      "severity": "high",
+      "where": "migrations/0002_rls.sql",
+      "finding": "kb.source_version has RLS enabled and forced with exactly one policy, source_version_read. There is no write policy at all, so kb_app cannot INSERT a version even though 0002 grants it INSERT on every table — 'canonical source version' was unreachable by any runtime caller. Found by running it, not by reading it: the first submission failed with 'new row violates row-level security policy for table source_version'.",
+      "action_taken": "narrowly worked around in 0004 with source_version_write, an INSERT-only policy requiring contributor on the library of the source being versioned. No UPDATE and no DELETE policy was added, so a version stays as immutable as 0001 intended. The single-owner fix is the same policy in 0002, or moving it wherever kb.source_version's policies end up living."
+    },
+    {
+      "severity": "medium",
+      "where": "migrations/0001_initial.sql",
+      "finding": "kb.source.object_key is UNIQUE across the whole installation. That makes a globally content-only key impossible to reuse: the same book submitted to a second library could not become a second source at all, and the only answers left would be a refusal that says 'this file already exists' — the exact A20 disclosure ACCESS-MODEL forbids — or a per-library scope. C10 chose the scope and paid for it: identical bytes submitted to two libraries are stored twice.",
+      "action_taken": "object keys are blobs/<library-hex>/<aa>/<bb>/<sha256>. Deduplication still works exactly where it is allowed to, inside one library. The contract change this card proposes, for the single DDL owner, is to relax the constraint to UNIQUE (library_id, object_key) — which would make the key purely content-derived again and remove the duplication. Not applied here: 0001 is outside this card's allowed paths."
+    },
+    {
+      "severity": "medium",
+      "where": "src/kb/catalog/upload_fetch.py",
+      "finding": "A URL naming an IP literal is refused on the address in the URL and is never handed to a resolver. This is not decoration: a resolver that mapped 169.254.169.254 to a public address would turn the metadata-endpoint block into a suggestion, and the mock-resolver test proves the resolver is not called for a literal. The related bypasses that are also closed are the decimal (2130706433), hexadecimal (0x7f000001) and octal-padded (0177.0.0.1) forms, which ipaddress rejects and getaddrinfo may or may not expand.",
+      "action_taken": "implemented and tested: test_the_ip_literal_is_refused_without_consulting_a_resolver and three cases of test_a_url_that_is_not_plain_public_http_is_refused"
+    },
+    {
+      "severity": "low",
+      "where": "src/kb/catalog/upload.py",
+      "finding": "A rejected submission that dies mid-write leaves an object on the volume with no manifest. That is by design — it is the residue on the safe side of the invariant and nothing can reach it — but it is unreferenced bytes, and nothing in this card garbage-collects them. A process that dies between 'bytes stored' and 'source committed', repeatedly with the same content, stores that content once; with different content, once per attempt.",
+      "action_taken": "documented, not solved. The fix is a sweeper that lists objects with no manifest older than some age, and it belongs with the operations card rather than here; the card's acceptance list does not ask for it. test_bytes_on_the_volume_without_a_manifest_are_unreachable proves the residue is inert in the meantime."
+    },
+    {
+      "severity": "low",
+      "where": "src/kb/catalog/upload_fetch.py",
+      "finding": "The peer-address check (defence against DNS rebinding) reads httpx's network_stream extension, which is present for a real TCP transport and absent for a mock one. It is therefore a strengthening check that the unit tests exercise through a stand-in, and it is genuinely exercised against real sockets only on the refusal path — a refused URL never reaches a response, so no successful fetch in this environment exercised it against a live peer.",
+      "action_taken": "tested directly (_verify_peer over a Response carrying a stand-in network_stream) and its absence from the mock path is stated in the module docstring rather than glossed."
+    },
+    {
+      "severity": "informational",
+      "where": "src/kb/http/uploads.py",
+      "finding": "The URL route reads app.state.source_transport and app.state.source_resolver. They are process configuration, unset in production, and nothing in a request maps to them — but they are a seam, and a seam is a place a future change could widen.",
+      "action_taken": "documented at the top of the module and at the point of use; the real production path is the one test_a_refused_url_is_a_400_and_leaves_no_row exercises, with no transport configured at all"
+    }
+  ],
+  "blockers": [],
+  "checkpoint_note": "docs/handoff/checkpoint.json was deliberately NOT written. The card permits it, but it is a single shared file and other workers are running on their own branches; two executors writing the same checkpoint would lose one of them. The integrator owns that merge. Everything needed to reconstruct this card's state is in this file.",
+  "pending_owner_gates": [
+    "E03"
+  ],
+  "external_actions_unknown": [],
+  "next_task_id": "C11",
+  "deployment_performed": false
+}
