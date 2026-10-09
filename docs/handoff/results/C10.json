@@ -21,8 +21,8 @@
     "note": "the manifest hash is dist/source-manifest.json produced by `just package` on the pre-change tree; the zip itself was rebuilt after the change and is listed under artifacts"
   },
   "source_after": {
-    "git_sha": "COMMIT_SHA_PLACEHOLDER",
-    "manifest_sha256": "MANIFEST_SHA_PLACEHOLDER"
+    "git_sha": "e75621c1d9ae47f5acf38b3bb5d1f38e0217a923",
+    "manifest_sha256": "71a6b44ddc8e2bec0cc2c7c064b0822b7ee95ce65a0e1478ae820afce4ab78aa"
   },
   "changed_paths": [
     "migrations/0004_uploads.sql",
@@ -73,8 +73,8 @@
     },
     {
       "path": "dist/knowledge-hub-source.zip",
-      "sha256": "c92875557bafbafa29f67a0d92998d4033ee65c22e8e790ff1923ea2eb6a936e",
-      "note": "`just package`, source only, 88 files. Packaging only — nothing pushed, deployed or published. dist/ is gitignored, so the bundle is not part of the commit."
+      "sha256": "877d2c7e82313ed131cb19c0aaf84482ebf1fd0d9fe63549e23e5e9072956099",
+      "note": "`just package` re-run after the change, source only, 89 files, source manifest sha256 71a6b44ddc8e2bec0cc2c7c064b0822b7ee95ce65a0e1478ae820afce4ab78aa. Packaging only — nothing pushed, deployed or published. dist/ is gitignored, so the bundle is not part of the commit."
     }
   ],
   "what_was_built": {
