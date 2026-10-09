@@ -18,7 +18,7 @@
     "manifest_sha256": "913d2efe54e55520a68e2ce17cdabbfe4e04c8ff2e0db875bfbc87ca0417c91d"
   },
   "source_after": {
-    "git_sha": "SELF",
+    "git_sha": "d12572c615b9c643d38f7cf68501db57739254db",
     "manifest_sha256": "913d2efe54e55520a68e2ce17cdabbfe4e04c8ff2e0db875bfbc87ca0417c91d"
   },
   "changed_paths": [
