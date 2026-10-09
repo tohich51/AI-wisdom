@@ -18,6 +18,7 @@ What is deliberately KEPT:
 
 Idempotent. Run it over the tree, or as a git filter-branch tree-filter.
 """
+
 from __future__ import annotations
 
 import json
@@ -49,8 +50,7 @@ def redact_text(text: str) -> str:
 
 def redact_tree(root: pathlib.Path) -> list[str]:
     changed: list[str] = []
-    skip = {".git", ".venv", "node_modules", "dist", ".tools", "__pycache__",
-            "docs/handoff-input"}
+    skip = {".git", ".venv", "node_modules", "dist", ".tools", "__pycache__", "docs/handoff-input"}
     for p in sorted(root.rglob("*")):
         if not p.is_file():
             continue
@@ -74,12 +74,12 @@ def redact_tree(root: pathlib.Path) -> list[str]:
             except json.JSONDecodeError:
                 pass
             else:
-                for key in ("workspace_absolute_resolved",
-                            "workspace_absolute_note"):
+                for key in ("workspace_absolute_resolved", "workspace_absolute_note"):
                     if isinstance(doc, dict) and key in doc:
                         del doc[key]
-                for key in [k for k in (doc if isinstance(doc, dict) else {})
-                            if SESSION_KEY.fullmatch(k)]:
+                for key in [
+                    k for k in (doc if isinstance(doc, dict) else {}) if SESSION_KEY.fullmatch(k)
+                ]:
                     if isinstance(doc, dict):
                         doc[key] = "cloud-session"
                 redacted = json.dumps(doc, ensure_ascii=False, indent=2) + "\n"

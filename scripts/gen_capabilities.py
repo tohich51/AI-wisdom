@@ -57,11 +57,11 @@ def main() -> int:
         "schema_version": "1.0",
         "observed_at": now,
         "workspace_absolute": str(LOGICAL_ROOT),
-        "workspace_absolute_resolved": str(ROOT),
-        "workspace_absolute_note": "/workspace/knowledge-hub is a symlink target on a "
-        "NAS mount; both the logical and the physically "
-        "resolved path are recorded so a reviewer on either "
-        "can locate the tree",
+        # The physically resolved path is deliberately NOT recorded: it embeds
+        # a storage mount UUID and describes the host layout. A reviewer works
+        # from the repository, not from the machine that built it.
+        "workspace_absolute_resolved": None,
+        "workspace_absolute_note": None,
         "workspace_isolation": (
             "isolated project directory inside the provided cloud workspace; "
             "no path from the submitter's machine and no owner server was used"
