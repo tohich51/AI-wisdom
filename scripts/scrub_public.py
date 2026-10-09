@@ -66,9 +66,10 @@ def redact_tree(root: pathlib.Path) -> list[str]:
 
         redacted = redact_text(original)
 
-        # For JSON, also drop the identified keys entirely rather than
-        # leaving a placeholder that still describes the storage layout.
-        if p.suffix == ".json":
+        # Only re-serialise JSON when redaction actually changed something.
+        # Reformatting a file that needed no redaction is churn a reviewer
+        # has to read for nothing.
+        if p.suffix == ".json" and redacted != original:
             try:
                 doc = json.loads(redacted)
             except json.JSONDecodeError:
