@@ -70,8 +70,12 @@
       "rootUrl": "${KB_APP_ROOT_URL}",
       "baseUrl": "/",
       "adminUrl": "",
-      "redirectUris": ["${KB_OIDC_REDIRECT_URI}"],
-      "webOrigins": ["${KB_APP_ORIGIN}"],
+      "redirectUris": [
+        "${KB_OIDC_REDIRECT_URI}"
+      ],
+      "webOrigins": [
+        "${KB_APP_ORIGIN}"
+      ],
       "attributes": {
         "pkce.code.challenge.method": "S256",
         "post.logout.redirect.uris": "${KB_OIDC_POST_LOGOUT_REDIRECT_URI}",
@@ -80,8 +84,16 @@
         "backchannel.logout.session.required": "true",
         "require.pushed.authorization.requests": "false"
       },
-      "defaultClientScopes": ["profile", "email", "roles", "web-origins"],
-      "optionalClientScopes": ["offline_access", "microprofile-jwt"],
+      "defaultClientScopes": [
+        "profile",
+        "email",
+        "roles",
+        "web-origins"
+      ],
+      "optionalClientScopes": [
+        "offline_access",
+        "microprofile-jwt"
+      ],
       "fullScopeAllowed": false,
       "protocolMappers": [
         {
