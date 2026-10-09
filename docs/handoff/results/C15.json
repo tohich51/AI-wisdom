@@ -112,7 +112,7 @@
       "exit_code": 0,
       "runtime": "cloud-workspace/PostgreSQL 16.2 (pgserver), roles kb_app, kb_worker, kb_provisioner",
       "evidence_path": "tests/integration/provisioning/",
-      "reason": "225 passed, 6 skipped (the 6 are the pre-existing Keycloak-live skips), 75 deselected. 88 of those are C15's own integration tests over a dedicated kb_c15 database with migrations 0001-0004 applied once per session; 137 are the C03/C06/C07/C09 suites, unchanged. C06, C07 and C09 all glob migrations/0*.sql, so they applied 0004 too and stayed green."
+      "reason": "225 passed, 6 skipped (the 6 are the pre-existing Keycloak-live skips), 75 deselected. 89 of those are C15's own integration tests over a dedicated kb_c15 database with migrations 0001-0004 applied once per session; 137 are the C03/C06/C07/C09 suites, unchanged. C06, C07 and C09 all glob migrations/0*.sql, so they applied 0004 too and stayed green."
     },
     {
       "name": "c15_model_invariants_without_a_database",
