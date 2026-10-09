@@ -75,6 +75,7 @@ ignore = ["S101"]  # asserts are used in tests
 # uuid4() fixtures, never request input: the tests are about what RLS does to
 # rows, not about parameter binding.
 "tests/integration/test_rls_integration.py" = ["S608"]
+"tests/integration/rls/*" = ["S608"]  # uuid4 fixtures, never request input
 # bootstrap.py builds a handful of DDL/DML literals for a superuser psql call.
 # Every interpolated value goes through _lit(), which doubles quotes, and the
 # one free-text input (--organisation) is a bootstrap label, not user data.

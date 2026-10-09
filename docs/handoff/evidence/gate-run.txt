@@ -1,15 +1,15 @@
-# Final gate run — 2026-10-09T07:55:07Z
-GIT: 923ddacbbe333122f237b3e0483fdf2a289de429
+# Gate run — 2026-10-09T09:42:37Z
+GIT: f6152b6925f4261da4129e28cfb454fae33e854d
 
 ### just check
 exit_code=0
 ................                                                         [100%]
-16 passed, 6 deselected in 0.30s
+16 passed, 15 deselected in 0.40s
 
 ### just integration
 exit_code=0
 -- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
-6 passed, 16 deselected, 1 warning in 2.79s
+15 passed, 16 deselected, 1 warning in 3.22s
 
 ### just acceptance
 exit_code=5

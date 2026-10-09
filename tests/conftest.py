@@ -45,7 +45,7 @@ def pg_server():
         shutil.rmtree(pgdata, ignore_errors=True)
 
 
-@pytest.fixture
+@pytest.fixture(scope="session")
 def psql_strict(pg_server):
     """Run SQL and capture stderr too.
 

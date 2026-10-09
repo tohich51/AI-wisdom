@@ -1,0 +1,87 @@
+{
+  "schema_version": "1.0",
+  "task_id": "C06",
+  "status": "implemented_checked",
+  "review_status": "not_reviewed",
+  "workspace_absolute": "/workspace/knowledge-hub",
+  "executor": {
+    "product": "MiniMax Cloud",
+    "model_observed": "MiniMax-M3.1-Flash-Preview",
+    "thinking_observed": "max",
+    "provider_contract_verified": true,
+    "model_substitution_occurred": false,
+    "paid_api_or_byok_used": false
+  },
+  "source_before": {
+    "git_sha": null,
+    "manifest_sha256": "913d2efe54e55520a68e2ce17cdabbfe4e04c8ff2e0db875bfbc87ca0417c91d"
+  },
+  "source_after": {
+    "git_sha": "f6152b6925f4261da4129e28cfb454fae33e854d",
+    "manifest_sha256": "5dc7e23aeaff92dfac4b2c1222115b9e5e3746fae5be90eeca083d6bbbb5b59e"
+  },
+  "changed_paths": [
+    "migrations/0002_rls.sql",
+    "src/kb/access/policy.py",
+    "tests/integration/rls/test_access_model.py",
+    "README.md",
+    "pyproject.toml"
+  ],
+  "artifacts": [],
+  "checks": [
+    {
+      "name": "access_model_negative_tests",
+      "command": "just integration",
+      "status": "passed",
+      "exit_code": 0,
+      "runtime": "cloud-workspace/PG16.2",
+      "evidence_path": "tests/integration/rls/test_access_model.py",
+      "reason": "9 tests, all asserting a denial: no identity -> no rows, reader cannot write, contributor cannot grant, stranger sees nothing, project membership grants nothing in linked libraries, published rule immutable, own use history only, malformed principal is not an identity"
+    },
+    {
+      "name": "runtime_role_is_unprivileged",
+      "command": "test_runtime_role_is_not_privileged",
+      "status": "passed",
+      "exit_code": 0,
+      "runtime": "cloud-workspace/PG16.2",
+      "evidence_path": null,
+      "reason": "kb_app and kb_worker are not superuser, have no BYPASSRLS, and do not own any kb table, so FORCE RLS actually applies to them"
+    },
+    {
+      "name": "full_integration_suite",
+      "command": "just integration",
+      "status": "passed",
+      "exit_code": 0,
+      "runtime": "cloud-workspace/PG16.2",
+      "evidence_path": "docs/handoff/evidence/gate-run.txt",
+      "reason": "15 tests pass: 6 from C03 plus 9 from C06"
+    },
+    {
+      "name": "check_and_self_test",
+      "command": "just check; just verify-self",
+      "status": "passed",
+      "exit_code": 0,
+      "runtime": "cloud-workspace",
+      "evidence_path": null,
+      "reason": "16 unit tests green; injected defect still rejected, gate still non-vacuous"
+    },
+    {
+      "name": "keycloak_two_identity_audience",
+      "command": "n/a",
+      "status": "not_run",
+      "exit_code": null,
+      "runtime": null,
+      "evidence_path": null,
+      "reason": "no Keycloak in this environment; A01-A20 Keycloak leg remains pending E03"
+    }
+  ],
+  "blockers": [
+    "Keycloak absent: token/audience half of the access matrix cannot run here"
+  ],
+  "pending_owner_gates": [
+    "E03"
+  ],
+  "external_actions_unknown": [],
+  "next_task_id": "C07",
+  "deployment_performed": false
+}
