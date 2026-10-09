@@ -1,0 +1,215 @@
+{
+  "schema_version": "1.0",
+  "task_id": "C07",
+  "status": "implemented_unverified",
+  "review_status": "not_reviewed",
+  "workspace_absolute": "/workspace/knowledge-hub",
+  "executor": {
+    "product": "MiniMax Cloud",
+    "model_observed": "MiniMax-M3.1-Flash-Preview",
+    "thinking_observed": "max",
+    "provider_contract_verified": true,
+    "model_substitution_occurred": false,
+    "paid_api_or_byok_used": false
+  },
+  "source_before": {
+    "git_sha": "8cc3f67d26972a628b2410645828c7e9e86cb1f7",
+    "manifest_sha256": "913d2efe54e55520a68e2ce17cdabbfe4e04c8ff2e0db875bfbc87ca0417c91d"
+  },
+  "source_after": {
+    "git_sha": "dc6f0b4e92b1f2e766ffb58d13043b00a27bb5ff",
+    "manifest_sha256": "9467e75807779e0e0190b4d91e76191b4892d83a211e71859ff0e0949f23d365"
+  },
+  "changed_paths": [
+    "deploy/identity/README.md",
+    "deploy/identity/oidc.env.example",
+    "deploy/identity/realm-knowledge-hub.json",
+    "deploy/identity/verify-session-durability.sh",
+    "migrations/0003_identity_sessions.sql",
+    "src/kb/access/identity.py",
+    "src/kb/access/session.py",
+    "src/kb/http/auth_config.py",
+    "src/kb/http/auth_flow.py",
+    "src/kb/http/auth_routes.py",
+    "tests/integration/identity/conftest.py",
+    "tests/integration/identity/test_browser_flow.py",
+    "tests/integration/identity/test_keycloak_live.py",
+    "tests/integration/identity/test_session_store.py",
+    "tests/integration/identity/test_token_validation.py"
+  ],
+  "artifacts": [
+    {
+      "path": "migrations/0003_identity_sessions.sql",
+      "sha256": "a2d059f448abee21be044af0080242a5cb1cf4073028e352acbd50449887bbc5"
+    },
+    {
+      "path": "src/kb/access/identity.py",
+      "sha256": "2178fb30fea670ab49bd3b4dafb4a8090f1d76dcda0e8e982ae6a557e648fcba"
+    },
+    {
+      "path": "src/kb/access/session.py",
+      "sha256": "3b3c85bd741b709fbc55bad0b901a47f46e1ea47c86a9ec6d26faf6a58c9cee4"
+    },
+    {
+      "path": "src/kb/http/auth_config.py",
+      "sha256": "a9ac236d5da1b64df63a955b9dde1feb023ab19e1eceaa091cf1efc603e83705"
+    },
+    {
+      "path": "src/kb/http/auth_flow.py",
+      "sha256": "798b6cfae5e9413f6909aabebe1cb26e14adc60736bed54471fd478445607d66"
+    },
+    {
+      "path": "src/kb/http/auth_routes.py",
+      "sha256": "16689894d1773b29baa8c687e921974452f5804a815b92c1b8c669ef797ba637"
+    },
+    {
+      "path": "deploy/identity/realm-knowledge-hub.json",
+      "sha256": "dab391fe961f2bc4e5f73f4f1bf9843defac9c145737818d72c29a714f5454d4"
+    },
+    {
+      "path": "deploy/identity/oidc.env.example",
+      "sha256": "a45abf577319995dcf67a107e8ebc1d3c74d27b170fabb907bc602ab8d3061b2"
+    },
+    {
+      "path": "deploy/identity/verify-session-durability.sh",
+      "sha256": "68882bb1307b3e07a3fbf6286e1e794a151bf8cac37d746f5f0c89a3cf9aed51"
+    },
+    {
+      "path": "deploy/identity/README.md",
+      "sha256": "832f93a23783f62b826bceeb1df29853f96770c58da297ba78bda6bad9c7ff70"
+    },
+    {
+      "path": "tests/integration/identity/test_token_validation.py",
+      "sha256": "4b2dd326e0d9407d21b498a630108780e0dcba41f4ec75df0f75ac28e26d671f"
+    },
+    {
+      "path": "tests/integration/identity/test_session_store.py",
+      "sha256": "b2374defb05e950196978a25cf2b92545a3229c1e86ba23ce78f731287f6cf6f"
+    },
+    {
+      "path": "tests/integration/identity/test_browser_flow.py",
+      "sha256": "33c09f734e2f0b6fc52153c63472b8d232e562d04307986e1a070ff76bbbff46"
+    },
+    {
+      "path": "tests/integration/identity/test_keycloak_live.py",
+      "sha256": "327eab5fb1c8b6522d36333c02e34b873918b07de1920a4b15850064af27d5e8"
+    },
+    {
+      "path": "tests/integration/identity/conftest.py",
+      "sha256": "1587f2636ae50b695107f566f1c3255338c3d5a1348d99e3ec1ce88b508def1d"
+    }
+  ],
+  "checks": [
+    {
+      "name": "token_verification_rejections",
+      "command": "PYTHONPATH=src .venv/bin/pytest tests/integration/identity/test_token_validation.py -q",
+      "status": "passed",
+      "exit_code": 0,
+      "runtime": "cloud-workspace/PG16.2 + real RSA-2048 keys",
+      "evidence_path": "tests/integration/identity/test_token_validation.py",
+      "reason": "28 tests. Real RS256 signatures from a real JWKS served over real HTTP. Refused: foreign issuer, foreign audience, expired, nbf in the future, alg=none, HS256-over-the-public-key (algorithm confusion, with a non-vacuity check that the HMAC is genuinely valid), wrong key under a published kid, unpublished and unknown kid, missing kid, forged typ, unknown crit, nonce mismatch, foreign azp with multi-valued aud, non-UUID subject, each missing claim, absent required scope, garbage input. Also: discovery document with a foreign issuer, non-https JWKS URL, and key rotation picked up without a restart."
+    },
+    {
+      "name": "session_and_login_state_durability",
+      "command": "PYTHONPATH=src .venv/bin/pytest tests/integration/identity/test_session_store.py -q",
+      "status": "passed",
+      "exit_code": 0,
+      "runtime": "cloud-workspace/PG16.2 (real DDL from 0003, runtime role kb_app)",
+      "evidence_path": "tests/integration/identity/test_session_store.py",
+      "reason": "24 tests against real PostgreSQL 16.2 on a dedicated kb_identity database, connecting as the unprivileged kb_app role. A login opened on one SessionStore is completed by a different one; state replay, wrong browser binding, expiry, forged and malformed cookies are all refused; a session row cannot be turned back into a cookie; no token column exists; a session with no account raises instead of inventing a UUID; idle and absolute deadlines, revocation and purge retention hold; kb_worker is refused SELECT; and a session principal sets the C06 transaction-local GUC that RLS then reads, which does not survive the transaction."
+    },
+    {
+      "name": "browser_flow_pkce_cookies_csrf_two_gateways",
+      "command": "PYTHONPATH=src .venv/bin/pytest tests/integration/identity/test_browser_flow.py -q",
+      "status": "passed",
+      "exit_code": 0,
+      "runtime": "cloud-workspace/PG16.2 + local OIDC provider process (NOT Keycloak)",
+      "evidence_path": "tests/integration/identity/test_browser_flow.py",
+      "reason": "30 tests over a real FastAPI app and real HTTP. Login redirects with response_type=code, S256 (never plain), state and nonce; the callback completes on a DIFFERENT gateway instance and the next request is served there (acceptance #3, S01); a replayed callback, a callback without the browser binding, and a token signed by the wrong key are refused; the session cookie is HttpOnly and the CSRF cookie deliberately is not; in production both carry the __Host- prefix and Secure; a write is refused with no CSRF token, with a header/cookie mismatch, and with an attacker-chosen pair, and succeeds with the matching one; x-user-id / x-forwarded-user / x-remote-user and a user_id in the body change nothing; logout revokes; no token, code, cookie value or client secret appears in any response body, and none appears in the log even with the root logger at DEBUG."
+    },
+    {
+      "name": "realm_template_contains_no_secret",
+      "command": "PYTHONPATH=src .venv/bin/pytest tests/integration/identity/test_keycloak_live.py -q",
+      "status": "passed",
+      "exit_code": 0,
+      "runtime": "cloud-workspace (no provider needed)",
+      "evidence_path": "tests/integration/identity/test_keycloak_live.py",
+      "reason": "3 of 9 tests in this file ran: the realm JSON parses, every credential field is a ${VAR} placeholder, the client is confidential with PKCE S256 and no implicit flow, no direct access grants, no service account, no users, registrationAllowed false, accessTokenLifespan <= 600, and the env template is placeholders on two distinct origins. The other 6 are skipped, not passed."
+    },
+    {
+      "name": "full_integration_suite",
+      "command": "just integration",
+      "status": "passed",
+      "exit_code": 0,
+      "runtime": "cloud-workspace/PG16.2",
+      "evidence_path": "tests/integration/identity/",
+      "reason": "100 passed, 6 skipped, 16 deselected (exit 0). 85 of those are new C07 tests; 15 are the existing C03/C06 tests, which still pass with 0003 applied to the shared database. The 6 skips are the Keycloak leg and are reported as skipped in the pytest summary, not silently."
+    },
+    {
+      "name": "check_and_self_test",
+      "command": "just check; just verify-self",
+      "status": "passed",
+      "exit_code": 0,
+      "runtime": "cloud-workspace",
+      "evidence_path": null,
+      "reason": "ruff check + ruff format --check + mypy clean on 16 source files; 16 unit tests green; the injected defect is still rejected, so the gate is non-vacuous."
+    },
+    {
+      "name": "keycloak_realm_import_and_interactive_login",
+      "command": "n/a",
+      "status": "not_run",
+      "exit_code": null,
+      "runtime": null,
+      "evidence_path": null,
+      "reason": "No Keycloak in this environment: no JVM, no keycloak binary (docs/handoff/runtime-capabilities.json keycloak_real.available=false). The six tests in test_keycloak_live.py that would need it are present and SKIPPED, never passed. Owner gate E03."
+    },
+    {
+      "name": "keycloak_specific_token_behaviour",
+      "command": "n/a",
+      "status": "not_run",
+      "exit_code": null,
+      "runtime": null,
+      "evidence_path": null,
+      "reason": "Unverified against the real provider: realm import, interactive login, TOTP/MFA, a second realm in the same Keycloak sharing a key set, password-grant refusal at the server, and backchannel logout revoking local sessions. The local stand-in in tests/integration/identity/conftest.py exercises the OIDC wire behaviour only and is NOT Keycloak."
+    },
+    {
+      "name": "session_survives_a_real_gateway_restart",
+      "command": "deploy/identity/verify-session-durability.sh",
+      "status": "not_run",
+      "exit_code": null,
+      "runtime": null,
+      "evidence_path": "deploy/identity/verify-session-durability.sh",
+      "reason": "Needs a deployed gateway: no Podman and no systemd in this workspace (runtime-capabilities.json), and no live Keycloak either. The same property IS covered in-process by test_the_callback_and_the_next_request_work_through_another_gateway and test_a_session_survives_the_gateway_that_created_it, which use two independent SessionStore objects with separate connections; what they do not do is kill a real process. Owner gates E01 + E03."
+    },
+    {
+      "name": "acceptance_matrix_a01_a20_s01_s04",
+      "command": "just acceptance",
+      "status": "not_run",
+      "exit_code": null,
+      "runtime": "cloud-workspace",
+      "evidence_path": null,
+      "reason": "Not a C07 gate and not a C07 change: no acceptance-marked test exists in the tree, and `just acceptance` exits 5 by design (C01 made a missing mandatory check non-zero). The A04 and S01 rows C07 is responsible for are covered by the tests listed above; A01-A20 as a matrix belongs to C33A-C33D and S02-S04 to C35."
+    },
+    {
+      "name": "authlib_for_the_token_exchange",
+      "command": "n/a",
+      "status": "not_run",
+      "exit_code": null,
+      "runtime": null,
+      "evidence_path": null,
+      "reason": "Proposal for the lockfile owner, not a check. Authlib would own the authorization-code exchange and the PKCE bookkeeping more completely than PyJWT + httpx do. It is absent from requirements.lock and pyproject.toml, and this card is not allowed to edit either (AGENTS.md names a single owner for lockfiles). Installing it into the venv would make this tree pass locally and break for every other executor, so it was not done. If added, only src/kb/http/auth_flow.py changes."
+    }
+  ],
+  "blockers": [
+    "Keycloak is absent from this environment (no JVM), so the provider half of C07 acceptance is unverified: realm import, interactive login, MFA, a second realm sharing a key set, password-grant refusal and backchannel logout. The six tests that would cover it are in tests/integration/identity/test_keycloak_live.py and are SKIPPED, not passed.",
+    "No Podman/systemd here, so deploy/identity/verify-session-durability.sh (restart a real gateway process) could not run. The equivalent property is proven in-process by two independent SessionStore objects; a real process kill is not.",
+    "Authlib is not in requirements.lock/pyproject.toml and this card may not edit lockfiles, so the token exchange is httpx over the PyJWT-verified ID token. Proposal for the lockfile owner, recorded under checks.authlib_for_the_token_exchange."
+  ],
+  "pending_owner_gates": [
+    "E01",
+    "E03"
+  ],
+  "external_actions_unknown": [],
+  "next_task_id": "C08",
+  "deployment_performed": false
+}
