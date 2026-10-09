@@ -1,0 +1,146 @@
+{
+  "_comment": [
+    "C07 — Keycloak realm template for the Knowledge Hub gateway.",
+    "",
+    "This file contains NO SECRETS. Every value that would be a credential is",
+    "a __PLACEHOLDER__ and is substituted at provisioning time from a file that",
+    "is not in the repository (see oidc.env.example and README.md).",
+    "",
+    "Import with:  podman exec -it keycloak kc.sh import \\",
+    "              --file /opt/keycloak/data/import/realm-knowledge-hub.json \\",
+    "The importer substitutes ${ENV_VAR} references from the container's",
+    "environment, which is how the client secret gets in without ever being",
+    "written to this file.",
+    "",
+    "WHAT THIS REALM DELIBERATELY DOES NOT HAVE:",
+    "  * directAccessGrantsEnabled=false — no password grant. A password typed",
+    "    into this product never becomes a token here, and the gateway has no",
+    "    code path that would accept one.",
+    "  * implicitFlowEnabled=false — no token in a URL fragment.",
+    "  * serviceAccountsEnabled=false — no machine account for the gateway.",
+    "    Background work runs as the separate worker identity, not as a user.",
+    "  * no users — the product ships empty. Invitations are an explicit admin",
+    "    action in Keycloak, and PostgreSQL membership is checked separately by",
+    "    the access model (a valid JWT with no grant is still refused)."
+  ],
+  "realm": "knowledge-hub",
+  "enabled": true,
+  "displayName": "Knowledge Hub",
+  "sslRequired": "external",
+  "registrationAllowed": false,
+  "registrationEmailAsUsername": false,
+  "rememberMe": false,
+  "verifyEmail": true,
+  "loginWithEmailAllowed": true,
+  "duplicateEmailsAllowed": false,
+  "resetPasswordAllowed": true,
+  "editUsernameAllowed": false,
+  "bruteForceProtected": true,
+  "permanentLockout": false,
+  "maxFailureWaitSeconds": 900,
+  "minimumQuickLoginWaitSeconds": 60,
+  "waitIncrementSeconds": 60,
+  "quickLoginCheckMilliSeconds": 1000,
+  "accessTokenLifespan": 300,
+  "ssoSessionIdleTimeout": 1800,
+  "ssoSessionMaxLifespan": 36000,
+  "offlineSessionIdleTimeout": false,
+  "accessTokenLifespanEnabled": true,
+  "defaultSignatureAlgorithm": "RS256",
+  "otpPolicyType": "totp",
+  "otpPolicyAlgorithm": "HmacSHA1",
+  "otpPolicyDigits": 6,
+  "otpPolicyPeriod": 30,
+  "otpPolicyLookAheadWindow": 1,
+  "clients": [
+    {
+      "clientId": "kb-gateway",
+      "name": "Knowledge Hub gateway (browser session holder)",
+      "description": "Server-side OIDC client. Holds the HttpOnly session cookie; never exposes a token to the browser.",
+      "enabled": true,
+      "protocol": "openid-connect",
+      "publicClient": false,
+      "secret": "${KB_OIDC_CLIENT_SECRET}",
+      "bearerOnly": false,
+      "standardFlowEnabled": true,
+      "implicitFlowEnabled": false,
+      "directAccessGrantsEnabled": false,
+      "serviceAccountsEnabled": false,
+      "frontchannelLogout": true,
+      "rootUrl": "${KB_APP_ROOT_URL}",
+      "baseUrl": "/",
+      "adminUrl": "",
+      "redirectUris": ["${KB_OIDC_REDIRECT_URI}"],
+      "webOrigins": ["${KB_APP_ORIGIN}"],
+      "attributes": {
+        "pkce.code.challenge.method": "S256",
+        "post.logout.redirect.uris": "${KB_OIDC_POST_LOGOUT_REDIRECT_URI}",
+        "access.token.lifespan": "300",
+        "oauth2.device.authorization.grant.enabled": "false",
+        "backchannel.logout.session.required": "true",
+        "require.pushed.authorization.requests": "false"
+      },
+      "defaultClientScopes": ["profile", "email", "roles", "web-origins"],
+      "optionalClientScopes": ["offline_access", "microprofile-jwt"],
+      "fullScopeAllowed": false,
+      "protocolMappers": [
+        {
+          "name": "kb_account_id",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-usermodel-attribute-mapper",
+          "consentRequired": false,
+          "config": {
+            "user.attribute": "kb_account_id",
+            "claim.name": "kb_account_id",
+            "jsonType.label": "String",
+            "id.token.claim": "true",
+            "access.token.claim": "false",
+            "userinfo.token.claim": "true",
+            "multivalued": "false"
+          }
+        },
+        {
+          "name": "session_state",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-usersession-model-mapper",
+          "consentRequired": false,
+          "config": {
+            "user.session.token.claim": "true",
+            "access.token.claim": "false",
+            "id.token.claim": "true",
+            "introspection.token.claim": "true"
+          }
+        }
+      ]
+    }
+  ],
+  "identityProviders": [],
+  "components": {
+    "org.keycloak.services.email.DefaultEmailSenderProvider": [
+      {
+        "id": "knowledge-hub-email",
+        "config": {
+          "defaultFrom": "${KB_MAIL_FROM}",
+          "defaultReplyTo": "${KB_MAIL_REPLY_TO}",
+          "fromDisplayName": "Knowledge Hub",
+          "smtpServer": "${KB_SMTP_HOST}",
+          "smtpPort": "${KB_SMTP_PORT}",
+          "smtpUser": "${KB_SMTP_USER}",
+          "password": "${KB_SMTP_PASSWORD}",
+          "smtpAuth": "true",
+          "from": "${KB_MAIL_FROM}",
+          "replyTo": "${KB_MAIL_REPLY_TO}"
+        }
+      }
+    ]
+  },
+  "browserSecurityHeaders": {
+    "contentSecurityPolicy": "frame-src 'self'; frame-ancestors 'self'; object-src 'none';",
+    "contentSecurityPolicyReportOnly": "",
+    "strictTransportSecurity": "max-age=31536000; includeSubDomains",
+    "xContentTypeOptions": "nosniff",
+    "xFrameOptions": "SAMEORIGIN",
+    "xRobotsTag": "none",
+    "referrerPolicy": "no-referrer"
+  }
+}
