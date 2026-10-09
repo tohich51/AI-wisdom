@@ -1,0 +1,201 @@
+{
+  "schema_version": "1.0",
+  "task_id": "C09",
+  "status": "implemented_checked",
+  "review_status": "not_reviewed",
+  "workspace_absolute": "/workspace/knowledge-hub/.worktrees/feature-c09-catalog",
+  "branch": "feature-c09-catalog",
+  "executor": {
+    "product": "MiniMax Cloud",
+    "model_observed": "MiniMax-M3.1-Flash-Preview",
+    "thinking_observed": "max",
+    "provider_contract_verified": true,
+    "model_substitution_occurred": false,
+    "paid_api_or_byok_used": false
+  },
+  "source_before": {
+    "git_sha": "8cc3f67d26972a628b2410645828c7e9e86cb1f7",
+    "manifest_sha256": "5dc7e23aeaff92dfac4b2c1222115b9e5e3746fae5be90eeca083d6bbbb5b59e"
+  },
+  "source_after": {
+    "git_sha": "PENDING_COMMIT",
+    "manifest_sha256": "1391f683e02098798ecb8398fefdc6ea7bfc6ecc8fd48db31d8ccdfd370ed139"
+  },
+  "changed_paths": [
+    "migrations/0003_catalog_bindings.sql",
+    "src/kb/catalog/libraries.py",
+    "src/kb/catalog/projects.py",
+    "src/kb/http/libraries.py",
+    "src/kb/http/projects.py",
+    "tests/integration/libraries/conftest.py",
+    "tests/integration/libraries/test_context_models.py",
+    "tests/integration/libraries/test_libraries_api.py",
+    "tests/integration/libraries/test_library_types.py",
+    "tests/integration/libraries/test_project_bindings.py",
+    "tests/integration/libraries/test_project_context.py",
+    "docs/handoff/results/C09.json"
+  ],
+  "scope_note": "No tracked file outside the card's allowed paths was modified; `git diff --name-only HEAD` is empty at commit time. 0001 and 0002 were read but never edited. No file outside `src/kb/catalog/{libraries,projects}.py` and `src/kb/http/{libraries,projects}.py` was added under src/, so the shared identity dependency (`request.state.principal`) had to live in `src/kb/http/libraries.py` and be imported by `projects.py` rather than in a `src/kb/http/deps.py`.",
+  "artifacts": [
+    {
+      "path": "migrations/0003_catalog_bindings.sql",
+      "sha256": "da19d9ee50955421ee653a82826212c7c89d7aac8adadbf6e16ce83d42616116",
+      "note": "new migration; 0001 and 0002 untouched"
+    },
+    {
+      "path": "src/kb/catalog/libraries.py",
+      "sha256": "8bd9fa0e97f2cee3650136b0aaf030dcb8dc9bb45cabddc7f02d3cb93a636235"
+    },
+    {
+      "path": "src/kb/catalog/projects.py",
+      "sha256": "324cb86e49ecb91130c07a0ccd572379edb37e18686ff822a83fcb878918771e"
+    },
+    {
+      "path": "src/kb/http/libraries.py",
+      "sha256": "ddde9662c1a7380ffe32889529afb7702f3248eb82c2b43fe9fffb9f77546d73"
+    },
+    {
+      "path": "src/kb/http/projects.py",
+      "sha256": "9df976fadb5e32e3b319029af9ee24413bf2beae7dcec337d8b3c9a6a8f8bb7c"
+    },
+    {
+      "path": "dist/knowledge-hub-source.zip",
+      "sha256": "de8ab6651c8289a4e2a1c3495e4538c7fd012875f92871075fd6466c942e5179",
+      "note": "`just package`, source only; not deployed, not published"
+    }
+  ],
+  "what_was_built": {
+    "library_kinds": "reference, brand, project, playbook, experience, each a row in the registry and an independent `kb.library.kind` value",
+    "type_registry": "kb.library_type: key, title, nullable description, template_version, allowed_extra_fields, review_process, is_core, retired_at. Five core types seeded by migration. Registering a sixth is an INSERT — no DDL, no migration of loaded sources.",
+    "grants": "per-library roles via kb.library_grant, unchanged from 0002; the card adds the endpoints and the manager-only write path",
+    "projects": "kb.project is a library of kind 'project' sharing one id, so the library role is the project role with no mapping table",
+    "links": "kb.project_library_link — a requirement edge, with no principal column and no policy that consults the target library's role",
+    "pins": "kb.project_rule_pin with PRIMARY KEY (project_id, rule_id) and FOREIGN KEY (rule_id, version_no); required by the new UNIQUE (id, version_no) on kb.rule",
+    "context": "GET /projects/{id}/context returns a ProjectContext that is 'blocked' when any link or pin does not resolve, and carries no id, name, kind or text for the object that did not resolve"
+  },
+  "acceptance": {
+    "type_and_audience_are_independent": "test_kind_and_audience_are_independent_axes plus the four parametrised model cases in test_context_models.py: brand/all_invited, reference/private, project/all_invited and experience/invited are all accepted, and the two HTTP filters narrow independently",
+    "pagination_and_counts_do_not_reveal_others": "test_counts_and_pages_describe_only_what_the_caller_may_see, test_the_stranger_sees_an_empty_catalogue_not_a_denied_one: `total` is count(*) OVER () of the identical RLS-scoped statement, and a page past the end still reports the true total",
+    "unavailable_required_library_makes_the_context_incomplete": "test_a_required_unavailable_library_makes_the_context_incomplete, test_a_required_unavailable_library_blocks_the_context, test_a_pinned_rule_the_caller_cannot_read_blocks_the_context, plus the owner-side control test_the_owner_who_holds_the_grant_sees_the_same_context_completed"
+  },
+  "central_invariant": {
+    "claim": "binding a library to a project confers no access to that library",
+    "proved_by": [
+      "test_project_binding_grants_no_access_to_the_linked_library — kb.effective_role returns NULL for the member, the row is invisible, and kb.library_grant still holds exactly the owner's own manager row",
+      "test_project_member_cannot_read_or_write_the_linked_content — INSERT is rejected by WITH CHECK; the filtered UPDATE is followed by a read-back proving the row is unchanged",
+      "test_only_the_grant_opens_the_library_not_the_link — the same library before and after an explicit grant",
+      "test_link_policies_never_consult_the_target_role — reads pg_policies as PostgreSQL parsed it and fails if a role lookup on the target ever appears",
+      "test_a_link_row_has_nowhere_to_put_a_principal — information_schema column list",
+      "test_project_manifest_reports_a_blocked_link_without_describing_it — the closed library's uuid, name, kind and the closed rule's id and title are absent from the response body"
+    ],
+    "mutation_tested": "two mutations were injected and reverted. (1) adding `OR role_rank(effective_role(principal, library_id)) >= 10` to project_link_read failed test_link_policies_never_consult_the_target_role. (2) forcing `complete = True` and returning the closed library in a blocked link failed 6 tests across test_project_bindings.py and test_project_context.py. The tests are not vacuous."
+  },
+  "checks": [
+    {
+      "name": "library_and_project_integration_suite",
+      "command": "pytest tests/integration/libraries -m integration -q",
+      "status": "passed",
+      "exit_code": 0,
+      "runtime": "cloud-workspace/PostgreSQL 16.2 (pgserver), role kb_app",
+      "evidence_path": "tests/integration/libraries/test_project_bindings.py",
+      "reason": "36 tests: 10 binding negatives, 11 context, 9 libraries API, 6 type registry. Real HTTP through FastAPI over a real psycopg pool, real DDL, real RLS."
+    },
+    {
+      "name": "model_invariant_suite",
+      "command": "pytest tests/integration/libraries/test_context_models.py -q",
+      "status": "passed",
+      "exit_code": 0,
+      "runtime": "cloud-workspace",
+      "evidence_path": "tests/integration/libraries/test_context_models.py",
+      "reason": "26 tests, no database: a blocked link may not carry a library, context_state must agree with the blocked counts, and no request model has a caller-asserted identity field. Runs inside `just check` as well."
+    },
+    {
+      "name": "full_integration_gate",
+      "command": "just integration",
+      "status": "passed",
+      "exit_code": 0,
+      "runtime": "cloud-workspace/PostgreSQL 16.2",
+      "evidence_path": null,
+      "reason": "51 tests pass: 6 from C03, 9 from C06, 36 from C09. C06's own session fixture globs migrations/0*.sql and therefore applies 0003 as well; the C06 access model is unaffected. No log was written to docs/handoff/evidence/ — that path is outside this card's allowed paths."
+    },
+    {
+      "name": "static_gate",
+      "command": "just check",
+      "status": "passed",
+      "exit_code": 0,
+      "runtime": "cloud-workspace",
+      "evidence_path": null,
+      "reason": "ruff check + format clean, mypy clean on 16 source files, 42 unit tests pass. S608 (hardcoded SQL) was left ON for src/ and this suite; all queries are psycopg.sql compositions or fully parameterised."
+    },
+    {
+      "name": "gate_non_vacuity",
+      "command": "just verify-self",
+      "status": "passed",
+      "exit_code": 0,
+      "runtime": "cloud-workspace",
+      "evidence_path": null,
+      "reason": "an injected defect is still rejected by `just check`, and the tree is green again afterwards"
+    },
+    {
+      "name": "source_bundle",
+      "command": "just package",
+      "status": "passed",
+      "exit_code": 0,
+      "runtime": "cloud-workspace",
+      "evidence_path": "dist/knowledge-hub-source.zip",
+      "reason": "59 files, includes every C09 file. Packaging only — nothing pushed, deployed or published."
+    },
+    {
+      "name": "keycloak_verified_identity",
+      "command": "n/a",
+      "status": "not_run",
+      "exit_code": null,
+      "runtime": null,
+      "evidence_path": null,
+      "reason": "no Keycloak in this environment. The routers read request.state.principal, which C07's middleware sets after token verification; the test harness substitutes a clearly-labelled stand-in middleware. The token/issuer/audience half of A12 and A20 is not exercised here and remains pending E03."
+    },
+    {
+      "name": "openviking_projection",
+      "command": "n/a",
+      "status": "not_run",
+      "exit_code": null,
+      "runtime": null,
+      "evidence_path": null,
+      "reason": "not part of this card. A11 (a stale index must not serve withdrawn content) is unaffected by C09 but is not covered by any test written here."
+    }
+  ],
+  "findings_for_the_next_owner": [
+    {
+      "severity": "high",
+      "where": "migrations/0001_initial.sql / 0002_rls.sql",
+      "finding": "kb.rule_action has no RLS policy. 0002 grants SELECT on all kb tables to kb_app, so any authenticated runtime principal can read every action step of every rule, in any library. C09 does not use that path: _actions_for() in src/kb/catalog/projects.py re-checks visibility with EXISTS against kb.rule (which is under FORCE RLS) and only ever passes rule ids that already resolved. Fixing the missing policy belongs to the owner of 0002.",
+      "action_taken": "reported, not fixed — 0002 is outside this card's allowed paths"
+    },
+    {
+      "severity": "medium",
+      "where": "migrations/0002_rls.sql",
+      "finding": "grant_write_manager is USING/WITH CHECK on the effective role, so the creator of a new library cannot insert their own first manager grant: a library that does not exist yet has no effective role for anybody. Any card that creates a library through the runtime role hits this.",
+      "action_taken": "worked around narrowly in 0003 with kb.create_owned_library(), a SECURITY DEFINER function that inserts exactly the library row and the caller's own manager grant, forces p_principal = current_principal(), refuses a session with no principal, and has a fixed search_path. A single-owner alternative would be a policy that admits a grant where the caller is about to become the manager."
+    },
+    {
+      "severity": "low",
+      "where": "src/kb/catalog/projects.py",
+      "finding": "kb.project_rule_pin rows are readable by any reader on the project and therefore expose one opaque rule UUID per pin, including pins whose rule the caller cannot read. The rule's title, text, kind and library stay behind kb.rule's RLS and the API never returns the id of a pin it could not resolve. The alternative — keying the pin policy on the rule too — would make a mandatory pin vanish from the manifest, shrink the count to match, and let the project report a complete context while withholding a brand rule, which is the A12 failure. The project-scoped read is the lesser exposure and the intended one.",
+      "action_taken": "documented in the migration and in the module docstring; behaviour asserted in test_a_pinned_rule_the_caller_cannot_read_blocks_the_context"
+    },
+    {
+      "severity": "informational",
+      "where": "migrations/0001_initial.sql",
+      "finding": "kb.library.kind is a PostgreSQL ENUM and enums are closed, so a type registered through the API is known to the registry and the catalogue before it can back a library. Attaching one needs the enum value added by the DDL owner. This is the one part of ARCHITECTURE.md §4's 'extend by configuration' that the schema cannot deliver, and it is stated in the migration rather than papered over.",
+      "action_taken": "tested: test_a_retired_type_stops_backing_new_libraries_but_keeps_the_old_ones"
+    }
+  ],
+  "blockers": [],
+  "checkpoint_note": "docs/handoff/checkpoint.json was deliberately NOT written. The card permits it, but it is a single shared file and a second worker is running C07 on its own branch; two executors writing the same checkpoint would lose one of them. The integrator owns that merge. Everything needed to reconstruct this card's state is in this file.",
+  "pending_owner_gates": [
+    "E03"
+  ],
+  "external_actions_unknown": [],
+  "next_task_id": "C10",
+  "deployment_performed": false
+}
