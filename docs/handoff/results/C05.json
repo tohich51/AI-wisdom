@@ -1,0 +1,71 @@
+{
+  "schema_version": "1.0",
+  "task_id": "C05",
+  "status": "implemented_checked",
+  "review_status": "not_reviewed",
+  "workspace_absolute": "/workspace/knowledge-hub",
+  "executor": {
+    "product": "MiniMax Cloud",
+    "model_observed": "MiniMax-M3.1-Flash-Preview",
+    "thinking_observed": "max",
+    "provider_contract_verified": true,
+    "model_substitution_occurred": false,
+    "paid_api_or_byok_used": false
+  },
+  "source_before": {
+    "git_sha": null,
+    "manifest_sha256": "913d2efe54e55520a68e2ce17cdabbfe4e04c8ff2e0db875bfbc87ca0417c91d"
+  },
+  "source_after": {
+    "git_sha": "80ed08a712a12476481b2b6f9f7d8f1236acdf55",
+    "manifest_sha256": "b69512596e290c85c4e70a7f2d84312e3c8028a4dc54369d3bc289dca9dfe645"
+  },
+  "changed_paths": [
+    "migrations/0001_initial.sql",
+    "scripts/bootstrap.py"
+  ],
+  "artifacts": [],
+  "checks": [
+    {
+      "name": "migration_applies_to_real_postgres",
+      "command": "python scripts/bootstrap.py",
+      "status": "passed",
+      "exit_code": 0,
+      "runtime": "cloud-workspace/PG16.2",
+      "evidence_path": "migrations/0001_initial.sql",
+      "reason": "full DDL applied to a real PostgreSQL 16.2: schema kb, four separated roles, 8 enum types, 12 tables, constraints intact"
+    },
+    {
+      "name": "bootstrap_is_empty",
+      "command": "python scripts/bootstrap.py (content_counts)",
+      "status": "passed",
+      "exit_code": 0,
+      "runtime": "cloud-workspace/PG16.2",
+      "evidence_path": null,
+      "reason": "after bootstrap: 0 libraries, 0 sources, 0 knowledge, 0 rules, 0 fragments. The owner uploads their own material; no demo content ships"
+    },
+    {
+      "name": "pgcrypto_not_required",
+      "command": "CREATE EXTENSION pgcrypto",
+      "status": "failed",
+      "exit_code": 1,
+      "runtime": "cloud-workspace/PG16.2",
+      "evidence_path": "docs/decisions/dependencies.md",
+      "reason": "pip-packaged PostgreSQL ships only plpgsql and vector; gen_random_uuid() has been core since PG13 so the dependency was dropped rather than worked around"
+    },
+    {
+      "name": "check_and_integration_still_green",
+      "command": "just check; just integration",
+      "status": "passed",
+      "exit_code": 0,
+      "runtime": "cloud-workspace",
+      "evidence_path": "docs/handoff/evidence/gate-run.txt",
+      "reason": "16 unit tests + 6 RLS integration tests pass after the schema landed"
+    }
+  ],
+  "blockers": [],
+  "pending_owner_gates": [],
+  "external_actions_unknown": [],
+  "next_task_id": "C06",
+  "deployment_performed": false
+}
