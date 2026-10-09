@@ -34,7 +34,7 @@ def apply_schema(srv) -> None:
 def bootstrap(srv, *, organisation: str, owner_principal: str) -> dict:
     """Empty bootstrap. Idempotent: running twice changes nothing."""
     org_uuid = _one(
-        srv, "SELECT id FROM kb.organisation WHERE name = %s LIMIT 1" % _lit(organisation)
+        srv, f"SELECT id FROM kb.organisation WHERE name = {_lit(organisation)} LIMIT 1;"
     ) or _insert_org(srv, organisation)
     _insert_policy(srv, org_uuid)
     return {
@@ -61,7 +61,6 @@ def scalar(srv, sql: str) -> str | None:
     Uses --tuples-only. Parsing the aligned default output is how you end up
     reading a table border as if it were data.
     """
-    import subprocess
 
     from pgserver.postgres_server import POSTGRES_BIN_PATH
 
