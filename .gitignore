@@ -17,3 +17,4 @@ var/
 .env.*
 !.env.example
 docs/handoff-input/
+.worktrees/
