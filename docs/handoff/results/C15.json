@@ -1,0 +1,255 @@
+{
+  "schema_version": "1.0",
+  "task_id": "C15",
+  "status": "implemented_unverified",
+  "review_status": "not_reviewed",
+  "workspace_absolute": "/workspace/knowledge-hub/.worktrees/feature-c15-provisioning",
+  "branch": "feature-c15-provisioning",
+  "executor": {
+    "product": "MiniMax Cloud",
+    "model_observed": "MiniMax-M3.1-Flash-Preview",
+    "thinking_observed": "max",
+    "provider_contract_verified": true,
+    "model_substitution_occurred": false,
+    "paid_api_or_byok_used": false
+  },
+  "source_before": {
+    "git_sha": "16e00c37b2b58932249897960225a5f7807b5633",
+    "manifest_sha256": "5ff0eb10427615140b465dfb35b0e59b83a24ea592b3804ccaef3df57f19ce6a",
+    "note": "manifest is scripts/handoff.py::tree_manifest() over the worktree with the C15 paths excluded; docs/handoff-input/ is gitignored and absent from the worktree, so HANDOFF-MANIFEST.json could not be hashed here"
+  },
+  "source_after": {
+    "git_sha": "SELF",
+    "manifest_sha256": "POST_COMMIT"
+  },
+  "changed_paths": [
+    "migrations/0004_provisioning.sql",
+    "src/kb/retrieval/provisioning.py",
+    "src/kb/retrieval/provisioning_generations.py",
+    "src/kb/retrieval/provisioning_search.py",
+    "src/kb/retrieval/provisioning_generative.py",
+    "src/kb/retrieval/provisioning_cli.py",
+    "deploy/maintenance/README.md",
+    "deploy/maintenance/kb-provision-index.container",
+    "deploy/maintenance/kb-provision-index.volume",
+    "deploy/maintenance/kb-provision-index.env.example",
+    "deploy/maintenance/verify-no-container-socket.sh",
+    "tests/integration/provisioning/conftest.py",
+    "tests/integration/provisioning/doubles.py",
+    "tests/integration/provisioning/test_account_registry.py",
+    "tests/integration/provisioning/test_boundaries.py",
+    "tests/integration/provisioning/test_generation_policy.py",
+    "tests/integration/provisioning/test_model_invariants.py",
+    "tests/integration/provisioning/test_provisioning_resume.py",
+    "tests/integration/provisioning/test_search_no_generation.py",
+    "docs/handoff/results/C15.json"
+  ],
+  "scope_note": "Every path above is inside the card's allowed areas plus the result file the card names. `git diff --name-only HEAD` after the commit lists only these. migrations/0001, 0002 and both 0003_* were read and never edited; 0004_provisioning.sql is new and touches two objects created earlier — it ALTERs kb.index_generation (five columns, two CHECKs, three partial unique indexes) and adds one policy to kb.generation_policy. No other pre-existing object is modified. The one-shot role kb_provisioner is created here, in a new migration rather than in 0001, because 0001 is the single DDL owner's file and may not be edited.",
+  "artifacts": [
+    {
+      "path": "migrations/0004_provisioning.sql",
+      "sha256": "dae9e78a42e578a75cb7fe5f3cd11895d8d04cb4dd94bbb037456eb1cc6788ee",
+      "note": "new migration; applied 0001 -> 0004 in every C15 session fixture and by the C06/C07/C09 fixtures, which glob migrations/0*.sql"
+    },
+    {
+      "path": "src/kb/retrieval/provisioning.py",
+      "sha256": "b21f83909c99ad8b067da098c7bc7dc45cb1d38e43889189236f0db99fb70ccb"
+    },
+    {
+      "path": "src/kb/retrieval/provisioning_generations.py",
+      "sha256": "c8f5e495c8191a2abc77b9243f607e628c52950ec7ffd8292c4d0bedb52b1ae7"
+    },
+    {
+      "path": "src/kb/retrieval/provisioning_search.py",
+      "sha256": "fbe06057890b494cc6f364468822275ab81546f29ab2ed74f13b971923a9db21"
+    },
+    {
+      "path": "src/kb/retrieval/provisioning_generative.py",
+      "sha256": "a9deded899249d6b26922504dd577f61b2aa1c2202c978e8384d2c98ed438684"
+    },
+    {
+      "path": "src/kb/retrieval/provisioning_cli.py",
+      "sha256": "e6bccbeabae83a4904757e80b14cc17fd2ace0844aa8c219f4d82af6c3d5310d"
+    },
+    {
+      "path": "deploy/maintenance/kb-provision-index.container",
+      "sha256": "393cee36b82750976d5cc8cf5a03339874b019a2626e07baae931d5705e74f24",
+      "note": "Quadlet unit. DELIVERY ARTIFACT — never started, no Podman/systemd here (E01)"
+    },
+    {
+      "path": "deploy/maintenance/verify-no-container-socket.sh",
+      "sha256": "5fac0087016632811b8fc8e4c969383e4b27e366eaab2a0b0053d68011fa0ddc",
+      "note": "A15 black-box check for a deployed host; not_run here (E01, E03)"
+    }
+  ],
+  "what_was_built": {
+    "account_registry": "kb.index_account: one row per library, holding the server-generated account ref (kb-lib-<library hex>), two explicit service identities (kb-svc-read-*, kb-svc-index-*), a root path RELATIVE to the account, the recorded dimension and embedding profile, and the ACL document. No key, no URI scheme, no socket, no principal column.",
+    "credential_boundary": "kb.index_credential_ref is a separate table holding a path into a closed secret store. A separate table rather than two columns, so the half of the account a reader may see contains no secret-adjacent column at all; a column filter can be undone by the next SELECT *, a table boundary cannot. kb_app holds no SELECT privilege on it — the one-shot role is the only reader.",
+    "restricted_acl": "kb.index_account_acl_is_restricted, a BEFORE INSERT OR UPDATE OF acl trigger: inherit_from_parent must be present and false, entries must be a non-empty array, every principal must be one of the row's own two identities, and every right must come from the closed set {read, index}. 'manage' is absent by construction, so a wildcard manage over a published root is unrepresentable rather than merely discouraged.",
+    "generation_registry": "kb.index_generation gains content_hash, started_by, attempt, failure_reason and updated_at, plus three partial unique indexes: at most one 'building' row in the WHOLE database (PRODUCT-SPEC 'общий concurrency 1'), at most one 'current' row per library, and at most one live row per (library, content_hash). building is defined as exactly not-finished, so a half-finished reindex has one representation.",
+    "generation_policy": "kb.generation_policy gains the write half (manager-only) that 0002 left out, so opt-in is possible at all. Admission requires the library's own opt-in AND a principal the policy admits; requires_owner_start decides whether a curator may start one. Concurrency above 1 is refused at the model, because a column that says 3 while a constraint allows 1 is a lie.",
+    "search": "kb.retrieval.provisioning_search resolves scopes from PostgreSQL under the caller's identity, skips a library that is not provisioned or whose index is not ready with a named reason, asks the index once, and re-checks every hit's library, account and generation before reporting it.",
+    "generative_door": "kb.retrieval.provisioning_generative.generate is the only function in the product that may call a model, and it needs a GenerationPermit that only the live registry can mint. The search module does not import it and cannot reach it.",
+    "one_shot": "kb.retrieval.provisioning_cli with three subcommands. It refuses to run as a superuser or the DDL owner, takes its DSN and endpoint from the environment and never from argv, and exits 3 with a reason when OpenViking is absent — including when the endpoint variable is set, because a flag is not an implementation."
+  },
+  "acceptance": {
+    "gateway_cannot_create_an_account": "test_the_gateway_has_no_privilege_on_the_account_table (has_table_privilege false for INSERT/UPDATE/DELETE), test_the_gateway_cannot_create_an_account_even_as_a_manager (PostgreSQL: 'permission denied for table index_account'), test_the_gateway_cannot_point_a_library_at_an_account_it_he_chose (the account_ref CHECK), test_the_one_shot_cannot_provision_for_a_library_it_does_not_manage (RLS), and the control test_the_one_shot_with_a_manager_principal_may_provision that proves the negatives fail for the right reason.",
+    "no_container_socket_in_the_application": "test_the_one_shot_package_cannot_reach_a_container_runtime and test_no_module_of_the_one_shot_can_reach_a_container_runtime (AST over every provisioning*.py with docstrings and comments stripped: no subprocess, os.system, podman, docker.sock, DOCKER_HOST), test_the_quadlet_unit_mounts_no_container_socket_and_publishes_nothing (the unit file, comments stripped), and test_the_deployment_kit_contains_no_secret.",
+    "partial_provisioning_resumes_without_leaking_keys": "test_a_run_interrupted_at_the_acl_resumes_and_does_not_reissue_keys, test_a_failure_after_the_keys_does_not_mint_more_on_the_retry, test_a_crash_between_storing_a_key_and_journalling_it_does_not_rotate_the_key, test_no_key_reaches_the_database_the_journal_or_the_log (every text column of every table in the schema, the captured log, and the serialised result), and test_the_journal_refuses_to_record_a_key (the detail_carries_no_key_material CHECK).",
+    "no_wildcard_manage_on_a_published_root": "test_a_published_root_refuses_a_loose_acl (six documents: wildcard principal, manage on the root, inheritance from the parent, a third party's identity, an empty allow-list, a right outside the vocabulary), test_the_acl_cannot_be_loosened_after_the_fact, and the parallel model test_the_acl_model_refuses_a_loose_document that runs inside `just check`."
+  },
+  "central_invariant": {
+    "claim": "ordinary search makes zero generative calls",
+    "what_is_proved": "Our client code cannot reach the generative door, and a search cannot open a generation. Three independent mechanisms, each checked: the AST import graph of provisioning_search (no import of the generative module, no dynamic import, no bound name), the tripwire counter in provisioning_generative, and the database — a search issued no INSERT into kb.index_generation, and could not have, because admission is opt-in, owner-started and installation-serialised.",
+    "what_is_NOT_proved": "that OpenViking itself makes no generative call server-side. That needs a live OpenViking and is not_run behind E03. The vectors_only profile is recorded as the index's read mode; the server-side setting is C04's leg and was never executed.",
+    "mutation_tested": "six mutations were injected and reverted; all six were killed. (1) adding 'manage' to the ACL vocabulary -> test_a_published_root_refuses_a_loose_acl fails. (2) `if self.building_generation is not None and False` in IndexStatus.skip_reason -> test_a_half_finished_reindex_is_detectable and test_a_library_mid_rebuild_is_skipped_with_a_reason fail. (3) adding a generate() call to search_knowledge -> test_ordinary_search_makes_zero_generative_calls fails on the tripwire. (4) removing the stored-reference check in the secrets step -> test_a_crash_between_storing_a_key_and_journalling_it_does_not_rotate_the_key fails (it was the only mutation that survived the first pass, and the test was written because of that). (5) dropping the manager clause from index_account_provision -> test_the_one_shot_cannot_provision_for_a_library_it_does_not_manage fails. (6) deleting the installation-wide one-slot index -> test_generation_runs_one_at_a_time_for_the_whole_installation fails."
+  },
+  "checks": [
+    {
+      "name": "c15_suite_on_real_postgresql",
+      "command": "just integration  (pytest -m integration)",
+      "status": "passed",
+      "exit_code": 0,
+      "runtime": "cloud-workspace/PostgreSQL 16.2 (pgserver), roles kb_app, kb_worker, kb_provisioner",
+      "evidence_path": "tests/integration/provisioning/",
+      "reason": "225 passed, 6 skipped (the 6 are the pre-existing Keycloak-live skips), 75 deselected. 88 of those are C15's own integration tests over a dedicated kb_c15 database with migrations 0001-0004 applied once per session; 137 are the C03/C06/C07/C09 suites, unchanged. C06, C07 and C09 all glob migrations/0*.sql, so they applied 0004 too and stayed green."
+    },
+    {
+      "name": "c15_model_invariants_without_a_database",
+      "command": "just check  (pytest -m 'not integration and not acceptance')",
+      "status": "passed",
+      "exit_code": 0,
+      "runtime": "cloud-workspace",
+      "evidence_path": "tests/integration/provisioning/test_model_invariants.py",
+      "reason": "33 C15 tests with no database, inside the 75 that just check runs: the request model has exactly one field and forbids seven, the search query has three and forbids five, the ACL model refuses the same six documents the trigger refuses, concurrency above 1 is refused, a key never appears in a repr, no module of the package can reach a container runtime, and the migration text states the role restrictions."
+    },
+    {
+      "name": "static_gate",
+      "command": "just check",
+      "status": "passed",
+      "exit_code": 0,
+      "runtime": "cloud-workspace",
+      "evidence_path": null,
+      "reason": "ruff check + ruff format --check clean, mypy clean on 27 source files, 75 tests pass. S105/S106 fire on any string that looks like a credential, including test markers; four targeted noqa comments carry the reason rather than a pyproject relaxation, because pyproject.toml is outside this card's allowed paths."
+    },
+    {
+      "name": "gate_non_vacuity",
+      "command": "just verify-self",
+      "status": "passed",
+      "exit_code": 0,
+      "runtime": "cloud-workspace",
+      "evidence_path": null,
+      "reason": "an injected defect is still rejected by `just check`, and the tree is green again afterwards"
+    },
+    {
+      "name": "one_shot_cli_against_a_real_database",
+      "command": "python -m kb.retrieval.provisioning_cli {list-requests|run}  (as a subprocess, over a real kb_provisioner_login connection)",
+      "status": "passed",
+      "exit_code": 0,
+      "runtime": "cloud-workspace/PostgreSQL 16.2",
+      "evidence_path": "tests/integration/provisioning/test_boundaries.py",
+      "reason": "list-requests exits 0 and prints the open request; the superuser connection is refused with exit 4; `run` exits 3 with 'CANNOT PROVISION' and creates no account row. The exit-3 cases are asserted inside the suite, so the receipts are checked rather than described."
+    },
+    {
+      "name": "openviking_account_provisioning_remote",
+      "command": "n/a",
+      "status": "not_run",
+      "exit_code": null,
+      "runtime": null,
+      "evidence_path": null,
+      "reason": "OpenViking is not installed and cannot be: its embedding provider is unavailable (no Ollama, and a paid API is forbidden by the executor contract). No real account was created, no real service identity was created, no real key was issued, and the ACL was never applied to a real server. The orchestration, the policy and the bookkeeping are verified against a real PostgreSQL with a clearly-named test double (tests/integration/provisioning/doubles.py); the remote effects are not. This is the exact gate: E03, a live OpenViking 0.4.x with vectors_only and a CPU embedding provider."
+    },
+    {
+      "name": "openviking_admin_client",
+      "command": "n/a",
+      "status": "not_run",
+      "exit_code": null,
+      "runtime": null,
+      "evidence_path": "src/kb/retrieval/provisioning.py",
+      "reason": "this tree ships the boundary (IndexAdminPort) and a refusing UnconfiguredIndexAdmin, not a client. Writing a client for an API that cannot be called would mean inventing a request shape and a URI scheme; both would be fabrication presented as an integration. The boundary a real client must satisfy is documented on the protocol, and the CLI names the missing client in its exit-3 message."
+    },
+    {
+      "name": "quadlet_unit_runtime",
+      "command": "systemctl --user start kb-provision-index.service",
+      "status": "not_run",
+      "exit_code": null,
+      "runtime": null,
+      "evidence_path": "deploy/maintenance/kb-provision-index.container",
+      "reason": "no Podman and no systemd in this workspace (PID 1 is node); E01. What IS checked is the file: no socket mount, no published port, no [Install] WantedBy, ReadOnly + NoNewPrivileges + DropCapability=ALL, one non-superroot User. `bash -n` passes on verify-no-container-socket.sh. No container was started and none is claimed."
+    },
+    {
+      "name": "A15_network_shape_of_a_deployed_host",
+      "command": "deploy/maintenance/verify-no-container-socket.sh",
+      "status": "not_run",
+      "exit_code": null,
+      "runtime": null,
+      "evidence_path": "deploy/maintenance/verify-no-container-socket.sh",
+      "reason": "the script probes a deployed host from outside its loopback; there is no deployment here (E01, E03). The application half of A15 — that the code and the unit reference no container runtime — is covered by tests; the network half needs a host and stays pending."
+    },
+    {
+      "name": "real_generation_call_against_the_model_runner",
+      "command": "n/a",
+      "status": "not_run",
+      "exit_code": null,
+      "runtime": null,
+      "evidence_path": null,
+      "reason": "E02. The owner-subscription call was neither made nor permitted; UnconfiguredModelRunner refuses and the refusal is tested. C15 spends nothing on generation and its tests assert that."
+    }
+  ],
+  "findings_for_the_next_owner": [
+    {
+      "severity": "high",
+      "where": "migrations/0002_rls.sql / any migration that creates a function",
+      "finding": "PostgreSQL grants EXECUTE on every new function to PUBLIC by default, and this project's migrations never revoke it. Caught here by a test: test_the_worker_holds_no_provisioning_function asserted the migration's own comment and got true for all three functions. 0004 revokes from PUBLIC for the five functions it creates; 0001/0002/0003 do not, so kb.effective_role, kb.role_rank, kb.current_principal, kb.reject_published_rule_update, kb.create_owned_library, kb.library_type_is_registered and the C07 sealing functions are all callable by any role in the cluster. Most of them are harmless by construction (create_owned_library forces p_principal = current_principal()), but the default is a bad one to leave standing.",
+      "action_taken": "revoked in 0004 for this card's functions and reported; the earlier files are outside this card's allowed paths"
+    },
+    {
+      "severity": "high",
+      "where": "migrations/0001_initial.sql, kb.library.generation",
+      "finding": "kb.library.generation is the content-revision counter that decides whether the index is current, and NO runtime role can move it: kb.library has a SELECT and an INSERT policy in 0002 and no UPDATE policy, so a manager, a curator and the gateway all get UPDATE 0. The index-readiness rule therefore depends on a counter that only the migration owner can currently change. Whoever owns content mutation (withdraw a source, publish a fragment) has to add the path, or A11's 'withdrawn text must not be served' is unreachable in the product.",
+      "action_taken": "worked around in the test world only (World.bump_content_generation runs as the migration role, with the reason in the docstring); not fixed, because the write path belongs to the card that owns content mutation"
+    },
+    {
+      "severity": "medium",
+      "where": "migrations/0004_provisioning.sql, FORCE ROW LEVEL SECURITY vs SECURITY DEFINER",
+      "finding": "kb.index_status is SECURITY DEFINER because a reader (rank 10) sits below 0002's operational read policy on kb.index_generation. Under a hardened deployment where the migrations are applied by a NON-superuser owner, FORCE ROW LEVEL SECURITY applies to the owner too, so the function would see nothing and every search would report a library as not ready. Every C15 test in this handoff runs against a superuser-owned schema, where the definer bypasses RLS. The same latent issue already exists in 0003's kb.create_owned_library.",
+      "action_taken": "recorded rather than fixed. C15 uses SECURITY INVOKER for every function that does not need definer rights, so it adds no new exposure; the one definer function is documented at its definition. The owner of 0001/0002 should decide whether migrations are applied by a superuser, a BYPASSRLS role, or an owner with an explicit policy."
+    },
+    {
+      "severity": "medium",
+      "where": "migrations/0004_provisioning.sql, index_generation_admit",
+      "finding": "a wrong unqualified column reference here is a real security bug and it was written once. `WHERE p.library_id = library_id` inside the subquery resolves library_id to the INNER table's column, degenerates into p.library_id = p.library_id, and opts in every library that has any policy row at all. A smoke run caught it before the first test was written; the qualification kb.index_generation.library_id is the fix and the comment records why. Any future policy that joins a table with an unqualified column from the row's own table has the same shape.",
+      "action_taken": "fixed in 0004 before commit; left as a written warning in the file"
+    },
+    {
+      "severity": "low",
+      "where": "deploy/maintenance/kb-provision-index.container",
+      "finding": "the root key arrives through an EnvironmentFile at /etc/kb/kb-provision-index.env, 0400 root:root. Podman secrets (Secret= in a Quadlet unit) would keep it out of the environment entirely, but the syntax and support differ across Podman 4.x and 5.x and neither exists here to test. An EnvironmentFile is the boring mechanism that works on both.",
+      "action_taken": "documented in deploy/maintenance/README.md as a one-line change for whoever owns deploy/ on the target host"
+    },
+    {
+      "severity": "informational",
+      "where": "src/kb/retrieval/provisioning_generative.py",
+      "finding": "generative_call_count() is a module-level tripwire that nothing in the product reads. If a future code path calls a model without going through generate(), the counter stops being evidence. That is why the search test also asserts the import graph rather than relying on the count.",
+      "action_taken": "documented at the definition; both tests kept"
+    },
+    {
+      "severity": "informational",
+      "where": "tests/integration/provisioning/conftest.py",
+      "finding": "the shared venv has an editable install pointing at the MAIN checkout, so `pytest` run bare inside a worktree imports kb from there. The C15 conftest puts the worktree's src first for its own suite; that is not enough for a whole-suite bare run, because a sibling suite may have imported kb first. Purging sys.modules was tried and breaks C09's catalogue suite (27 failures), so it was reverted. `just check` and `just integration` export PYTHONPATH=src (C01's justfile) and both exit 0; `pytest` with no PYTHONPATH inside a worktree is not a supported invocation.",
+      "action_taken": "documented in the conftest and recorded here; no pyproject change, which is outside this card's allowed paths"
+    }
+  ],
+  "blockers": [
+    "OpenViking cannot run in this environment and cannot be made to run: it is not installed and it has no embedding provider (no Ollama; a paid API is forbidden by the executor contract). The remote half of this card — creating an account, creating the two service identities, applying the ACL, issuing and storing the keys, and the ACL's effect on a real server — is therefore unverified. What is verified is the half that is ours: the policy, the naming, the ACL validation, the resume behaviour, the key-leak constraints, the generation bookkeeping and the search routing, all against a real PostgreSQL 16.2. The card's status is implemented_unverified with this exact gate: E03, a live OpenViking 0.4.x in vectors_only with a CPU embedding provider on the target host.",
+    "No Podman and no systemd, so the Quadlet unit is a delivery artifact that has never been started. E01."
+  ],
+  "checkpoint_note": "docs/handoff/checkpoint.json was deliberately NOT written. The card permits it, but it is one shared file and other workers are running on their own branches; two executors writing it loses one. The integrator owns that merge. Everything needed to reconstruct this card is in this file.",
+  "pending_owner_gates": [
+    "E01",
+    "E03"
+  ],
+  "external_actions_unknown": [],
+  "next_task_id": null,
+  "deployment_performed": false
+}

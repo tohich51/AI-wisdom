@@ -1,0 +1,62 @@
+# C15 — Quadlet unit for the provisioning one-shot. See ../maintenance/README.md.
+#
+# DELIVERY ARTIFACT, NOT A RUNNING UNIT. It has never been started: the C15
+# workspace has no Podman and no systemd (docs/handoff/runtime-capabilities.json,
+# E01). Its restrictions are asserted by reading this file in
+# tests/integration/provisioning/test_boundaries.py; its runtime behaviour is
+# recorded as not_run in docs/handoff/results/C15.json.
+#
+# The three things this file must never grow:
+#   * a container socket mount (the app must not be able to start containers)
+#   * a published port (A15: nothing but the proxy's two loopback ports)
+#   * a [Install] section (provisioning is an explicit action, never a boot step)
+
+[Unit]
+Description=Knowledge Hub C15: provision OpenViking accounts for the retrieval tier
+Documentation=file:///opt/knowledge-hub/deploy/maintenance/README.md
+# Deliberately no Requires=/After= on the OpenViking unit. Provisioning is an
+# administrative action somebody asked for; it must not ride along on a
+# restart of anything.
+
+[Container]
+ContainerName=kb-provision-index
+Image=localhost/kb-provisioner:0.1.0
+AutoUpdate=registry.localhost
+
+# The only two things this one-shot talks to: the index server and the
+# database, both on the private network. Nothing is published to the host.
+Network=kb-private.internal
+NoNewPrivileges=yes
+DropCapability=ALL
+ReadOnly=yes
+ReadOnlyTmpfs=yes
+Tmpfs=/tmp:rw,noexec,nosuid,nodev,size=64m
+
+# Rootless and unprivileged. The process holds a root key for the index tier;
+# it does not need to be root in its own container to use one.
+User=1000
+Group=1000
+
+# The root key and the DSN arrive in the environment file, which is 0400
+# root:root on the host. Nothing is passed on the command line: argv is
+# visible to every process on the host in ps.
+EnvironmentFile=/etc/kb/kb-provision-index.env
+
+# The closed secret store: the issued service keys are written here and
+# nowhere else. It is the only writable path in the container.
+Volume=kb-provision-index.volume:/run/kb-secrets:rw
+
+# Explicitly NOT present, and asserted by a test:
+#   Volume=/run/podman/podman.sock:/run/podman/podman.sock
+#   Volume=/var/run/docker.sock:/var/run/docker.sock
+#   Environment=DOCKER_HOST=...
+#   PublishPort=...
+
+[Service]
+Type=oneshot
+RemainAfterExit=no
+TimeoutStartSec=900
+
+[Install]
+# No WantedBy. A provisioning run is something a person or a migration starts,
+# on purpose, with a root key. It is never something a reboot does.
