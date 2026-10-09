@@ -3,7 +3,7 @@
   "updated_at": "2026-10-09T07:42:49+00:00",
   "policy": "Single executor by default. Shared DDL, contracts and lockfiles have exactly one owner to avoid write contention; this session is that owner until a second environment is introduced.",
   "owners": {
-    "root_session_450458959069492": {
+    "session_<redacted>": {
       "role": "sole executor / single writer",
       "owns": [
         "docs/handoff/**",

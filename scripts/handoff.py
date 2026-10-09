@@ -191,7 +191,7 @@ def cmd_checkpoint(a: argparse.Namespace) -> int:
         "schema_version": "1.0",
         "updated_at": datetime.now(UTC).isoformat(timespec="seconds"),
         "workspace_absolute": caps.get("workspace_absolute", str(ROOT)),
-        "workspace_absolute_resolved": caps.get("workspace_absolute_resolved"),
+        "workspace_absolute_resolved": None,  # storage mount UUID: not recorded
         "handoff_manifest_sha256": sha256(HANDOFF_IN / "HANDOFF-MANIFEST.json"),
         "source_identity": {"git_sha": git_sha(), "manifest_sha256": tree_manifest()},
         "requested_model": "MiniMax-M3.1-Flash-Preview",

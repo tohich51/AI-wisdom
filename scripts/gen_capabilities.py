@@ -220,7 +220,7 @@ def main() -> int:
         "exactly one owner to avoid write contention; this session is that owner "
         "until a second environment is introduced.",
         "owners": {
-            "root_session_450458959069492": {
+            "session_<redacted>": {
                 "role": "sole executor / single writer",
                 "owns": [
                     "docs/handoff/**",

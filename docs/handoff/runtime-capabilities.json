@@ -2,8 +2,6 @@
   "schema_version": "1.0",
   "observed_at": "2026-10-09T07:42:49+00:00",
   "workspace_absolute": "/workspace/knowledge-hub",
-  "workspace_absolute_resolved": "/run/csi/mount-root/nas/eab0d61a99b6696edb3d2aff87b585e8/knowledge-hub",
-  "workspace_absolute_note": "/workspace/knowledge-hub is a symlink target on a NAS mount; both the logical and the physically resolved path are recorded so a reviewer on either can locate the tree",
   "workspace_isolation": "isolated project directory inside the provided cloud workspace; no path from the submitter's machine and no owner server was used",
   "git_state": {
     "git_present": true,

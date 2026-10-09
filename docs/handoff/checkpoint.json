@@ -2,7 +2,6 @@
   "schema_version": "1.0",
   "updated_at": "2026-10-09T09:42:25+00:00",
   "workspace_absolute": "/workspace/knowledge-hub",
-  "workspace_absolute_resolved": "/run/csi/mount-root/nas/eab0d61a99b6696edb3d2aff87b585e8/knowledge-hub",
   "handoff_manifest_sha256": "913d2efe54e55520a68e2ce17cdabbfe4e04c8ff2e0db875bfbc87ca0417c91d",
   "source_identity": {
     "git_sha": "f6152b6925f4261da4129e28cfb454fae33e854d",
