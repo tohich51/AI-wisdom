@@ -1,0 +1,23 @@
+# Final gate run — 2026-10-09T07:55:07Z
+GIT: 923ddacbbe333122f237b3e0483fdf2a289de429
+
+### just check
+exit_code=0
+................                                                         [100%]
+16 passed, 6 deselected in 0.30s
+
+### just integration
+exit_code=0
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+6 passed, 16 deselected, 1 warning in 2.79s
+
+### just acceptance
+exit_code=5
+This gate is mandatory and is NOT satisfied by the absence of tests.
+error: Recipe `acceptance` failed with exit code 5
+
+### just package
+exit_code=0
+wrote dist/knowledge-hub-source.zip + dist/source-manifest.json + dist/SHA256SUMS
+packaging only — nothing was pushed, deployed or published
+

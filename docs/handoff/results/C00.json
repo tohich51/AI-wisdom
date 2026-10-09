@@ -1,0 +1,88 @@
+{
+  "schema_version": "1.0",
+  "task_id": "C00",
+  "status": "implemented_checked",
+  "review_status": "not_reviewed",
+  "workspace_absolute": "/workspace/knowledge-hub",
+  "executor": {
+    "product": "MiniMax Cloud",
+    "model_observed": "MiniMax-M3.1-Flash-Preview",
+    "thinking_observed": "max",
+    "provider_contract_verified": true,
+    "model_substitution_occurred": false,
+    "paid_api_or_byok_used": false
+  },
+  "source_before": {
+    "git_sha": null,
+    "manifest_sha256": "913d2efe54e55520a68e2ce17cdabbfe4e04c8ff2e0db875bfbc87ca0417c91d"
+  },
+  "source_after": {
+    "git_sha": "c336e4b0b625a73aaef6dff59d4ec73e9df9fce7",
+    "manifest_sha256": "db1420379cd2c715a46b4106565388f047f3a8706334f7fed048822b803aa0ea"
+  },
+  "changed_paths": [
+    "docs/handoff/runtime-capabilities.json",
+    "docs/handoff/ownership.json",
+    "scripts/handoff.py",
+    "scripts/gen_capabilities.py"
+  ],
+  "artifacts": [],
+  "checks": [
+    {
+      "name": "handoff_integrity",
+      "command": "python3 verify_handoff.py",
+      "status": "passed",
+      "exit_code": 0,
+      "runtime": "cloud-workspace",
+      "evidence_path": "docs/handoff-input/HANDOFF-MANIFEST.json",
+      "reason": "65 files, 42 tasks, 18 packages, 20 access cases"
+    },
+    {
+      "name": "container_runtime_probe",
+      "command": "command -v podman; podman info",
+      "status": "failed",
+      "exit_code": 127,
+      "runtime": "cloud-workspace",
+      "evidence_path": null,
+      "reason": "no podman/docker binary and no socket; Quadlet cannot be exercised here"
+    },
+    {
+      "name": "systemd_probe",
+      "command": "command -v systemctl; ls /run/systemd/system; cat /proc/1/comm",
+      "status": "failed",
+      "exit_code": 127,
+      "runtime": "cloud-workspace",
+      "evidence_path": null,
+      "reason": "pid1=node, container has no init system"
+    },
+    {
+      "name": "postgres_real_rls",
+      "command": "pgserver + psql: ENABLE/FORCE RLS, per-tenant policy, forgery attempt",
+      "status": "passed",
+      "exit_code": 0,
+      "runtime": "cloud-workspace/PG16.2",
+      "evidence_path": "docs/handoff/runtime-capabilities.json",
+      "reason": "real PostgreSQL 16.2; isolation, default deny and WITH CHECK rejection confirmed"
+    },
+    {
+      "name": "model_identity",
+      "command": "session runtime metadata (model_id, provider_id, thinking_effort)",
+      "status": "passed",
+      "exit_code": 0,
+      "runtime": "cloud-workspace",
+      "evidence_path": "docs/handoff/runtime-capabilities.json",
+      "reason": "MiniMax-M3.1-Flash-Preview / thinking=max; no substitution, no BYOK"
+    }
+  ],
+  "blockers": [
+    "No podman/systemd in this environment: E01 cannot be executed here",
+    "No Java/Keycloak: real Keycloak auth cannot be executed here"
+  ],
+  "pending_owner_gates": [
+    "E01",
+    "E03"
+  ],
+  "external_actions_unknown": [],
+  "next_task_id": "C01",
+  "deployment_performed": false
+}

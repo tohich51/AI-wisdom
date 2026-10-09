@@ -1,0 +1,19 @@
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+node_modules/
+.tools/
+dist/
+build/
+*.egg-info/
+# runtime data, never in the source bundle
+var/
+*.sqlite
+*.sqlite3
+.env
+.env.*
+!.env.example
+docs/handoff-input/

@@ -1,0 +1,26 @@
+{
+  "schema_version": "1.0",
+  "updated_at": "2026-10-09T07:42:49+00:00",
+  "policy": "Single executor by default. Shared DDL, contracts and lockfiles have exactly one owner to avoid write contention; this session is that owner until a second environment is introduced.",
+  "owners": {
+    "root_session_450458959069492": {
+      "role": "sole executor / single writer",
+      "owns": [
+        "docs/handoff/**",
+        "contracts/**",
+        "migrations/**",
+        "uv.lock",
+        "pyproject.toml",
+        "justfile",
+        "deploy/**"
+      ],
+      "note": "Created and integrated by this session. No other writer exists yet, so no coordination conflict is possible at this time."
+    }
+  },
+  "integration_contract": {
+    "mcp": "src/kb/mcp/** and the MCP tool registry",
+    "domain_services": "src/kh/domain/**",
+    "web_admin": "web/**",
+    "note": "UI and MCP must call the same domain operations; the registry is single-owner to prevent divergence between the two surfaces."
+  }
+}

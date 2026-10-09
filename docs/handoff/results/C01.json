@@ -1,0 +1,105 @@
+{
+  "schema_version": "1.0",
+  "task_id": "C01",
+  "status": "implemented_checked",
+  "review_status": "not_reviewed",
+  "workspace_absolute": "/workspace/knowledge-hub",
+  "executor": {
+    "product": "MiniMax Cloud",
+    "model_observed": "MiniMax-M3.1-Flash-Preview",
+    "thinking_observed": "max",
+    "provider_contract_verified": true,
+    "model_substitution_occurred": false,
+    "paid_api_or_byok_used": false
+  },
+  "source_before": {
+    "git_sha": null,
+    "manifest_sha256": "913d2efe54e55520a68e2ce17cdabbfe4e04c8ff2e0db875bfbc87ca0417c91d"
+  },
+  "source_after": {
+    "git_sha": "a27410bb0598cadf423bf448508370e9ff93f247",
+    "manifest_sha256": "26f58dcc74bf08a6599bf46afb54abbf8999765417de0ba286b2a5aad2fc4d6d"
+  },
+  "changed_paths": [
+    "pyproject.toml",
+    "justfile",
+    "requirements.lock",
+    "README.md",
+    ".gitignore",
+    ".python-version",
+    "src/kb/__init__.py",
+    "src/kb/domain/tiers.py",
+    "scripts/quality/collect_env.py",
+    "scripts/quality/check_gates.py",
+    "scripts/build_bundle.py",
+    "tests/conftest.py",
+    "tests/smoke/test_smoke.py",
+    "docs/decisions/dependencies.md"
+  ],
+  "artifacts": [],
+  "checks": [
+    {
+      "name": "prepare_reproducible_install",
+      "command": "just prepare",
+      "status": "passed",
+      "exit_code": 0,
+      "runtime": "cloud-workspace",
+      "evidence_path": "requirements.lock",
+      "reason": "installs from the pinned lock; mcp/fastapi/psycopg/pydantic/sqlalchemy all import at pinned versions"
+    },
+    {
+      "name": "check_clean_tree",
+      "command": "just check",
+      "status": "passed",
+      "exit_code": 0,
+      "runtime": "cloud-workspace",
+      "evidence_path": null,
+      "reason": "ruff lint+format, mypy on 3 source files, 3 unit tests pass"
+    },
+    {
+      "name": "check_detects_injected_defect",
+      "command": "just verify-self",
+      "status": "passed",
+      "exit_code": 0,
+      "runtime": "cloud-workspace",
+      "evidence_path": null,
+      "reason": "injected undefined-symbol/unused-import defect was rejected by just check, then tree returned green; the gate is proven non-vacuous"
+    },
+    {
+      "name": "package_builds_bundle",
+      "command": "just package",
+      "status": "passed",
+      "exit_code": 0,
+      "runtime": "cloud-workspace",
+      "evidence_path": "dist/SHA256SUMS",
+      "reason": "20-file source zip, sha256 recorded; no venv, cache, handoff-input or secret-pattern files included; no push/deploy/publish performed"
+    },
+    {
+      "name": "integration_suite",
+      "command": "just integration",
+      "status": "not_run",
+      "exit_code": null,
+      "runtime": "cloud-workspace",
+      "evidence_path": null,
+      "reason": "no integration-marked tests exist yet; that is C03/C04 scope, not a C01 defect"
+    },
+    {
+      "name": "acceptance_suite",
+      "command": "just acceptance",
+      "status": "not_run",
+      "exit_code": null,
+      "runtime": "cloud-workspace",
+      "evidence_path": null,
+      "reason": "A01-A20 are C33A-C33D scope"
+    }
+  ],
+  "blockers": [
+    "No podman/systemd in this environment, so the just integration/acceptance targets can only cover the PostgreSQL leg here (E01 pending)"
+  ],
+  "pending_owner_gates": [
+    "E01"
+  ],
+  "external_actions_unknown": [],
+  "next_task_id": "C02",
+  "deployment_performed": false
+}

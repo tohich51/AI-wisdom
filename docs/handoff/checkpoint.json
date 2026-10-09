@@ -1,0 +1,40 @@
+{
+  "schema_version": "1.0",
+  "updated_at": "2026-10-09T07:54:59+00:00",
+  "workspace_absolute": "/workspace/knowledge-hub",
+  "workspace_absolute_resolved": "/run/csi/mount-root/nas/eab0d61a99b6696edb3d2aff87b585e8/knowledge-hub",
+  "handoff_manifest_sha256": "913d2efe54e55520a68e2ce17cdabbfe4e04c8ff2e0db875bfbc87ca0417c91d",
+  "source_identity": {
+    "git_sha": "a27410bb0598cadf423bf448508370e9ff93f247",
+    "manifest_sha256": "3b5f2e721052868ceb90dc0acc61b53dc166427cb74b257ec598fcb3bf97923c"
+  },
+  "requested_model": "MiniMax-M3.1-Flash-Preview",
+  "observed_model": "MiniMax-M3.1-Flash-Preview",
+  "observed_thinking": "max",
+  "current_task_id": "C04",
+  "task_states": {
+    "C00": "implemented_checked",
+    "C01": "implemented_checked",
+    "C02": "implemented_checked",
+    "C03": "implemented_unverified",
+    "C04": "implemented_unverified",
+    "C36": "implemented_checked"
+  },
+  "file_owners": [],
+  "pending_checks": [
+    "A01-A20 access matrix: PostgreSQL leg proven, Keycloak and OpenViking legs unexecuted",
+    "S01-S04 scaling scenarios: not run",
+    "C05-C32 product modules: not started",
+    "C33A-C33D, C35: not started"
+  ],
+  "pending_owner_gates": [
+    "E01",
+    "E02",
+    "E03",
+    "E04",
+    "E05"
+  ],
+  "unknown_external_operations": [],
+  "next_task_id": "C05",
+  "resume_instructions": "Verify the real files and source_identity before continuing. C00 probed this environment: no podman, no systemd, real PostgreSQL 16.2 via pgserver, RLS verified. Keycloak absent. Do not re-probe what C00 recorded; do not re-run any successful external call."
+}

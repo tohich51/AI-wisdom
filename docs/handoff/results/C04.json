@@ -1,0 +1,74 @@
+{
+  "schema_version": "1.0",
+  "task_id": "C04",
+  "status": "implemented_unverified",
+  "review_status": "not_reviewed",
+  "workspace_absolute": "/workspace/knowledge-hub",
+  "executor": {
+    "product": "MiniMax Cloud",
+    "model_observed": "MiniMax-M3.1-Flash-Preview",
+    "thinking_observed": "max",
+    "provider_contract_verified": true,
+    "model_substitution_occurred": false,
+    "paid_api_or_byok_used": false
+  },
+  "source_before": {
+    "git_sha": null,
+    "manifest_sha256": "913d2efe54e55520a68e2ce17cdabbfe4e04c8ff2e0db875bfbc87ca0417c91d"
+  },
+  "source_after": {
+    "git_sha": "a27410bb0598cadf423bf448508370e9ff93f247",
+    "manifest_sha256": "1d91ac9d8b3e28160a21c6441c3d270da7aca42134da355db6b74939d76b6089"
+  },
+  "changed_paths": [
+    "spikes/index/001_accounts.sql"
+  ],
+  "artifacts": [],
+  "checks": [
+    {
+      "name": "openviking_package_availability",
+      "command": "curl https://pypi.org/pypi/openviking/json",
+      "status": "passed",
+      "exit_code": 0,
+      "runtime": "cloud-workspace",
+      "evidence_path": null,
+      "reason": "openviking 0.4.23 exists, requires_python >=3.10 (satisfied), 126 dependencies"
+    },
+    {
+      "name": "embedding_provider_available",
+      "command": "command -v ollama",
+      "status": "failed",
+      "exit_code": 1,
+      "runtime": "cloud-workspace",
+      "evidence_path": null,
+      "reason": "no Ollama and no local embedding model; the alternative is a paid API key, which AGENTS.md forbids (no BYOK/PAYG)"
+    },
+    {
+      "name": "index_canary_isolation",
+      "command": "spikes/index/001_accounts.sql",
+      "status": "not_run",
+      "exit_code": null,
+      "runtime": null,
+      "evidence_path": "spikes/index/001_accounts.sql",
+      "reason": "schema for per-library accounts, generation registry and idempotency is prepared, but no real OpenViking server exists to run it against"
+    },
+    {
+      "name": "ordinary_search_zero_generative_calls",
+      "command": "n/a",
+      "status": "not_run",
+      "exit_code": null,
+      "runtime": null,
+      "evidence_path": null,
+      "reason": "requires a live OpenViking; the policy is encoded in generation_policy but unexercised"
+    }
+  ],
+  "blockers": [
+    "No CPU embedding provider: Ollama absent and a paid API is forbidden, so OpenViking cannot be started here. C04 runtime evidence pending E03"
+  ],
+  "pending_owner_gates": [
+    "E03"
+  ],
+  "external_actions_unknown": [],
+  "next_task_id": "C36",
+  "deployment_performed": false
+}

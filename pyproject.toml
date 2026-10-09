@@ -1,0 +1,85 @@
+[project]
+name = "kb"
+version = "0.1.0"
+description = "Project knowledge base — provenance, knowledge, versioned rules, experience"
+requires-python = ">=3.11,<3.13"
+license = { text = "MIT" }
+
+# Versions are pinned exactly. Compatibility for the runtime services named in
+# PRODUCT-SPEC is established by spikes C03/C04, not assumed here.
+dependencies = [
+    "fastapi==0.143.0",
+    "uvicorn[standard]==0.54.0",
+    "pydantic==2.14.0",
+    "mcp==2.3.0",              # official MCP Python SDK
+    "psycopg[binary,pool]==3.3.6",
+    "sqlalchemy==2.1.4",
+    "alembic==1.20.0",
+    "httpx==0.28.1",
+    "python-multipart==0.0.20",
+    "structlog==25.4.0",
+    "prometheus-client==0.23.1",
+    "jsonschema==4.26.0",
+    "orjson==3.11.7",
+    "tenacity==9.1.4",
+]
+
+[project.optional-dependencies]
+# Real PostgreSQL binaries for native integration runs. Not required in the
+# production image, where PostgreSQL is a separate container.
+pgtest = ["pgserver==0.1.4"]
+dev = [
+    "pytest==9.1.1",
+    "pytest-asyncio==1.3.0",
+    "ruff==0.15.7",
+    "mypy==1.19.1",
+]
+
+[project.scripts]
+kb = "kb.cli:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/kb"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+markers = [
+    "integration: requires a real PostgreSQL server",
+    "acceptance: access matrix A01-A20 / scaling S01-S04",
+    "requires_openviking: needs a live OpenViking server",
+    "requires_keycloak: needs a live Keycloak server",
+    "requires_podman: needs rootless Podman/Quadlet on systemd",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+src = ["src", "tests", "scripts"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "S", "ASYNC", "RUF"]
+ignore = ["S101"]  # asserts are used in tests
+
+[tool.ruff.lint.per-file-ignores]
+# S603 (subprocess without an absolute path) stays ON for src/ and tests/.
+# Dev tooling under scripts/ deliberately runs fixed, hardcoded argv — it
+# probes the environment and the gate must be able to report "absent".
+# This is scoped to scripts/ on purpose; it is not a global relaxation.
+"scripts/**" = ["S603"]
+# S608 stays ON everywhere else. In this one file the interpolated values are
+# uuid4() fixtures, never request input: the tests are about what RLS does to
+# rows, not about parameter binding.
+"tests/integration/test_rls_integration.py" = ["S608"]
+
+[tool.mypy]
+python_version = "3.11"
+packages = ["kb"]
+mypy_path = "src"
+warn_unused_ignores = true
+disallow_untyped_defs = false
+ignore_missing_imports = true

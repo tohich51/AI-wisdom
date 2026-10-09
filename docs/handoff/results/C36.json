@@ -1,0 +1,114 @@
+{
+  "schema_version": "1.0",
+  "task_id": "C36",
+  "status": "implemented_checked",
+  "review_status": "not_reviewed",
+  "workspace_absolute": "/workspace/knowledge-hub",
+  "executor": {
+    "product": "MiniMax Cloud",
+    "model_observed": "MiniMax-M3.1-Flash-Preview",
+    "thinking_observed": "max",
+    "provider_contract_verified": true,
+    "model_substitution_occurred": false,
+    "paid_api_or_byok_used": false
+  },
+  "source_before": {
+    "git_sha": null,
+    "manifest_sha256": "913d2efe54e55520a68e2ce17cdabbfe4e04c8ff2e0db875bfbc87ca0417c91d"
+  },
+  "source_after": {
+    "git_sha": "923ddacbbe333122f237b3e0483fdf2a289de429",
+    "manifest_sha256": "bb2a5bfcba7036c733796d999abf10d7a327ea472bc409a9f4cff82535afc833"
+  },
+  "changed_paths": [],
+  "artifacts": [
+    {
+      "path": "dist/knowledge-hub-source.zip",
+      "sha256": "9ab4d960f9b6e142425bd32047ff5ed8435ff4ca6ed4cfc6cc2bc85b56808d26",
+      "bytes": 54239,
+      "files": 37
+    },
+    {
+      "path": "dist/source-manifest.json"
+    },
+    {
+      "path": "dist/SHA256SUMS"
+    },
+    {
+      "path": "docs/handoff/final-report.md"
+    },
+    {
+      "path": "docs/handoff/checkpoint.json"
+    },
+    {
+      "path": "docs/handoff/evidence/gate-run.txt"
+    }
+  ],
+  "checks": [
+    {
+      "name": "bundle_built",
+      "command": "just package",
+      "status": "passed",
+      "exit_code": 0,
+      "runtime": "cloud-workspace",
+      "evidence_path": "dist/SHA256SUMS",
+      "reason": "37-file source zip, sha256 9ab4d960..., no venv/cache/handoff-input/secret-pattern files"
+    },
+    {
+      "name": "final_check",
+      "command": "just check",
+      "status": "passed",
+      "exit_code": 0,
+      "runtime": "cloud-workspace",
+      "evidence_path": null,
+      "reason": "lint+format+mypy+16 unit tests green on the final tree"
+    },
+    {
+      "name": "final_integration",
+      "command": "just integration",
+      "status": "passed",
+      "exit_code": 0,
+      "runtime": "cloud-workspace/PG16.2",
+      "evidence_path": "docs/handoff/evidence/gate-run.txt",
+      "reason": "6 RLS tests pass on a real PostgreSQL 16.2 server"
+    },
+    {
+      "name": "final_acceptance",
+      "command": "just acceptance",
+      "status": "not_run",
+      "exit_code": null,
+      "runtime": null,
+      "evidence_path": "docs/handoff/evidence/gate-run.txt",
+      "reason": "A01-A20/S01-S04 are C33/C35 scope and need Keycloak + OpenViking; pytest exits 5 and the recipe prints an explicit NOT RUN message"
+    },
+    {
+      "name": "gate_report",
+      "command": "python scripts/quality/check_gates.py",
+      "status": "failed",
+      "exit_code": 1,
+      "runtime": "cloud-workspace",
+      "evidence_path": "docs/handoff/final-report.md",
+      "reason": "E01/E03/E04/E05 unmet by design; the tool exits 1 to prevent an all-green claim"
+    },
+    {
+      "name": "no_external_publication",
+      "command": "no push, no deploy, no publish, no owner-server contact",
+      "status": "passed",
+      "exit_code": 0,
+      "runtime": "cloud-workspace",
+      "evidence_path": null,
+      "reason": "only local git commits inside the isolated ROOT; packager is local-only"
+    }
+  ],
+  "blockers": [],
+  "pending_owner_gates": [
+    "E01",
+    "E02",
+    "E03",
+    "E04",
+    "E05"
+  ],
+  "external_actions_unknown": [],
+  "next_task_id": "C05",
+  "deployment_performed": false
+}

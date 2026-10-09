@@ -1,0 +1,135 @@
+{
+  "schema_version": "1.0",
+  "observed_at": "2026-10-09T07:42:49+00:00",
+  "workspace_absolute": "/workspace/knowledge-hub",
+  "workspace_absolute_resolved": "/run/csi/mount-root/nas/eab0d61a99b6696edb3d2aff87b585e8/knowledge-hub",
+  "workspace_absolute_note": "/workspace/knowledge-hub is a symlink target on a NAS mount; both the logical and the physically resolved path are recorded so a reviewer on either can locate the tree",
+  "workspace_isolation": "isolated project directory inside the provided cloud workspace; no path from the submitter's machine and no owner server was used",
+  "git_state": {
+    "git_present": true,
+    "version": "git version 2.39.5",
+    "initialised_in_root": true
+  },
+  "filesystem_write": {
+    "workspace_root_writable": true,
+    "note": "/workspace is a NAS-backed mount; container is ephemeral, workspace contents persist"
+  },
+  "shell": {
+    "available": true,
+    "uid": 0,
+    "user": "root"
+  },
+  "python": {
+    "system": "Python 3.11.2",
+    "venv_path": ".venv",
+    "venv_version": "Python 3.11.2",
+    "package_install": "possible via pip with explicit --index-url https://pypi.org/simple/ + --trusted-host; the sandbox default index fails for every package"
+  },
+  "node": {
+    "version": "v22.19.0",
+    "npm": "10.9.3"
+  },
+  "just": {
+    "version": "just 1.36.0",
+    "installed_by": "agent, OSS binary from casey/just release"
+  },
+  "podman": {
+    "available": false,
+    "evidence": "command -v podman -> not found; podman info -> exit 127; no /run/podman/podman.sock"
+  },
+  "docker": {
+    "available": false,
+    "evidence": "command -v docker -> not found; docker info -> exit 127; no /var/run/docker.sock"
+  },
+  "systemd": {
+    "available": false,
+    "evidence": "command -v systemctl -> not found; /run/systemd/system absent; pid 1 is 'node', so the container has no init system"
+  },
+  "cpu_arch": "x86_64",
+  "cpu_count": 2,
+  "ram_available_MiB": 3072,
+  "ram_note": "3072 MiB total is below the 5125-7125 MiB product project profile; this is a constraint on what can be exercised here, not a claim about production sizing",
+  "network_dependency_downloads": {
+    "available": true,
+    "evidence": "pypi.org/simple -> 200, github.com -> 200, deb.debian.org -> 200; files.pythonhosted.org wheel download -> 200, 368664 bytes, valid zip"
+  },
+  "postgres_real": {
+    "available": true,
+    "engine": "real PostgreSQL server, not a mock",
+    "version": "16.2 (server_version_num 160002)",
+    "packaging": "pgserver 0.1.4 (pip-distributed PostgreSQL binaries)",
+    "rls_verified_this_session": true,
+    "rls_evidence": [
+      "ENABLE + FORCE ROW LEVEL SECURITY on table doc",
+      "policy on app.principal = current_setting('app.principal', true)",
+      "alice sees 1 row, bob sees 1 row, carol sees 0 rows (default deny)",
+      "bob INSERT with owner='alice' rejected: 'new row violates row-level security policy'",
+      "role app is not superuser and has no BYPASSRLS"
+    ],
+    "constraint_found": "SET app.user='x' is a syntax error; 'user' is a reserved word. The context GUC must be a non-reserved name (app.principal used here)."
+  },
+  "keycloak_real": {
+    "available": false,
+    "evidence": "no java runtime, no keycloak binary; installing a JDK + Keycloak is out of budget for a 3 GiB sandbox and would not be the target host's configuration"
+  },
+  "openviking_real": {
+    "available": null,
+    "evidence": "not probed in C00; deferred to spike C04"
+  },
+  "mcp_client_real": {
+    "sdk_installed": true,
+    "sdk_version": "2.3.0 (official MCP Python SDK)",
+    "external_client": false,
+    "evidence": "SDK importable; no second independent MCP client present in this environment, so the A01-A20 MCP leg is not yet exercisable"
+  },
+  "requested_model": "MiniMax-M3.1-Flash-Preview",
+  "model_observed": "MiniMax-M3.1-Flash-Preview",
+  "model_observation_source": "session runtime metadata (model_id / provider_id), not a self-report by the model",
+  "provider_observed": "minimax",
+  "thinking_observed": "max",
+  "model_substitution_occurred": false,
+  "paid_api_or_byok_used": false,
+  "coding_subscription_confirmed": true,
+  "product_runner_subscription_confirmed": false,
+  "product_runner_note": "The coding session's model entitlement is not the product's subscription model-runner entitlement. No product runner exists in this environment, so E02 stays pending and the product path uses a fake adapter.",
+  "production_access_authorized": false,
+  "owner_server_contacted": false,
+  "runtime_tests_run": true,
+  "checks_performed": [
+    {
+      "name": "handoff_integrity",
+      "command": "python3 verify_handoff.py",
+      "status": "passed",
+      "exit_code": 0,
+      "detail": "handoff_integrity_passed; 65 files, 42 tasks, 18 packages, 20 cases"
+    },
+    {
+      "name": "container_runtime_probe",
+      "command": "command -v podman; podman info",
+      "status": "failed",
+      "exit_code": 127,
+      "detail": "absent"
+    },
+    {
+      "name": "systemd_probe",
+      "command": "command -v systemctl; ls /run/systemd/system",
+      "status": "failed",
+      "exit_code": 127,
+      "detail": "absent; pid1=node"
+    },
+    {
+      "name": "postgres_rls_probe",
+      "command": "pgserver + psql tenant isolation/forgery checks",
+      "status": "passed",
+      "exit_code": 0,
+      "detail": "real PG 16.2, RLS isolation and default deny confirmed"
+    },
+    {
+      "name": "network_dependency_probe",
+      "command": "curl pypi/github/debian + wheel download",
+      "status": "passed",
+      "exit_code": 0,
+      "detail": "downloads possible with explicit pip index flags"
+    }
+  ]
+}
