@@ -18,7 +18,7 @@
     "manifest_sha256": "5dc7e23aeaff92dfac4b2c1222115b9e5e3746fae5be90eeca083d6bbbb5b59e"
   },
   "source_after": {
-    "git_sha": "PENDING_COMMIT",
+    "git_sha": "3701520042d2c54dd83bed5627ecf6caabf00b40",
     "manifest_sha256": "1391f683e02098798ecb8398fefdc6ea7bfc6ecc8fd48db31d8ccdfd370ed139"
   },
   "changed_paths": [
