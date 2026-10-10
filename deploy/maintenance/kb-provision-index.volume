@@ -1,0 +1,18 @@
+# C15 — the closed secret store for issued index service keys.
+# Delivery artifact; never created in the C15 workspace (no Podman, E01).
+#
+# The volume holds the read and index keys of every library account. Nothing
+# else goes in here: no root key (that lives in the environment file, 0400),
+# no database, no corpus text. It is mounted only into the provisioning
+# one-shot, and it is the only writable path that container has.
+
+[Unit]
+Description=Knowledge Hub C15: closed secret store for index service keys
+
+[Volume]
+VolumeName=kb-provision-index
+# No label needed by the rest of the stack; the name is the contract.
+# Label=kb.role=secret
+
+[Install]
+WantedBy=default.target
