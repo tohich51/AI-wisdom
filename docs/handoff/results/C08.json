@@ -1,0 +1,239 @@
+{
+  "schema_version": "1.0",
+  "task_id": "C08",
+  "status": "implemented_checked",
+  "review_status": "not_reviewed",
+  "workspace_absolute": "/workspace/knowledge-hub/.worktrees/feature-c08-members",
+  "branch": "feature-c08-members",
+  "executor": {
+    "product": "MiniMax Cloud",
+    "model_observed": "MiniMax-M3.1-Flash-Preview",
+    "thinking_observed": "max",
+    "provider_contract_verified": true,
+    "model_substitution_occurred": false,
+    "paid_api_or_byok_used": false
+  },
+  "source_before": {
+    "git_sha": "16e00c37b2b58932249897960225a5f7807b5633",
+    "manifest_sha256": "913d2efe54e55520a68e2ce17cdabbfe4e04c8ff2e0db875bfbc87ca0417c91d"
+  },
+  "source_after": {
+    "git_sha": "d12572c615b9c643d38f7cf68501db57739254db",
+    "manifest_sha256": "913d2efe54e55520a68e2ce17cdabbfe4e04c8ff2e0db875bfbc87ca0417c91d"
+  },
+  "changed_paths": [
+    "migrations/0004_membership.sql",
+    "src/kb/access/membership.py",
+    "src/kb/access/membership_deactivation.py",
+    "src/kb/access/membership_keycloak.py",
+    "src/kb/http/members.py",
+    "tests/integration/members/conftest.py",
+    "tests/integration/members/test_deactivation_order.py",
+    "tests/integration/members/test_membership_gate.py",
+    "tests/integration/members/test_groups_and_grants.py",
+    "tests/integration/members/test_admin_scope.py",
+    "tests/integration/members/test_invitations.py",
+    "tests/integration/members/test_models.py",
+    "docs/handoff/results/C08.json"
+  ],
+  "scope_note": "No tracked file outside the card's allowed paths was modified; `git status --short` at commit time lists only the paths above plus the pre-existing untracked `.venv` symlink. 0001, 0002, 0003_catalog_bindings and 0003_identity_sessions were read and never edited. No file outside `src/kb/access/membership*` and `src/kb/http/members*` was added under src/, so the shared identity dependency (`request.state.principal`) is imported from `src/kb/http/libraries.py` rather than re-implemented; test_models.py::test_the_routers_share_one_identity_dependency asserts the import is still that one and not a copy. docs/handoff/checkpoint.json was deliberately NOT written — see checkpoint_note. `just package` wrote only into dist/, which .gitignore excludes, so no tracked file appeared outside the allowed paths.",
+  "artifacts": [
+    {
+      "path": "migrations/0004_membership.sql",
+      "sha256": "c369e7db6779cc0c9e10f32acde4a9c4716694e89d8ae8f7e30c734380f7d3f6",
+      "note": "new migration, exactly the file name this card owns. 0001/0002/0003 untouched. It re-defines kb.effective_role — the only pre-existing object it touches — see central_invariant."
+    },
+    {
+      "path": "src/kb/access/membership.py",
+      "sha256": "6e82ecb81eb46998bd48d71df3e2ab5687c43446becab6b37bfe83f27abd5fec"
+    },
+    {
+      "path": "src/kb/access/membership_deactivation.py",
+      "sha256": "35071cb5659d1c61ed9e265c3461ada7c88fd1df096d2bd755f1b03ba9421f40"
+    },
+    {
+      "path": "src/kb/access/membership_keycloak.py",
+      "sha256": "1c8d0ace3f266c5d4540f6885b296cf952558279efd0c8077ea19c75b41faa1f",
+      "note": "the real Keycloak client. Not executed against anything — see the keycloak_session_revocation check, status not_run."
+    },
+    {
+      "path": "src/kb/http/members.py",
+      "sha256": "e18bda5e547809c9353057473f72e92b82f3a4db4c12cababb6123d9acaa9ad0"
+    },
+    {
+      "path": "tests/integration/members/test_deactivation_order.py",
+      "sha256": "735060b8a6809277e7d8ebdb90ecee689c2de13050b505bb78b87d5b8e4c56f9",
+      "note": "the ordering proof"
+    },
+    {
+      "path": "dist/knowledge-hub-source.zip",
+      "sha256": "6ff6b243c5111c80a778b00d86ac4c5f58efacf6904e11e3703b98a5cf8df27c",
+      "note": "`just package`, source only; not deployed, not published"
+    }
+  ],
+  "what_was_built": {
+    "membership": "kb.membership, one row per (organisation, principal), with issuer/subject, nullable display_name and email, and exactly two states: active, deactivated. Written only through kb.create_membership(), kb.accept_invitation() and kb.deactivate_membership(); kb_app holds no INSERT, UPDATE or DELETE on the table at all.",
+    "deactivation": "kb.deactivate_membership() is the whole PostgreSQL half: actor check, close the row, revoke the gateway's own durable browser sessions, increment the policy revision and append the journal entry, all in one transaction. Then the provider is contacted. Then the answer is recorded in a second transaction.",
+    "group_versus_direct": "kb.library_grant is untouched and still means 'this person, directly'. kb.access_group_grant means 'everybody in this group'. kb.effective_role() takes the union as a maximum and kb.effective_role_paths() reports the two kinds separately, so the A08 explanation can name which path is still holding.",
+    "policy_journal": "kb.access_policy_journal is append-only: no write policy, no write privilege, no endpoint. Group changes are journalled by a database trigger rather than by the caller, so there is exactly one place a change can be recorded and no path that skips it.",
+    "invitations": "kb.invitation plus kb.create_invitation / accept / withdraw / mark_notified. Nothing is sent: there is no transport, no mailer parameter and no network call on the path, and delivery_state leaves 'operator_pending' only when a named operator records that they told the person out of band.",
+    "admins": "kb.organisation_admin with claim / add / remove. It carries no library role, and the last administrator cannot be removed — an organisation with none has no supported way back except a psql session."
+  },
+  "acceptance": {
+    "a_disabled_user_with_a_valid_jwt_is_refused": "test_membership_gate.py — 8 tests. The grant row is still there, the group row is still there, the browser session is still cryptographically valid, and the principal matches zero rows in all 18 subject tables, is refused writes, and cannot grant anybody else. A RESTRICTIVE policy additionally covers the two tables whose own policy has an own-row branch that never consults a role (kb.library_grant, kb.use_record).",
+    "a_direct_grant_after_group_removal_is_explained": "test_groups_and_grants.py::test_removing_the_group_leaves_the_direct_grant_and_the_ui_says_so and its mirror test_removing_the_direct_grant_leaves_the_group_and_the_ui_says_so. AccessExplanation returns the surviving path with its kind, its role and the group it came from — not a boolean, and not a denial.",
+    "an_admin_does_not_silently_get_private_library_content": "test_admin_scope.py — 12 tests. The admin set table has no role column, an administrator reads no row of somebody else's library, cannot write into one, cannot grant themselves access and cannot enrol themselves in a group that grants access. Every negative has a positive control beside it, because a suite of denials also passes for a principal whose administration is simply broken."
+  },
+  "central_invariant": {
+    "claim": "product deactivation closes membership in PostgreSQL first and revokes Keycloak sessions second, and that order is observed, not asserted",
+    "proved_by": [
+      "test_deactivation_order.py::test_postgresql_closes_before_the_provider_is_touched — the stand-in revoker opens a SECOND connection to the real database and reads kb.membership.status while it is being called. It reads 'deactivated'. The connection took no part in the deactivating transaction, so that is the committed value any other process would see",
+      "test_deactivation_order.py::test_the_ordering_test_would_notice_a_reversal — the control. The same public operations run in the unsafe order and the probe reads 'active'",
+      "test_deactivation_order.py::test_both_steps_happened_and_in_that_order — the journal holds membership_deactivated before sessions_revoked, with a higher revision",
+      "test_deactivation_order.py::test_the_gateway_sessions_die_in_the_same_transaction — the gateway's own durable sessions are revoked in the same transaction, and a colleague's are not",
+      "test_deactivation_order.py::test_a_failed_provider_does_not_reopen_the_membership and test_a_provider_that_raises_is_recorded_not_swallowed — a Keycloak outage or timeout leaves the membership closed and the work outstanding",
+      "test_deactivation_order.py::test_a_retry_after_a_failure_does_not_repeat_the_close — the retry is the provider half only, and the journal shows membership_deactivated exactly once"
+    ],
+    "mutation_tested": "three mutations were injected and reverted, each caught. (1) Moving the provider step before the PostgreSQL commit in deactivate_member failed 6 tests, including the ordering observation itself. (2) Removing `WHERE kb.membership_allows(p_principal)` from kb.effective_role failed 6 tests, including test_every_subject_table_is_closed. (3) Deleting the two remaining RESTRICTIVE policies failed 3 tests. The tests are not vacuous."
+  },
+  "second_invariant": {
+    "claim": "a group grant and a direct grant are different things, and a full membership deactivation closes every path",
+    "how_the_gate_is_built": "Inside kb.effective_role(), not as eighteen parallel policies. Every policy in 0002 and 0003 reaches its answer through that one function, so a principal whose membership is closed resolves to no role anywhere. A RESTRICTIVE policy is added only for kb.library_grant and kb.use_record, whose policies have an own-row branch that never consults a role. test_membership_gate.py::test_every_subject_table_is_closed walks all eighteen tables and asserts zero rows, and test_only_the_own_row_tables_need_a_second_statement asserts the list is exactly those two, read out of pg_policies.",
+    "why_not_one_policy_per_table": "The first version put a RESTRICTIVE policy on all eighteen tables. That made C09's shipped structural guard test_link_policies_never_consult_the_target_role fail, because it asserts every policy on kb.project_library_link consults a role. The only ways to satisfy both were to leave the link table ungated or to write an expression mentioning a role it does not need. Moving the gate into the authority function closes the same rows with fewer moving parts, leaves C09's invariant intact and untouched, and test_every_subject_table_is_closed is the proof that no table was left open."
+  },
+  "checks": [
+    {
+      "name": "members_integration_suite",
+      "command": "pytest tests/integration/members -m integration -q",
+      "status": "passed",
+      "exit_code": 0,
+      "runtime": "cloud-workspace/PostgreSQL 16.2 (pgserver), role kb_app, database kb_c08",
+      "evidence_path": "tests/integration/members/test_deactivation_order.py",
+      "reason": "75 tests: 13 ordering, 15 gate, 16 groups and grants, 12 admin scope, 19 invitations. Real HTTP through FastAPI over a real psycopg pool connected as kb_app, real DDL, real RLS, real commits. The pool and every `db` fixture connect as kb_app, because a superuser BYPASSES RLS and the access assertions would otherwise pass vacuously."
+    },
+    {
+      "name": "model_invariant_suite",
+      "command": "pytest tests/integration/members/test_models.py -q",
+      "status": "passed",
+      "exit_code": 0,
+      "runtime": "cloud-workspace",
+      "evidence_path": "tests/integration/members/test_models.py",
+      "reason": "16 tests, no database, deliberately unmarked so they also run inside `just check`: no request model carries a caller-asserted identity, the Python vocabularies are compared against the CHECK constraints in migrations/0004_membership.sql by parsing the file, and unknown stays None."
+    },
+    {
+      "name": "full_integration_gate",
+      "command": "just integration",
+      "status": "passed",
+      "exit_code": 0,
+      "runtime": "cloud-workspace/PostgreSQL 16.2",
+      "evidence_path": null,
+      "reason": "211 passed, 6 skipped, 58 deselected. 120 from C03/C06/C07/C09 and 91 from C08. C06's and C09's session fixtures glob migrations/0*.sql and therefore apply 0004 as well; their access and binding tests are unaffected. The 6 skips are C07's test_keycloak_live.py and predate this card. No log was written to docs/handoff/evidence/ — that path is outside this card's allowed paths."
+    },
+    {
+      "name": "static_gate",
+      "command": "just check",
+      "status": "passed",
+      "exit_code": 0,
+      "runtime": "cloud-workspace",
+      "evidence_path": null,
+      "reason": "ruff check + format clean, mypy clean on 25 source files, 58 unit tests pass (42 pre-existing plus the 16 unmarked model tests). S608 stayed ON everywhere: no per-file relaxation was added, and the two table-name interpolations in the tests go through psycopg.sql.Identifier instead."
+    },
+    {
+      "name": "gate_non_vacuity",
+      "command": "just verify-self",
+      "status": "passed",
+      "exit_code": 0,
+      "runtime": "cloud-workspace",
+      "evidence_path": null,
+      "reason": "an injected defect is still rejected by `just check`, and the tree is green again afterwards. Separately, three mutations inside this card's own code and DDL were injected and reverted; see central_invariant.mutation_tested."
+    },
+    {
+      "name": "source_bundle",
+      "command": "just package",
+      "status": "passed",
+      "exit_code": 0,
+      "runtime": "cloud-workspace",
+      "evidence_path": "dist/knowledge-hub-source.zip",
+      "reason": "packaging only — nothing pushed, deployed or published. dist/ is in .gitignore, so no tracked file was created outside the card's allowed paths."
+    },
+    {
+      "name": "keycloak_session_revocation",
+      "command": "n/a",
+      "status": "not_run",
+      "exit_code": null,
+      "runtime": null,
+      "evidence_path": "src/kb/access/membership_keycloak.py",
+      "reason": "There is no Keycloak in this environment — no JVM, no realm, and runtime-capabilities.json reports keycloak_real.available=false. KeycloakSessionRevoker is a real HTTP client against Keycloak's documented admin API (client_credentials for a service account holding realm-management/manage-users, then POST /admin/realms/{realm}/users/{subject}/logout) and NOTHING executes it. It is not a mock and is not presented as one: no test imports it, no code path in the product constructs it, and the test harness substitutes an explicitly-labelled observer that opens a second connection to the real database. Two things need a live realm to settle: that the token's `sub` is the admin API's user id under a default configuration, and that the provider actually reports success. Both remain pending E03. The half of A16 that says 'the next request is refused on membership' IS verified here, against real PostgreSQL; the half that says 'sessions are revoked' is not."
+    },
+    {
+      "name": "keycloak_token_verification_at_the_transport",
+      "command": "n/a",
+      "status": "not_run",
+      "exit_code": null,
+      "runtime": null,
+      "evidence_path": null,
+      "reason": "C07's artifact, not this card's, and unexercised here for the same reason. The members router reads request.state.principal and request.state.identity and refuses the request when either is absent or of the wrong type; the test harness substitutes a clearly-labelled stand-in middleware that accepts any well-formed UUID subject. No route, body or domain call in C08 reads identity from the request. The A04 and A20 token half is not exercised and remains pending E03."
+    },
+    {
+      "name": "administrator_ui_enforcement_of_the_admin_boundary",
+      "command": "n/a",
+      "status": "not_run",
+      "exit_code": null,
+      "runtime": null,
+      "evidence_path": null,
+      "reason": "The React-admin surface is not in this repository and is not part of this card. What IS verified is the server half it will render: the database refuses an organisation administrator every row of a private library, and the API returns `not_visible` rather than an empty grant list, so a UI cannot render content it was never given. Whether the UI renders that correctly is not observable here."
+    }
+  ],
+  "findings_for_the_next_owner": [
+    {
+      "severity": "high",
+      "where": "migrations/0002_rls.sql, function kb.effective_role",
+      "finding": "kb.effective_role is SECURITY DEFINER and reads kb.library_grant, which has FORCE ROW LEVEL SECURITY. The rules say a SECURITY DEFINER function running as the table owner is subject to the owner's forced policies, which would make the function's own SELECT recurse into the policy that calls it. In this environment it does not fail, because the test fixtures apply the migrations as the superuser `postgres`, and a superuser bypasses RLS by role rather than by policy. The production arrangement — the migration role is kb_schema_owner, which IS the table owner — was not exercised here and cannot be from a test that connects as postgres. The safe general rule, and the one C08 follows, is: any function a policy expression calls must be able to read the table it is called for. kb.effective_role passes that test only because the migration role is a superuser in this workspace.",
+      "action_taken": "reported, not fixed — 0002 is outside this card's allowed paths, and the fix (the functions that back the policies must be owned by a role that bypasses, or the tables must not be FORCEd) is the single DDL owner's decision. C08's own tables are RLS-enabled and NOT forced, with the reason written into the migration."
+    },
+    {
+      "severity": "medium",
+      "where": "migrations/0002_rls.sql, policy kb.rule_action",
+      "finding": "Re-confirmed from C09 and still open: kb.rule_action has no permissive policy at all, so it is default-deny under RLS, but 0002 also granted SELECT on all kb tables to kb_app. The combination is safe today only because there is no policy to be filtered by. This card adds nothing to that table.",
+      "action_taken": "reported again, unchanged. Belongs to the owner of 0002."
+    },
+    {
+      "severity": "medium",
+      "where": "migrations/0004_membership.sql, policy access_group_member_write",
+      "finding": "A finding produced by writing the tests: an organisation administrator who may add anybody to a group can add THEMSELVES, and a group grant then hands them everything that group holds. The policy now refuses a row whose subject is the caller (leaving is still allowed, because PostgreSQL evaluates only USING for a DELETE). Group GRANTS were separately narrowed to require manager on the target library, which matches ACCESS-MODEL section 2. Both halves are needed: membership without the grant check is 'make a group, grant it a library, add yourself', and the grant check without it lets every library manager in the company reshape any group.",
+      "action_taken": "fixed in 0004 and asserted by test_admin_scope.py::test_an_admin_cannot_enter_a_group_that_grants_access with the positive control test_an_admin_who_manages_the_library_does_see_the_paths."
+    },
+    {
+      "severity": "medium",
+      "where": "migrations/0004_membership.sql, function kb.effective_role_paths",
+      "finding": "A second one from writing the tests: the first guard let any organisation administrator read any principal's grant paths for any library. That is a map of the company — it reveals that a private library exists and that a named person manages it, to somebody who can never open it. The guard now requires the caller to already hold a role on that library, and the API answers `not_visible` rather than an empty list so a UI cannot mistake 'you may not look' for 'they have nothing'.",
+      "action_taken": "fixed in 0004 and asserted in both layers by test_groups_and_grants.py::test_a_third_party_cannot_ask_about_somebody_elses_paths and test_admin_scope.py::test_the_admin_api_answers_without_describing_a_library_they_cannot_see."
+    },
+    {
+      "severity": "low",
+      "where": "migrations/0004_membership.sql, functions kb.membership_allows and kb.current_policy_revision",
+      "finding": "Both take a principal and no organisation, because a policy expression and a per-request fence have no organisation context. In v1 there is exactly one organisation per installation, so the direction is conservative: a principal deactivated anywhere is refused everywhere, and any policy change anywhere invalidates any request's revision. A second organisation would need the organisation threaded through both signatures, which touches every policy in 0002 and 0003 and belongs to the single DDL owner.",
+      "action_taken": "stated in the migration rather than papered over; the RLS triggers and the definer functions that DO have an organisation use it."
+    },
+    {
+      "severity": "low",
+      "where": "migrations/0004_membership.sql, comment above CREATE TABLE membership",
+      "finding": "A deactivated member is refused every subject table but can still read their own kb.membership row, which is what tells them they were blocked, when, and by whom. That is deliberate and it is the only row they keep. It also means the two RESTRICTIVE policies cannot simply be extended to the C08 tables without losing the explanation the UI needs.",
+      "action_taken": "deliberate; asserted by test_membership_gate.py::test_a_blocked_member_still_reads_their_own_state."
+    },
+    {
+      "severity": "informational",
+      "where": "src/kb/access/membership_deactivation.py, JOURNALLED_DETAIL_KEYS",
+      "finding": "The journal detail was first filtered by TYPE — carry scalars and short strings. A test with a provider dict containing {'token': '<a real bearer token>'} passed that filter, because the value is a short string. The journal is readable by an administrator and outlives the request, so the filter is now an allow-list of keys this code chose.",
+      "action_taken": "fixed and asserted by test_the_journal_never_carries_an_upstream_body."
+    }
+  ],
+  "blockers": [],
+  "checkpoint_note": "docs/handoff/checkpoint.json was deliberately NOT written. The card permits it, but it is a single shared file and other workers are running on their own branches; two executors writing the same checkpoint would lose one of them. The integrator owns that merge. Everything needed to reconstruct this card's state is in this file.",
+  "pending_owner_gates": [
+    "E03"
+  ],
+  "external_actions_unknown": [],
+  "next_task_id": "C10",
+  "deployment_performed": false
+}
