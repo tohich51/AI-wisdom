@@ -20,8 +20,8 @@
     "note": "HEAD of feature-c12a-docx before this card. No manifest hash is given because `just package` was not run for this card; see the source_bundle check."
   },
   "source_after": {
-    "git_sha": "48163af4c35dc12c2874d026f36945f636c0e1c1",
-    "note": "the single commit this card produced on feature-c12a-docx, carrying the code, the tests, the fixtures and this file. It necessarily cannot contain its own hash, so the value above is that commit's and a reader who wants a byte-exact tree should resolve it rather than diff against this file. Not pushed."
+    "git_sha": "85ababba949726e181d48ca3c42e3a67872b29aa",
+    "note": "The commit on feature-c12a-docx that carries this card's code, tests, fixtures and this result file. A commit cannot contain its own hash, so this id was written by one follow-up commit immediately after it; `git log --oneline -2` on the branch shows both, and the code commit is the parent of the second. Nothing was pushed."
   },
   "changed_paths": [
     "src/kb/catalog/parsers/docx_archive.py",
