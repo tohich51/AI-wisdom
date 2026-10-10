@@ -1,0 +1,272 @@
+{
+  "schema_version": "1.0",
+  "task_id": "C12B",
+  "status": "implemented_checked",
+  "review_status": "not_reviewed",
+  "workspace_absolute": "/workspace/knowledge-hub/.worktrees/feature-c12b-html",
+  "branch": "feature-c12b-html",
+  "executor": {
+    "product": "MiniMax Cloud",
+    "model_observed": null,
+    "model_observed_reason": "not observable from inside the agent. No environment variable, config file or API response in this workspace reports the resolved model id or provider, and AGENTS.md rule 2 forbids declaring a setting confirmed on the strength of the prompt alone. Recorded as null rather than copied forward from another card's entry, which was written by a different session with different visibility.",
+    "thinking_observed": null,
+    "thinking_observed_reason": "same reason as model_observed; no runtime surface reports the thinking setting",
+    "provider_contract_verified": false,
+    "model_substitution_occurred": false,
+    "paid_api_or_byok_used": false,
+    "dependencies_installed": "none. The extractor uses the standard library's html.parser and the fetch uses the httpx already in requirements.lock. pyproject.toml and requirements.lock were not touched, so the single-owner rule for the lockfile was not engaged at all."
+  },
+  "source_before": {
+    "git_sha": "49a6cf964483927537e46669409bfef754005ce7",
+    "manifest_sha256": null,
+    "note": "The pre-change source manifest was not captured. dist/ is gitignored, the worktree started clean at this sha, and inventing a hash I did not compute would be the one thing this file must never contain. source_after carries the manifest built after the change."
+  },
+  "source_after": {
+    "git_sha": null,
+    "manifest_sha256": null,
+    "note": "filled in by the follow-up commit that records this card's own sha and the post-change bundle hash, exactly as C10 did"
+  },
+  "changed_paths": [
+    "src/kb/catalog/fetch_html.py",
+    "src/kb/catalog/fetch_snapshots.py",
+    "src/kb/catalog/parsers/html_extract.py",
+    "tests/integration/fetch/conftest.py",
+    "tests/integration/fetch/harness.py",
+    "tests/integration/fetch/test_ssrf_boundary.py",
+    "tests/integration/fetch/test_snapshot_and_extract.py",
+    "tests/integration/fetch/test_page_data_boundary.py",
+    "tests/integration/fetch/test_catalogue_record.py",
+    "evals/fixtures/html/README.md",
+    "evals/fixtures/html/article.html",
+    "evals/fixtures/html/hostile.html",
+    "evals/fixtures/html/expected/article.json",
+    "evals/fixtures/html/expected/hostile.json",
+    "docs/handoff/results/C12B.json"
+  ],
+  "scope_note": "Every changed path is inside the card's allowed list: src/kb/catalog/fetch*, src/kb/catalog/parsers/html*, tests/integration/fetch/**, evals/fixtures/html/**, plus this result file. src/kb/catalog/parsers/ deliberately has NO __init__.py: src/kb/catalog/ is itself an implicit namespace package (it has no __init__.py on main), and a sibling card owns src/kb/catalog/parsers/docx* and another owns parse* — two executors writing the same __init__.py on two branches is a merge conflict waiting to happen, and the import works without one. src/kb/catalog/upload_fetch.py, src/kb/catalog/upload.py, src/kb/catalog/upload_data.py and src/kb/catalog/storage.py are imported and were not modified; migrations/ and src/kb/contracts/ were read and not touched. docs/handoff/checkpoint.json was deliberately not written: it is a single shared file and other workers are on their own branches; the integrator owns that merge.",
+  "artifacts": [
+    {
+      "path": "src/kb/catalog/fetch_html.py",
+      "sha256": "1d909fcebe5a3bf6c50d8dc2502e422efa59b846510036b27fc1c5d82593a480",
+      "note": "the fetch. Owns the ORDERING of the SSRF checks, delegates the address rules to C10."
+    },
+    {
+      "path": "src/kb/catalog/fetch_snapshots.py",
+      "sha256": "7a0e504ee55ee654841946551b99740ec7fde67b128af0268d613aaf1eef77e7",
+      "note": "the record. Source, original, version, fragments, and the limitations the schema imposes."
+    },
+    {
+      "path": "src/kb/catalog/parsers/html_extract.py",
+      "sha256": "8aa5d8655a78fe578311e8575d0fff862144155b28a255f55ceb76244da9711e",
+      "note": "the extractor. Standard library only; imports no networking at all."
+    },
+    {
+      "path": "tests/integration/fetch/",
+      "sha256": "per-file; see the checks below for the count and the exit codes",
+      "note": "165 tests over a real PostgreSQL 16.2 (pgserver, database kb_c12b, all migrations applied once per session, connected as kb_app with RLS forced), a real loopback HTTP server on a real socket, and a real local filesystem store under tmp_path"
+    },
+    {
+      "path": "evals/fixtures/html/article.html",
+      "sha256": "8b0d1355eeda3c91d5381da406d1969523dcee66d246b781579be93b0a657f35"
+    },
+    {
+      "path": "evals/fixtures/html/hostile.html",
+      "sha256": "a3a4f9b73fd7cd6eb72f4c95936423dff3c66827824e5de12e4b78454e345c4a"
+    },
+    {
+      "path": "evals/fixtures/html/expected/",
+      "sha256": "article.json 7b42ba10238afa10727fda31cffb3c323191397dc2e48652602f376637a72a68, hostile.json b0132f5b5b500b287bd8ba2fcd6cedaac694cb604318bdf977a466d7ce1c86e9",
+      "note": "the pinned extractions. Written by reading the extractor's output against each fixture, not by recording whatever it happened to produce."
+    }
+  ],
+  "what_was_built": {
+    "fetch": "src/kb/catalog/fetch_html.py. fetch_html_snapshot() performs, in this order and with no other code path: (1) scheme, credentials, host spelling, traversal and every resolved address checked before an httpx.Client exists; (2) follow_redirects off, with every Location resolved against the URL it came from and re-checked from step 1; (3) the hop count capped at 3 and the cap bounding the number of requests, not only the error; (4) after every response the address the client actually connected to compared with the set approved for that hop; (5) a wall-clock deadline over the whole chain, not one timeout per request; (6) the body bounded by declared length and then by measurement. A transport failure becomes a UrlRefused so a route never sees an httpx exception, and the refusal message carries the exception class and nothing else.",
+    "ownership": "The address rules are C10's. fetch_html imports parse_url, check_url, is_blocked_address, ALLOWED_SCHEMES, BLOCKED_NETWORKS, sniff_media_type and the peer check from kb.catalog.upload_fetch rather than copying them, and test_the_address_rules_come_from_c10_and_are_not_copied asserts the identities, so this card cannot drift from the one that owns the blocklist. What this card owns is the order the checks run in.",
+    "snapshot": "HtmlSnapshot carries the requested URL, the URL the bytes came from, the retrieval instant measured at the moment the response arrived, the raw bytes, their sha256, the sniffed and declared media types, the decoded text with the charset and the reason it was chosen, the hop count, every URL httpx actually requested, and the extractor version. Cache validators (ETag, Last-Modified) are recorded as claims about the response and are never sent back: the fetcher sends two fixed headers and forwards nothing a caller or a previous response gave it.",
+    "extractor": "src/kb/catalog/parsers/html_extract.py, version html-extract/1. A block boundary is a fragment boundary; chapter is the nearest preceding heading; script, style, noscript, template, iframe, object, embed, svg and math bodies and HTML comments are not text; attributes are not text; the title is metadata and is scanned but never emitted as a fragment; href/src/srcset/poster values are resolved with urljoin and recorded, and never opened. Fragment count, fragment length, total text and recorded references are all bounded, and a document that hits a ceiling says so.",
+    "record": "src/kb/catalog/fetch_snapshots.py. One transaction writes the source, the manifest, version 1, the fragment set and the committed attempt; the store write happens before it, outside any transaction, keyed by content hash and library so no page URL can influence where its bytes land. Identity is a Principal the transport established: HtmlIngestSpec carries no identity field and forbids extras, so a body with submitted_by is rejected before a handler runs. A re-fetch of an existing source is a new version row with the new hash, the URL and the instant; identical bytes are explicitly not a new version.",
+    "versioning": "Acceptance item 3. A second retrieval of the same source produces version 2 with the new content hash and leaves version 1's row and its fragments untouched. Both retrievals are in kb.ingest with their own URL and their own retrieved_at, and the two instants are asserted to differ. The result reports is_readable=False and names the two schema limits that stop the new version's text from being stored, rather than claiming the new page is available."
+  },
+  "acceptance": {
+    "1_a14_passes_on_controlled_local_fixtures": "test_a_loopback_fetch_is_refused_and_the_internal_server_never_saw_a_request starts a real ThreadingHTTPServer on 127.0.0.1 and reads the server's own counter afterwards: zero. test_the_internal_service_is_really_serving makes the same request with a plain httpx client and the counter goes to one, so the first result is a refusal and not an unreachable port. test_a_loopback_url_is_refused_before_any_socket_is_opened replaces socket.socket and socket.create_connection with functions that raise and the fetch still ends in a refusal, which is the ordering the first test cannot show. The private, CGNAT, link-local, ULA, IPv4-mapped and metadata cases are parameterised with no transport configured at all, and test_a_public_address_is_not_blocked_by_the_list_itself plus the 172.16/12 boundary test are the controls that stop 'refuse everything' from passing.",
+    "2_internal_metadata_and_services_are_not_read": "test_an_internal_service_is_never_reachable covers 169.254.169.254, fd00:ec2::254, 169.254.170.2 and the RFC1918 ranges. test_a_metadata_host_is_refused_by_its_name_before_any_lookup proves a .internal name is refused on its spelling and never reaches a resolver. test_a_redirect_that_lands_on_an_internal_target_is_refused covers the pivot in nine shapes, including protocol-relative, to-metadata, to-ULA and to-a-non-http-scheme. test_a_resolver_that_answers_twice_differently_is_caught and test_a_rebinding_resolver_is_caught_with_its_own_resolver cover rebinding. test_the_extractor_cannot_reach_a_network proves the parser imports no socket, no httpx and no urllib.request at all, and test_a_page_cannot_make_the_gateway_fetch_a_second_thing shows a page naming a metadata endpoint, a private address and a live loopback service producing exactly one request and zero hits on that service.",
+    "3_a_second_retrieval_creates_an_understandable_new_version": "test_a_changed_page_makes_a_new_version_and_keeps_the_first asserts two version rows, each with its own hash, version 1 unchanged, two ingest rows with two URLs and two distinct retrieval instants, and read_snapshot reporting version 2 as current. test_refetching_an_unchanged_page_is_not_a_new_version asserts a version counts changes, not submissions. test_a_version_says_plainly_that_its_text_is_not_stored asserts is_readable False and the two named limitations. test_a_second_retrieval_keeps_the_first_original_readable and test_a_version_writes_no_unreferenced_bytes_to_the_volume assert the first version is untouched and that no orphan object is left on the volume.",
+    "4_no_arbitrary_server_path": "Three separate things. From the caller: test_a_url_whose_path_walks_upwards_is_refused covers '..', %2e%2e, a backslash, a space and a newline, and refuses rather than normalising, so a reviewed URL is not silently a different one. From a redirect: the same check runs on every hop, and test_a_redirect_that_lands_on_an_internal_target_is_refused[/traversal] proves it. From the page: test_a_page_cannot_make_the_gateway_fetch_a_second_thing and test_a_meta_refresh_is_not_followed prove no sub-resource and no meta-refresh is ever requested, and test_the_object_key_is_derived_from_the_digest_and_the_library_only proves the object key is blobs/<library>/<aa>/<bb>/<sha256> with no host, no scheme and no path segment in it, so a page URL can never become a filesystem path."
+  },
+  "central_invariant": {
+    "claim": "a fetched page is data: it cannot change a permission, it cannot cause a tool to run, and it cannot make the gateway fetch a second thing",
+    "proved_by": [
+      "test_a_page_that_asks_for_a_role_gets_no_role — a real PostgreSQL, the grants table compared before and after a complete fetch/extract/store of a page whose paragraphs are a grant request and a promotion; unchanged, and the submitter is still a contributor",
+      "test_the_submitter_is_the_principal_and_nothing_else — a page containing the literal text 'submitted_by = <another user uuid>, role = manager' leaves submitted_by as the verified principal and the grant table untouched",
+      "test_a_page_creates_no_rows_in_the_tables_it_names — kb.job, kb.rule, kb.knowledge and kb.library_grant counted before and after; the only table that grew is kb.fragment, by exactly the number of fragments stored",
+      "test_a_page_looks_like_a_command_and_is_stored_as_text — 'curl … | bash' stored verbatim with subprocess.Popen, subprocess.run and os.system replaced by functions that raise",
+      "test_the_card_modules_contain_no_way_to_execute_anything[3 modules] — an AST walk with import aliases resolved; no eval, exec, compile, __import__, subprocess, pickle, marshal, importlib, ctypes, shell-out or process-spawn, with builtins and qualified calls checked separately so re.compile is not mistaken for compile",
+      "test_the_extractor_cannot_reach_a_network — the parser imports no socket, no ssl, no http, no urllib, no httpx, no requests",
+      "test_a_page_cannot_make_the_gateway_fetch_a_second_thing — a real live loopback service that a fetched page names by URL records zero requests",
+      "test_the_directive_scan_reports_and_never_blocks — the hostile fixture is stored in full, its detections are reported, and nothing is filtered"
+    ],
+    "mutation_tested": "Fourteen mutations were injected and reverted; each was run against the whole 165-test fetch suite. Caught: follow_redirects=True (caught by the redirect-chain test); the per-hop re-check replaced by a no-op (caught by the redirect-to-loopback case); require_public_ip=False (caught by the real loopback refusal); the path traversal check disabled (caught by the traversal URL test); the HTML media-type gate disabled (caught by the not_html test); the whole path check removed (caught by the traversal test); script/style skipping disabled (caught by the pinned golden); comment text extracted (caught by the pinned golden); a sub-resource fetch added to the parser (caught by test_the_extractor_cannot_reach_a_network and the no-second-request test); the contributor check removed (caught by test_a_reader_may_not_store_a_page); the fragment rowcount check removed (caught by the silent-write stand-in); the snapshot/parse pair check removed (caught by the mismatched-pair test); the peer check never called from the loop (caught by test_a_response_from_an_unapproved_peer_is_refused_inside_the_fetch, which was added precisely because the first round of mutations showed the check could be removed from the call site without failing anything); deduplication widened across libraries (caught immediately, by construction). Three mutations did NOT fail anything and are reported as such: (1) removing the explicit hop-count guard while leaving range(max_redirects + 1) — the two are redundant and either alone still enforces the cap; removing BOTH is caught by test_the_redirect_cap_is_enforced_over_a_mock_transport, which is the version that matters; (2) removing the second, redundant fragment count inside the same transaction, which cannot drift from the first because it is the same transaction; (3) the scheme refusal itself, which is not this card's code to mutate — fetch_html delegates it to C10 and pins the delegation by an identity test, and C10's own suite covers the rule. The mutation harness was a throwaway script and is not in the repository, so these are reproducible by repeating the described edits, not by running a committed tool."
+  },
+  "checks": [
+    {
+      "name": "fetch_integration_suite",
+      "command": "pytest tests/integration/fetch -q --no-header",
+      "status": "passed",
+      "exit_code": 0,
+      "runtime": "cloud-workspace, PostgreSQL 16.2 via pgserver, database kb_c12b, migrations 0001-0005 applied once per session, connected as kb_app with RLS enabled and forced; real loopback HTTP server; real filesystem store under tmp_path",
+      "evidence_path": "tests/integration/fetch/",
+      "reason": "165 tests: 86 SSRF and URL boundary, 41 snapshot and extraction, 14 data boundary, 24 catalogue record."
+    },
+    {
+      "name": "required_ssrf_proofs",
+      "command": "pytest tests/integration/fetch/test_ssrf_boundary.py::test_a_loopback_fetch_is_refused_and_the_internal_server_never_saw_a_request tests/integration/fetch/test_ssrf_boundary.py::test_a_redirect_that_lands_on_an_internal_target_is_refused tests/integration/fetch/test_ssrf_boundary.py::test_the_redirect_cap_is_enforced_over_a_mock_transport tests/integration/fetch/test_ssrf_boundary.py::test_a_url_that_is_not_plain_public_http_is_refused -q",
+      "status": "passed",
+      "exit_code": 0,
+      "runtime": "cloud-workspace; the loopback case uses a real server on a real socket, the redirect cases a MockTransport",
+      "evidence_path": "tests/integration/fetch/test_ssrf_boundary.py",
+      "reason": "The four cases the card names, 25 parameterised tests in total, exit 0. The loopback refusal is proved by the server's own request counter, not by the absence of an exception. The redirect and cap cases are MockTransport by necessity — a redirect to a private address can only be served by a host that is not private — and the names say so."
+    },
+    {
+      "name": "full_integration_gate",
+      "command": "just integration",
+      "status": "passed",
+      "exit_code": 0,
+      "runtime": "cloud-workspace, PostgreSQL 16.2",
+      "evidence_path": null,
+      "reason": "601 passed, 6 skipped, 91 deselected. The 6 skips are C07's Keycloak legs (E03), not C12B's. Baseline before this card was 440 passed; the 161 new ones are this suite. C12B applies every migration to its own database kb_c12b, so it neither depends on nor disturbs C10's."
+    },
+    {
+      "name": "static_gate",
+      "command": "just check",
+      "status": "passed",
+      "exit_code": 0,
+      "runtime": "cloud-workspace",
+      "evidence_path": null,
+      "reason": "ruff check + format clean, mypy clean on 40 source files, 91 unit tests pass. No lint suppression was added: S608 and S104 stay ON in this card's tests and every statement is either a literal or a parameter."
+    },
+    {
+      "name": "gate_non_vacuity",
+      "command": "just verify-self",
+      "status": "passed",
+      "exit_code": 0,
+      "runtime": "cloud-workspace",
+      "evidence_path": null,
+      "reason": "an injected defect is still rejected by `just check`, and the tree is green again afterwards. Separately, fourteen targeted mutations of this card's own code were each run against the whole suite; see central_invariant.mutation_tested, including the three that did not fail and why."
+    },
+    {
+      "name": "source_bundle",
+      "command": "just package",
+      "status": "passed",
+      "exit_code": 0,
+      "runtime": "cloud-workspace",
+      "evidence_path": "dist/knowledge-hub-source.zip",
+      "reason": "148 files, bundle sha256 e3b89eb3e06e5107865b01fed93207be1679345851f473cf1428630abc1ab52a, source manifest sha256 370de29656856e23c2d3d4efa396b83306f1216610a35a0b0edd153187dd4ea5. Packaging only — nothing pushed, deployed or published. dist/ is gitignored, so the bundle is not part of the commit."
+    },
+    {
+      "name": "live_fetch_from_a_public_host",
+      "command": "n/a",
+      "status": "not_run",
+      "exit_code": null,
+      "runtime": null,
+      "evidence_path": null,
+      "reason": "Deliberately not run, and nothing in this card may run it: this environment has no route to the internet and a card that must refuse private addresses cannot prove anything about a public one by dialling it. Every success-path test is therefore over an httpx MockTransport or over bytes fetched from a real loopback server with a plain client, and both are named as such. The security-critical claim — that a real internal service is never contacted — IS proved with real sockets, in test_a_loopback_fetch_is_refused_and_the_internal_server_never_saw_a_request."
+    },
+    {
+      "name": "real_network_timeouts",
+      "command": "n/a",
+      "status": "not_run",
+      "exit_code": null,
+      "runtime": null,
+      "evidence_path": null,
+      "reason": "httpx implements its timeouts in the network layer, and a MockTransport has no network, so a real read timeout cannot be produced here without a routable host. What is covered instead: the whole-chain deadline is tested with an injected monotonic clock (test_the_whole_chain_is_bounded_by_one_deadline), and the conversion of a transport failure into a UrlRefused is tested for ReadTimeout, ConnectError and RemoteProtocolError (test_a_transport_error_becomes_a_refusal_not_an_exception). Whether httpx itself raises ReadTimeout at the configured budget against a real slow server is not exercised by this card."
+    },
+    {
+      "name": "peer_address_verification_against_a_real_tcp_peer",
+      "command": "n/a",
+      "status": "not_run",
+      "exit_code": null,
+      "runtime": null,
+      "evidence_path": null,
+      "reason": "The peer check needs a response that reached a socket. In this environment every successful fetch is a mock and every real fetch is refused, so no successful real response exists to read a peer address from. The check is covered two ways instead: directly, and through the fetch loop with a stand-in network_stream (test_a_response_from_an_unapproved_peer_is_refused_inside_the_fetch), which is also the test that makes removing the call fail. The limitation is the same one C10 recorded, and the check is a strengthening one — the per-hop address validation does not depend on it."
+    },
+    {
+      "name": "extracted_knowledge_admitted_to_retrieval",
+      "command": "n/a",
+      "status": "not_run",
+      "exit_code": null,
+      "runtime": null,
+      "evidence_path": null,
+      "reason": "This card stops at the catalogue. It writes no index_target, creates no index_generation, starts no embedding job and admits no Knowledge row, so A11 (a stale index must not serve withdrawn content) and the generation-watermark behaviour are untouched and remain C04/C15 scope. What is covered here is the input side: fragments carry LocatorKind.HTML_SNAPSHOT with the URL, the instant and the ordinal, and nothing invents a page number."
+    },
+    {
+      "name": "verified_identity_from_a_keycloak_token",
+      "command": "n/a",
+      "status": "not_run",
+      "exit_code": null,
+      "runtime": null,
+      "evidence_path": null,
+      "reason": "no Keycloak in this environment (E03 pending). This card adds no route, so it has no middleware of its own to substitute: the functions take the Principal the transport establishes and run their SQL under app.principal as that principal. The test harness substitutes a clearly-labelled stand-in middleware for the other suites; here the identity assertions are about the spec model refusing an identity field and about submitted_by coming from the Principal, not about token verification. The token/issuer/audience half of A12 and A20 is not exercised by this card."
+    },
+    {
+      "name": "acceptance_matrix_a01_a20",
+      "command": "just acceptance",
+      "status": "not_run",
+      "exit_code": 5,
+      "runtime": "cloud-workspace",
+      "evidence_path": null,
+      "reason": "The gate ran and exited 5 by design: no acceptance-marked tests exist in the repository yet (C33A-C33D, C35 scope), and the recipe is written to fail rather than to pass on their absence. A14 is the scenario this card answers and it is covered by the 86 tests in test_ssrf_boundary.py; the matrix as a whole is not, and the absence of the other nineteen is not a pass."
+    }
+  ],
+  "findings_for_the_next_owner": [
+    {
+      "severity": "high",
+      "where": "migrations/0002_rls.sql (kb.fragment)",
+      "finding": "kb.fragment has RLS enabled and forced with exactly one policy, fragment_read, and no write policy at all — so kb_app cannot INSERT a fragment even though 0002 grants INSERT on every table. 'Extracted text is in the catalogue' is unreachable by any runtime caller. Found by running the insert, not by reading the migration: the failure is 'new row violates row-level security policy for table fragment'.",
+      "action_taken": "worked around narrowly in tests/integration/fetch/conftest.py by a session fixture that applies the proposed policy, named for what it is, with the same INSERT-only shape C10 used for kb.source_version in 0004_uploads.sql. Not applied to migrations/, which is single-owner. Two tests keep the gap visible: test_the_fragment_write_policy_this_card_needs_is_not_in_the_repository asserts the policy is absent from the repository, and test_without_that_policy_the_insert_is_refused_loudly drops it, proves the insert fails with a server error naming RLS, and restores it in a finally."
+    },
+    {
+      "severity": "high",
+      "where": "migrations/0001_initial.sql (kb.source_version, kb.fragment)",
+      "finding": "A re-fetch of a page that has changed produces a correct, honest version row — new hash, new URL, new instant, version 1 untouched — but the new version's TEXT cannot be stored, for two independent reasons. kb.fragment has no version column, so a second fragment set would collide on UNIQUE(source_id, ordinal) and overwrite the first. And kb.source_version has no object key, while kb.object_manifest allows exactly one manifest per source, so the new version's bytes have no readable address: storing them would create a blob no reader can reach, which is the unreferenced residue C10 documented.",
+      "action_taken": "The card stores no bytes and no fragments for a version 2, leaves version 1 intact, and says so: the result carries is_readable False and two named limitations instead of a success message. Proposed DDL for the single owner, in increasing order of work: (a) add `version_no integer NOT NULL DEFAULT 1` to kb.fragment with the UNIQUE changed to (source_id, version_no, ordinal) and an INSERT-only policy requiring contributor, as 0004_uploads.sql does for kb.source_version; (b) add `object_key text` to kb.source_version referencing kb.source(object_key), or a kb.source_version_object table mirroring kb.object_manifest, so a later version's bytes are addressable. C11 and C12A will hit the same wall; the fix is shared, and it is worth doing once."
+    },
+    {
+      "severity": "medium",
+      "where": "kb.ingest, kb.source (migrations 0001 and 0004_uploads.sql)",
+      "finding": "There is nowhere in the schema to record the extractor version. The card names the requirement ('Сохранять URL, retrieved_at, raw snapshot и extractor version') and records it in the result object it returns, but the row keeps none of it. A fragment set extracted by html-extract/1 and one extracted by html-extract/2 are indistinguishable in the database, which makes 're-extract with the current extractor' a decision nobody can make from the data.",
+      "action_taken": "not worked around: filling an existing column with a value it does not mean would be worse than the gap. Proposed DDL: `ALTER TABLE kb.ingest ADD COLUMN extractor_version text;` (nullable, set only when an extraction ran) or a small kb.extraction_run table keyed by source_id, extractor_version and fragment count. Recorded here rather than applied, because migrations/ is single-owner."
+    },
+    {
+      "severity": "medium",
+      "where": "src/kb/catalog/fetch_html.py",
+      "finding": "The peer-address check reads httpx's network_stream extension, which is present for a real TCP transport and absent for a mock one. It is a strengthening check over the per-hop address validation, and in this environment no successful fetch over real sockets exists, so it was never exercised against a live peer. A first round of mutation testing showed the stronger fact: removing the call from the loop failed no test, because the only tests that exercised it called C10's helper directly.",
+      "action_taken": "fixed by adding test_a_response_from_an_unapproved_peer_is_refused_inside_the_fetch and its two siblings, which drive a response carrying a stand-in network_stream through fetch_html_snapshot itself. The mutation 'peer check never called' now fails that test. The stand-in is named as a stand-in in the test module and the limitation is recorded above under checks."
+    },
+    {
+      "severity": "low",
+      "where": "src/kb/catalog/fetch_snapshots.py",
+      "finding": "A failed write leaves an ingest row in state 'fetched' with no content hash and no source. That is C10's documented residue — the safe side of the invariant, describing no readable object — but it is a row, and a caller counting submissions in a library will see it. The same row is also what makes a retry resume rather than duplicate.",
+      "action_taken": "kept, and asserted rather than hidden: test_without_that_policy_the_insert_is_refused_loudly checks that exactly one attempt row survives, that it is not 'committed', and that no source row was written. Nothing garbage-collects it; a sweeper for stale attempts belongs with the operations card."
+    },
+    {
+      "severity": "low",
+      "where": "src/kb/catalog/fetch_snapshots.py, _require_contributor",
+      "finding": "The contributor check reads the caller's own grant row and then calls authorize. It is a fast refusal so a reader cannot make the gateway write an object to the volume and fail afterwards, and the SQL runs under the caller's identity so RLS is still the authority. C10 has an identical function in upload.py, private to that module, so there are now two copies of six lines.",
+      "action_taken": "left duplicated on purpose: importing a private function from a sibling card's module couples two independently-reviewable security checks, and the copy is covered by test_a_reader_may_not_store_a_page and by the mutation that removes it. If the integrator prefers one owner, the shared home is kb.access.policy, and both call sites should move together."
+    },
+    {
+      "severity": "informational",
+      "where": "src/kb/catalog/parsers/",
+      "finding": "The directory has no __init__.py, matching src/kb/catalog/, which also has none on main. Python treats both as namespace packages and the import works, verified by mypy and by the suite. But the sibling cards own parsers/docx* and parse*, and if any of them adds an __init__.py, this package stops being a namespace package and a stray non-parsers module in the same tree would break the import.",
+      "action_taken": "documented here. The integrator should decide once, for the whole tree, and put the same answer in every branch: either every parsers/ module ships with an __init__.py, or none does."
+    }
+  ],
+  "blockers": [],
+  "checkpoint_note": "docs/handoff/checkpoint.json was deliberately NOT written. The card permits it, but it is a single shared file and other workers are running on their own branches; two executors writing the same checkpoint would lose one of them. The integrator owns that merge. Everything needed to reconstruct this card's state is in this file.",
+  "pending_owner_gates": [
+    "E03"
+  ],
+  "external_actions_unknown": [],
+  "next_task_id": "C13",
+  "deployment_performed": false
+}
