@@ -1,0 +1,271 @@
+{
+  "schema_version": "1.0",
+  "task_id": "C12A",
+  "status": "implemented_checked",
+  "review_status": "not_reviewed",
+  "workspace_absolute": "/workspace/knowledge-hub/.worktrees/feature-c12a-docx",
+  "branch": "feature-c12a-docx",
+  "executor": {
+    "product": "MiniMax Cloud",
+    "model_observed": null,
+    "model_observed_reason": "not observable from inside the agent. No environment variable, config file or API response in this workspace reports the resolved model id or provider, and AGENTS.md rule 2 forbids declaring a setting confirmed on the strength of the prompt alone. Recorded as null rather than copied forward from another card's entry, which was written by a different session with different visibility.",
+    "thinking_observed": null,
+    "thinking_observed_reason": "same reason as model_observed; no runtime surface reports the thinking setting",
+    "provider_contract_verified": false,
+    "model_substitution_occurred": false,
+    "paid_api_or_byok_used": false
+  },
+  "source_before": {
+    "git_sha": "49a6cf964483927537e46669409bfef754005ce7",
+    "note": "HEAD of feature-c12a-docx before this card. No manifest hash is given because `just package` was not run for this card; see the source_bundle check."
+  },
+  "source_after": {
+    "git_sha": "48163af4c35dc12c2874d026f36945f636c0e1c1",
+    "note": "the single commit this card produced on feature-c12a-docx, carrying the code, the tests, the fixtures and this file. It necessarily cannot contain its own hash, so the value above is that commit's and a reader who wants a byte-exact tree should resolve it rather than diff against this file. Not pushed."
+  },
+  "changed_paths": [
+    "src/kb/catalog/parsers/docx_archive.py",
+    "src/kb/catalog/parsers/docx_grid.py",
+    "src/kb/catalog/parsers/docx_parser.py",
+    "tests/integration/parsers/docx_fixtures.py",
+    "tests/integration/parsers/docx_fixtures_test.py",
+    "tests/integration/parsers/docx_paragraphs_test.py",
+    "tests/integration/parsers/docx_persistence_test.py",
+    "tests/integration/parsers/docx_tables_test.py",
+    "evals/fixtures/docx/README.md",
+    "evals/fixtures/docx/build_fixtures.py",
+    "evals/fixtures/docx/basic.docx",
+    "evals/fixtures/docx/exotic_runs.docx",
+    "evals/fixtures/docx/merged_cells.docx",
+    "evals/fixtures/docx/nested_table.docx",
+    "docs/handoff/results/C12A.json"
+  ],
+  "scope_note": "Every changed path is inside the card's allowed list: src/kb/catalog/parsers/docx*, tests/integration/parsers/docx*, evals/fixtures/docx/**, plus this result file, which C12A.md permits separately. No __init__.py was added under src/kb/catalog/parsers/ or tests/integration/parsers/ because neither matches the allowed globs; kb.catalog and kb.catalog.parsers are PEP 420 namespace packages, exactly as kb.catalog already was, and tests/integration/parsers has no conftest.py for the same reason — the shared half is tests/integration/parsers/docx_fixtures.py, which every test module pulls in with `pytest_plugins = [\"docx_fixtures\"]`. Nothing under src/kb/contracts/, migrations/, pyproject.toml or requirements.lock was touched; `git diff --name-only <base>` lists only the files above. src/kb/catalog/parsers/docx_*.py are the only new source files and they are named with the docx prefix precisely so they cannot collide with C11's pdf*/epub* or C12B's html* files in the same directory. docs/handoff/checkpoint.json was deliberately not written: it is one shared file and three other workers are on their own branches. The integrator owns that merge.",
+  "third_party_installed": {
+    "package": "python-docx",
+    "version": "1.2.0",
+    "licence": "MIT",
+    "licence_evidence": "importlib.metadata.metadata('python-docx')['License'] == 'MIT' and the classifier 'License :: OSI Approved :: MIT License' in the installed python_docx-1.2.0.dist-info. Named in ARCHITECTURE.md section 6 as the DOCX library.",
+    "transitive": "lxml==6.1.3 (required by python-docx; installed by the same pip run)",
+    "installed_with": ".venv/bin/python -m pip install --index-url https://pypi.org/simple/ --trusted-host pypi.org --trusted-host files.pythonhosted.org python-docx==1.2.0",
+    "note": "The shared venv is shared by every worktree, so the other three workers will see this too. pyproject.toml and requirements.lock are untouched, as instructed; the single owner of the lockfile must add python-docx==1.2.0 to [project.dependencies] and regenerate. Until then a clean `just prepare` on a fresh checkout will not install it and C12A's tests will fail on import — that is a real gap and it is recorded in contract_change_proposals, not hidden here."
+  },
+  "what_was_built": {
+    "api": "kb.catalog.parsers.docx_parser.parse_docx(path, *, source_id) and parse_docx_bytes(data, *, source_id) return a DocxParseResult: fragments, unsupported, covered, counts, archive and the parser/library identity. resolve_locator(document, locator) navigates a locator again from scratch and returns the text plus the live XML element, or None.",
+    "locator_meaning": "paragraph=N is exactly Document.paragraphs[N-1] (every w:p child of w:body, including the empty ones, because an address that skips a blank paragraph is off by one for everything after it). table=N is exactly Document.tables[N-1]. cell=(R,C) is the cell whose w:tc ORIGIN is at grid row R, column C, 1-based. chapter is the text of the nearest preceding outline heading, taken from w:outlineLvl first and from the heading style id second.",
+    "no_pages": "file_page, printed_label, spine, snapshot_url and snapshot_at are None on every DOCX locator. kb.contracts refuses a printed label standing in for a page; the kb.fragment CHECK constraint refuses a docx_* row that carries a file_page at all, and both refusals are exercised against the running server.",
+    "merged_cells": "One fragment per origin w:tc, addressed at its top-left grid position. Every covered grid position is reported in DocxParseResult.covered with the address that owns it and gets no fragment. This is the difference the card is about: enumerating the grid by column returns the SAME _Cell object at every column a merge spans, so the naive reading of merged_cells.docx yields nine cell fragments for seven cells, two of them duplicates carrying identical text.",
+    "nested_tables": "Reported in DocxParseResult.unsupported with the inner table's own text intact, and given no fragment. Locator carries one table number and no nesting depth, so any locator for the inner table would be an address nothing else in the system could resolve. The owning cell's fragment holds only that cell's own paragraphs, and the outer table's rendering marks the cell [nested table] so the content is not silently absent.",
+    "other_constructs": "Text boxes, tracked deletions, inline and body-level content controls, w:altChunk and paragraphs nested past 64 levels are each reported rather than guessed at, and none is dropped silently. Tracked insertions and field RESULTS are read (they are text the document shows); w:delText and w:instrText are not (deleted text is not in the document, a field code is an instruction). mc:AlternateContent is read once, from mc:Choice, so a drawing is not printed twice.",
+    "archive_limits": "Checked from the ZIP central directory before any part is inflated: file size, part count, total uncompressed size, overall expansion ratio, per-part expansion ratio for parts over 1 MiB, member names that are not plain relative paths, encrypted members, and the presence of [Content_Types].xml and word/document.xml. Every limit is a refusal, never a truncation: a refused container produces no fragments at all.",
+    "fragment_identity": "uuid5 over (source_id, ordinal), not uuid4. Parsing the same bytes twice for the same source produces the same ids, so a re-parse is recognisable as a re-parse against the UNIQUE (source_id, ordinal) constraint instead of quietly becoming a second set of rows.",
+    "rendering": "A table fragment keeps the grid shape: one line per grid row, one field per grid column, '[merged]' for a covered position, '[nested table]' for a cell that also holds one. A cell with several paragraphs keeps them newline-separated in its own fragment and joins them with ' / ' in the table rendering."
+  },
+  "acceptance": {
+    "1_tables_and_headings_keep_their_address": "test_paragraph_n_is_exactly_document_paragraphs_n_minus_one asserts element IDENTITY, not equal text: Document.paragraphs[n-1]._p is the element the fragment was taken from, for every fragment, resolved through python-docx's public list rather than this parser's walk. test_a_table_address_is_exactly_document_tables_n_minus_one and test_a_cell_address_is_exactly_that_table_that_cell do the same for tables and cells. test_a_fragment_is_filed_under_the_heading_it_sits_under and test_a_table_and_its_cells_inherit_the_heading_in_scope_when_they_appear cover headings; test_a_fragment_with_no_heading_above_it_says_none_rather_than_the_title covers their absence. A heading style written 'Heading1' and one written 'heading 1' are both recognised, and w:outlineLvl wins over the style.",
+    "2_a_missing_page_is_null": "test_no_docx_locator_carries_a_page_a_label_or_a_snapshot over all four fixtures. test_the_contract_itself_refuses_a_printed_label_standing_in_for_a_page exercises kb.contracts. test_every_stored_row_records_no_page_number and test_the_server_refuses_a_docx_row_that_claims_a_page_number run the real INSERT against a real PostgreSQL 16.2 and assert the server's own CheckViolation naming fragment/file_page_requires_kind, and that the refused row left nothing behind.",
+    "3_size_and_archive_limits_are_checked": "Seven tests over a real ZIP container: an over-sized file, a member that expands a thousandfold, a member that expands a thousandfold while the archive as a whole stays under 5:1, too many parts, a container with no word/document.xml, a member named ../../etc/passwd, and bytes that are not a ZIP at all. test_a_refused_container_yields_no_fragments_at_all asserts there is no half-built result to keep.",
+    "4_the_library_and_its_licence_are_recorded": "test_the_library_and_the_extractor_version_are_recorded_on_every_result asserts parser, parser_version, library='python-docx' and library_version='1.2.0' (read from importlib.metadata at run time, not hard-coded in the assertion). PARSER_VERSION='1' is exposed because ARCHITECTURE section 7 puts the extractor version in the idempotency key of a parse job. The licence and the installation are recorded under third_party_installed in this file."
+  },
+  "central_invariant": {
+    "claim": "a DOCX locator addresses something that genuinely exists in the document, and where the document cannot be addressed honestly the parser says so instead of guessing",
+    "proved_by": [
+      "test_paragraph_n_is_exactly_document_paragraphs_n_minus_one — element identity against python-docx's own Document.paragraphs",
+      "test_a_locator_that_names_nothing_resolves_to_none_and_not_to_a_neighbour — an out-of-range paragraph, table or cell, a cell with no table number, a cell with no coordinates, and a non-DOCX kind all return None",
+      "test_a_blank_paragraph_consumes_a_number_and_produces_no_fragment — the numbering cannot silently skip the empty paragraph, because document.paragraphs[2] is asserted blank and the emitted numbers are asserted to be [1, 2, 4, 5, 6]",
+      "test_the_high_level_api_really_does_hand_back_one_cell_for_several_addresses — the premise of the merge rule, shown with python-docx's own row.cells: nine entries, seven distinct tc elements, grid[2] is grid[1] and grid[6] is grid[3]",
+      "test_a_merged_cell_is_emitted_once_at_its_origin_and_never_at_a_covered_position and test_every_covered_position_is_reported_with_the_address_that_owns_it",
+      "test_a_covered_position_still_resolves_to_the_text_of_the_cell_that_owns_it — the merge is a fact about the file, not a hole in the parser",
+      "test_no_fragment_anywhere_claims_the_nested_table_as_a_top_level_one and test_nothing_is_lost_between_the_fragments_and_the_report",
+      "test_a_cell_fragment_stored_without_its_address_degrades_to_nothing — a docx_cell row written with only the columns kb.fragment actually has comes back as a locator naming no table and no cell, and resolves to None rather than to paragraph 1",
+      "test_a_reader_with_a_grant_sees_the_fragments_and_a_stranger_sees_none — the fragments are reachable through the real fragment_read RLS policy over a pool connected as kb_app, which has no bypass"
+    ],
+    "mutation_tested": "Thirteen defects were injected one at a time into the three card modules and the whole tests/integration/parsers suite was run after each; all thirteen were rejected by a named test, and the tree was verified green again afterwards. (1) numbering only paragraphs that have text -> test_paragraph_n_is_exactly_document_paragraphs_n_minus_one. (2) emitting a fragment for every covered grid position -> test_a_merged_cell_is_emitted_once_at_its_origin_and_never_at_a_covered_position. (3) giving the nested table a fragment of its own -> test_no_fragment_anywhere_claims_the_nested_table_as_a_top_level_one. (4) stamping file_page=1 on every DOCX locator -> test_no_docx_locator_carries_a_page_a_label_or_a_snapshot. (5) resolving an out-of-range paragraph to the nearest one instead of None -> test_a_locator_that_names_nothing_resolves_to_none_and_not_to_a_neighbour. (6) stopping the heading-scope tracking -> test_a_fragment_is_filed_under_the_heading_it_sits_under. (7) recognising only the space-separated spelling of a heading style -> test_a_fragment_is_filed_under_the_heading_it_sits_under. (8) disabling the per-part expansion ratio check -> test_a_single_part_that_expands_a_thousandfold_is_refused_even_when_the_archive_does_not. (9) treating a w:vMerge continuation as a fresh cell -> test_every_covered_position_is_reported_with_the_address_that_owns_it. (10) removing the XML depth guard -> test_a_paragraph_nested_past_the_depth_limit_is_reported_not_half_read. (11) reading w:delText as content -> test_tracked_deletion_is_excluded_from_the_text_and_reported. (12) reading both branches of mc:AlternateContent -> test_a_field_result_is_read_once_and_its_instruction_never_is. (13) addressing a merged cell at its LAST covered column instead of its origin -> test_a_merged_cell_is_emitted_once_at_its_origin_and_never_at_a_covered_position. Two earlier mutation rounds were discarded rather than reported: one was written with escaped newlines that never matched the source, and one ran against a tree that had a real failing test of its own, so every 'caught' in it was contamination. Both were re-run from scratch on a verified-green tree; the thirteen above are the honest result."
+  },
+  "checks": [
+    {
+      "name": "docx_parser_suite",
+      "command": "pytest tests/integration/parsers -q --no-header",
+      "status": "passed",
+      "exit_code": 0,
+      "runtime": "cloud-workspace, python 3.11.2, python-docx 1.2.0 (MIT), real .docx packages on disk; the persistence module adds a real PostgreSQL 16.2 (pgserver) in database kb_c12a",
+      "evidence_path": "tests/integration/parsers/",
+      "reason": "65 tests: 30 paragraph/locator/archive, 20 table/merge/nested, 9 PostgreSQL round trip, 6 fixture provenance."
+    },
+    {
+      "name": "static_gate",
+      "command": "just check",
+      "status": "passed",
+      "exit_code": 0,
+      "runtime": "cloud-workspace",
+      "evidence_path": null,
+      "reason": "ruff check and format clean, mypy clean over 40 source files including the three new modules, 91 unit tests pass. No lint suppression was added: S608 and S101 stay as configured and nothing in this card is noqa'd. The evals/ directory is not part of the lint target in the justfile, so it was checked separately with the same ruff configuration (clean)."
+    },
+    {
+      "name": "full_integration_gate",
+      "command": "just integration",
+      "status": "passed",
+      "exit_code": 0,
+      "runtime": "cloud-workspace, PostgreSQL 16.2 (pgserver)",
+      "evidence_path": null,
+      "reason": "505 passed, 6 skipped, 91 deselected. The 6 skips are C07's Keycloak legs (E03), not C12A's. C12A applies every migration once per session to its own database kb_c12a, so it neither depends on nor disturbs C06's, C08's, C09's, C10's or C15's databases. No log was written to docs/handoff/evidence/ — that path is outside this card's allowed paths."
+    },
+    {
+      "name": "gate_non_vacuity",
+      "command": "just verify-self",
+      "status": "passed",
+      "exit_code": 0,
+      "runtime": "cloud-workspace",
+      "evidence_path": null,
+      "reason": "an injected defect is still rejected by `just check`, and the tree is green again afterwards. Separately, thirteen targeted mutations of this card's own modules were each rejected by a named test; see central_invariant.mutation_tested, including the two discarded rounds and why."
+    },
+    {
+      "name": "nested_table_and_merged_cell_coverage",
+      "command": "pytest tests/integration/parsers/docx_tables_test.py -q --no-header",
+      "status": "passed",
+      "exit_code": 0,
+      "runtime": "cloud-workspace, real .docx packages built by python-docx",
+      "evidence_path": "tests/integration/parsers/docx_tables_test.py",
+      "reason": "The two constructs the card names. 20 tests, of which the merge set is test_the_high_level_api_really_does_hand_back_one_cell_for_several_addresses, test_a_merged_cell_is_emitted_once_at_its_origin_and_never_at_a_covered_position, test_every_covered_position_is_reported_with_the_address_that_owns_it, test_a_covered_position_still_resolves_to_the_text_of_the_cell_that_owns_it, test_the_merged_table_fragment_shows_the_merge_once_rather_than_three_times, test_a_vertically_merged_cell_does_not_repeat_its_own_text_in_the_table and test_a_merged_cell_fragment_resolves_back_to_its_own_element; the nesting set is test_a_nested_table_is_reported_with_its_text_and_gets_no_locator, test_no_fragment_anywhere_claims_the_nested_table_as_a_top_level_one, test_the_owning_cell_fragment_holds_only_the_cells_own_paragraphs, test_the_outer_table_fragment_says_a_cell_holds_a_nested_table, test_the_outer_cell_address_still_names_that_cell_and_not_the_table_inside_it and test_nothing_is_lost_between_the_fragments_and_the_report."
+    },
+    {
+      "name": "postgres_locator_round_trip",
+      "command": "pytest tests/integration/parsers/docx_persistence_test.py -q --no-header",
+      "status": "passed",
+      "exit_code": 0,
+      "runtime": "cloud-workspace, real PostgreSQL 16.2 on x86_64-pc-linux-gnu, database kb_c12a, all migrations applied once per session",
+      "evidence_path": "tests/integration/parsers/docx_persistence_test.py",
+      "reason": "9 tests. Fragments are INSERTed through every column kb.fragment has, read back, turned into a Locator again and resolved against the document. The RLS read leg runs over a pool connected as kb_app with app.principal set and a real library_grant, and a principal with no grant sees zero rows. The file_page refusal is the server's own CheckViolation text, not a restatement of it."
+    },
+    {
+      "name": "runtime_write_path_for_fragments",
+      "command": "n/a",
+      "status": "not_run",
+      "exit_code": null,
+      "runtime": null,
+      "evidence_path": null,
+      "reason": "There is no runtime write path to exercise, and that is a finding rather than a missing test. kb.fragment has RLS enabled and forced with exactly one policy, fragment_read, which is SELECT only; there is no INSERT policy, and kb_worker is granted only SELECT, UPDATE on kb.job and SELECT on kb.source. Observed against a real PostgreSQL 16.2 with the full migration set: `SET ROLE kb_app; set_config('app.principal', ...); INSERT INTO kb.fragment ...` returns SQLSTATE 42501 'new row violates row-level security policy for table \"fragment\"', and the same INSERT as kb_worker returns SQLSTATE 42501 'permission denied for table fragment'. So a parsed fragment cannot be written by any runtime role as the schema stands. This card writes its rows through the migration role in its tests and does not assert the refusal, because a test asserting that a defect exists would start failing the day someone fixes it. The one-line fix is in contract_change_proposals."
+    },
+    {
+      "name": "a11_stale_index_and_a07_revoke_during_retrieval",
+      "command": "n/a",
+      "status": "not_run",
+      "exit_code": null,
+      "runtime": null,
+      "evidence_path": null,
+      "reason": "Neither is in this card's acceptance list and neither is reachable from a parser. No index_target, index_generation or embedding job is created here (that is C04), and no retrieval happens, so a revoke racing an in-flight retrieval is not exercised. Both remain open for the A01-A20 matrix in C33."
+    },
+    {
+      "name": "openviking_projection",
+      "command": "n/a",
+      "status": "not_run",
+      "exit_code": null,
+      "runtime": null,
+      "evidence_path": null,
+      "reason": "OpenViking is not installed and projection work is C04. This card produces fragments and locators and stops there."
+    },
+    {
+      "name": "keycloak_verified_identity",
+      "command": "n/a",
+      "status": "not_run",
+      "exit_code": null,
+      "runtime": null,
+      "evidence_path": null,
+      "reason": "No Keycloak in this environment (E03 pending). This card has no HTTP surface and reads no identity: it turns bytes into rows addressed inside one document."
+    },
+    {
+      "name": "rendered_pdf_pages",
+      "command": "n/a",
+      "status": "not_run",
+      "exit_code": null,
+      "runtime": null,
+      "evidence_path": null,
+      "reason": "ARCHITECTURE section 6 makes a PDF render a separate derived artefact with its own hash and its own pages, and C12A.md says plainly that pages are not to be guessed. Nothing in this card lays a document out, so there is no page number anywhere to verify. If a renderer is added later, the page must come from that render and be stored as a different locator kind, not merged into docx_paragraph."
+    },
+    {
+      "name": "source_bundle",
+      "command": "n/a",
+      "status": "not_run",
+      "exit_code": null,
+      "runtime": null,
+      "evidence_path": null,
+      "reason": "`just package` was not run. It is not part of the card's acceptance list, dist/ is outside the card's allowed paths, and the bundle is a shared artefact that the integrator owns across branches. The card's source identity is the git SHA above plus the per-file SHA-256 in this file."
+    }
+  ],
+  "contract_change_proposals": [
+    {
+      "severity": "high",
+      "where": "migrations/0001_initial.sql, table kb.fragment",
+      "finding": "kb.fragment has columns id, source_id, ordinal, locator_kind, file_page, printed_label, chapter, paragraph, snapshot_url, snapshot_at, text. There is no column for a table number and no column for a cell, so the two of the three DOCX locator kinds this card is required to produce — DOCX_TABLE and DOCX_CELL — cannot be persisted as addresses. kb.contracts.entities.Locator has had `table: int | None` and `cell: tuple[int, int] | None` since the contracts were written; the DDL never caught up. Read from information_schema.columns on a real server: the eleven columns above, and no 'table' and no 'cell'.",
+      "proposed_change": "In the next migration, add to kb.fragment: `table_no integer CHECK (table_no IS NULL OR table_no >= 1)`, `cell_row integer CHECK (cell_row IS NULL OR cell_row >= 1)`, `cell_col integer CHECK (cell_col IS NULL OR cell_col >= 1)`, and `CONSTRAINT cell_coordinates_are_all_or_none CHECK ((cell_row IS NULL) = (cell_col IS NULL))`. No CHECK should tie a cell to a table without also allowing the table to be absent, because a nested table has no table number and must be storable as an explicit absence rather than as a half-address.",
+      "action_taken": "Not applied: migrations/ is outside this card's allowed paths and has a single owner. The parser emits the full Locator including table and cell, and the storage gap is proved rather than worked around. test_the_fragment_table_has_no_column_for_a_table_or_a_cell_address states the current column set and is documented as a marker that is expected to fail the day the columns exist."
+    },
+    {
+      "severity": "high",
+      "where": "migrations/0002_rls.sql, table kb.fragment",
+      "finding": "kb.fragment is RLS-enabled and FORCEd with exactly one policy, fragment_read, which is FOR SELECT. There is no INSERT policy, so a fragment cannot be written by any runtime role: kb_app gets SQLSTATE 42501 'new row violates row-level security policy for table \"fragment\"', and kb_worker gets 42501 'permission denied for table fragment' because 0002 grants it no INSERT on this table at all. The extraction pipeline this card feeds therefore has nowhere to put its output. This is the same class of gap C10 found and narrowly worked around for kb.source_version, which suggests it is worth one sweep of every content table rather than one card at a time.",
+      "proposed_change": "Add `CREATE POLICY fragment_write ON kb.fragment FOR INSERT WITH CHECK (EXISTS (SELECT 1 FROM kb.source s WHERE s.id = source_id AND kb.role_rank(kb.effective_role(kb.current_principal(), s.library_id)) >= 20));` — contributor or better, mirroring source_write — and grant INSERT on kb.fragment to kb_worker in the role-grant migration, since kb_worker is the role a parse job would run as. Whether a *worker* should need a principal at all is a separate policy question for the same owner.",
+      "action_taken": "Not applied: migrations/ is outside this card's allowed paths and has a single owner. C12A's tests write fragments through the migration role and say so in the module docstring; the read path is still exercised for real, as kb_app, through fragment_read."
+    },
+    {
+      "severity": "medium",
+      "where": "pyproject.toml / requirements.lock",
+      "finding": "python-docx 1.2.0 (MIT) and its dependency lxml 6.1.3 are installed in the shared venv but are not declared anywhere, because this card was told not to touch the lockfile. A clean `just prepare` on a fresh checkout will not install them and every C12A test will fail at import.",
+      "proposed_change": "Add `python-docx==1.2.0` to [project.dependencies] and regenerate requirements.lock. ARCHITECTURE section 6 already names python-docx as the DOCX library, so this is a declaration, not a new dependency.",
+      "action_taken": "Not applied: pyproject.toml and requirements.lock are single-owner files and outside this card's allowed paths. Recorded under third_party_installed above with the exact install command."
+    },
+    {
+      "severity": "medium",
+      "where": "src/kb/catalog/parsers/docx_archive.py",
+      "finding": "The size and archive limits are this card's proposal, not a number quoted from anywhere: PRODUCT-SPEC states no figure. The defaults are 64 MiB container, 256 MiB expanded, 200:1 overall expansion, 200:1 per part over 1 MiB, 4096 parts. A brand guideline book with a lot of embedded imagery can sit near 64 MiB, and the per-part ratio in particular is a heuristic — a legitimate XML part that happens to compress very well would be refused. They are parameters, not constants: ArchiveLimits is a frozen dataclass that a caller passes in, so the owner can raise them per deployment without touching this code.",
+      "proposed_change": "The single owner of deployment configuration should confirm the four numbers against the real corpus, and decide whether they belong in PRODUCT-SPEC or in a per-library quota. Until then they are documented defaults with a named owner.",
+      "action_taken": "Implemented, configurable, tested, and called out here rather than presented as a specification."
+    }
+  ],
+  "findings_for_the_next_owner": [
+    {
+      "severity": "medium",
+      "where": "src/kb/catalog/parsers/docx_parser.py",
+      "finding": "A nested table is reported rather than located, and the report carries its text. That is a deliberate loss of addressability: the inner table's content is recoverable by a human reading DocxParseResult.unsupported, but a retrieval system cannot point a citation at it. If that matters, the honest fix is a contract change — a nesting depth on Locator, or a separate docx_nested_cell kind — not a second numbering scheme invented inside a parser.",
+      "action_taken": "The conservative choice, stated in the module docstring and in the dataclass. test_nothing_is_lost_between_the_fragments_and_the_report proves the text is there."
+    },
+    {
+      "severity": "medium",
+      "where": "src/kb/catalog/parsers/docx_parser.py, _walk",
+      "finding": "The text walk is a deliberate superset of python-docx's Paragraph.text. It reads w:ins and w:fldSimple, which python-docx skips, and it reads w:hyperlink, which python-docx 1.2.0 does handle. The consequence is that a paragraph containing a tracked insertion or a field result extracts more here than it would through the library's own .text. That is the intended reading — a tracked insertion is text the document shows — but it means the parser and the library disagree on some documents, and anyone comparing the two will find a difference that is not a bug.",
+      "action_taken": "Documented at the function and in the module docstring; the exotic_runs.docx fixture makes the difference visible and test_a_field_result_is_read_once_and_its_instruction_never_is pins the field half."
+    },
+    {
+      "severity": "low",
+      "where": "src/kb/catalog/parsers/docx_parser.py, _heading_level",
+      "finding": "Heading detection reads w:outlineLvl first because it is the language-neutral definition of the outline, and falls back to the style id matching ^heading[\\s_-]*([1-9])$. A document whose headings use a localised style id and carry no explicit outline level yields chapter=None for every fragment. That is honest — chapter is a real field and None is a real answer — but a German Word file with default styles may well land there.",
+      "action_taken": "Not solved; it needs a style-name translation table, which is a different concern from addressing and would be better owned with the rest of the DOCX support. The None case is tested so that it stays a reported answer rather than a silent misfiling."
+    },
+    {
+      "severity": "low",
+      "where": "evals/fixtures/docx/build_fixtures.py",
+      "finding": "A DOCX is not byte-reproducible by default: ZIP stores a per-entry modification time taken from the clock, so two rebuilds seconds apart differ. An earlier determinism check here passed by accident, because both runs landed inside the same second, and the honest check is what caught it — test_the_builder_and_the_committed_fixtures_agree compares SHA-256 against a fresh rebuild and failed until the builder was fixed.",
+      "action_taken": "The builder now rewrites each package with a fixed 1980-01-01 timestamp after saving. The same trap applies to C11's EPUB fixtures and to C12B's HTML fixtures and is worth knowing before someone else spends an hour on it."
+    },
+    {
+      "severity": "informational",
+      "where": "tests/integration/parsers/",
+      "finding": "The suite is loaded with `pytest_plugins = [\"docx_fixtures\"]` in each module rather than a conftest.py, because the card's allowed path is tests/integration/parsers/docx* and a file called conftest.py does not match it. pytest prints one PytestAssertRewriteWarning for docx_fixtures as a result. It is cosmetic. If the integrator later prefers a conftest.py, moving docx_fixtures.py content into tests/integration/parsers/conftest.py and deleting the pytest_plugins lines is the whole change.",
+      "action_taken": "Left as is, with the reasoning recorded here rather than worked around with a sys.path hack."
+    },
+    {
+      "severity": "informational",
+      "where": "src/kb/catalog/parsers/docx_grid.py, build_grid",
+      "finding": "A w:vMerge continuation with no w:val=\"restart\" above it is inconsistent XML. The parser treats it as the start of its own cell and raises an orphan_vmerge note rather than guessing which row it belongs to, and a w:tblGrid that disagrees with the rows actually used raises grid_width_mismatch. Neither shape appears in the synthetic fixtures, so both notes are exercised only through code review here, not by a test.",
+      "action_taken": "Documented and left untested rather than tested against a hand-built malformed file. If a real corpus produces these, they become fixtures."
+    }
+  ],
+  "blockers": [],
+  "checkpoint_note": "docs/handoff/checkpoint.json was deliberately NOT written. The card permits it, but it is a single shared file and three other workers are on their own branches; two executors writing the same checkpoint would lose one of them. The integrator owns that merge. Everything needed to reconstruct this card's state is in this file.",
+  "pending_owner_gates": [
+    "E03"
+  ],
+  "external_actions_unknown": [],
+  "next_task_id": "C12B",
+  "deployment_performed": false
+}
