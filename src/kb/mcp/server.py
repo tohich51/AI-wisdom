@@ -76,7 +76,7 @@ def build_mcp(app, hosts):
                 return CallToolResult(
                     isError=True, content=[TextContent(type="text", text="invalid_tool_arguments")]
                 )
-        return await call_next()
+        return await call_next(ctx)
 
     server.middleware.append(strict_arguments)
 
