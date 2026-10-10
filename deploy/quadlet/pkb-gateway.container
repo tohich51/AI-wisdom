@@ -1,0 +1,26 @@
+[Unit]
+Description=Personal Knowledge Base gateway
+Requires=pkb-postgres.service pkb-keycloak.service
+After=pkb-postgres.service pkb-keycloak.service
+
+[Container]
+Image=localhost/ai-wisdom:__RELEASE_SHA__
+Network=pkb.network
+ReadOnly=true
+NoNewPrivileges=true
+EnvironmentFile=%h/ai-wisdom-config/gateway.env
+Tmpfs=/tmp:rw,nosuid,nodev,size=128m
+ContainerName=pkb-gateway
+Exec=gateway
+PodmanArgs=--network-alias=pkb-gateway
+PublishPort=127.0.0.1:19280:8080
+Volume=%h/ai-wisdom-data/originals:/data/originals
+
+[Service]
+Restart=on-failure
+TimeoutStartSec=300
+MemoryMax=512M
+CPUQuota=100%
+
+[Install]
+WantedBy=default.target

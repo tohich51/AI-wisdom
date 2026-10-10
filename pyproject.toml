@@ -27,6 +27,11 @@ dependencies = [
     "jsonschema==4.26.0",
     "orjson==3.11.7",
     "tenacity==9.1.4",
+    "procrastinate==3.10.0",
+    "pypdf==6.20.0",
+    "ebooklib==0.20",
+    "python-docx==1.2.0",
+    "beautifulsoup4==4.14.3",
 ]
 
 [project.optional-dependencies]

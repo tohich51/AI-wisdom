@@ -1,0 +1,160 @@
+"""Thin HTTP adapters sharing the catalog and SQL access policies with MCP."""
+
+from uuid import UUID
+
+from fastapi import APIRouter, Query
+from pydantic import BaseModel, ConfigDict, Field
+
+from kb.catalog import content, writes
+from kb.http.libraries import Db, Me, mapped_errors
+from kb.ingestion import submit_processing
+
+router = APIRouter(tags=["knowledge"])
+
+
+class Input(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+
+class ProcessInput(Input):
+    idempotency_key: str = Field(min_length=8, max_length=200)
+    extract: bool = False
+
+
+class UseInput(Input):
+    rule_id: UUID
+    version_no: int = Field(ge=1)
+    expected_result: str | None = Field(default=None, max_length=4000)
+    where_applied: str | None = Field(default=None, max_length=2000)
+
+
+class OutcomeInput(Input):
+    observed_result: str | None = Field(default=None, max_length=4000)
+    rating: int | None = Field(default=None, ge=1, le=5)
+    rating_basis: str | None = Field(default=None, max_length=2000)
+    is_correction: bool = False
+
+
+class MetadataInput(Input):
+    author: str | None = Field(default=None, max_length=500)
+    edition: str | None = Field(default=None, max_length=500)
+    publication_ref: str | None = Field(default=None, max_length=2000)
+
+
+class ExportInput(Input):
+    rule_ids: list[UUID] = Field(min_length=1, max_length=100)
+
+
+@router.get("/me")
+def me_route(me: Me):
+    return {"principal_id": me.principal_id, "account_id": me.account_id}
+
+
+@router.get("/libraries/{library_id}/sources")
+def sources(library_id: UUID, conn: Db, me: Me):
+    with mapped_errors():
+        return content.list_sources(conn, me, library_id)
+
+
+@router.get("/sources/{source_id}")
+def source(source_id: UUID, conn: Db, me: Me, from_fragment: int = 0, limit: int = 20):
+    with mapped_errors():
+        return content.read_source(conn, me, source_id, from_fragment, limit)
+
+
+@router.patch("/sources/{source_id}/metadata")
+def metadata(source_id: UUID, body: MetadataInput, conn: Db, me: Me):
+    with mapped_errors():
+        return writes.update_metadata(conn, me, source_id, body.model_dump(exclude_unset=True))
+
+
+@router.post("/sources/{source_id}/process", status_code=202)
+def process(source_id: UUID, body: ProcessInput, conn: Db, me: Me):
+    with mapped_errors():
+        return submit_processing(conn, me, source_id, body.idempotency_key, extract=body.extract)
+
+
+@router.get("/jobs/{job_id}")
+def job(job_id: UUID, conn: Db, me: Me):
+    with mapped_errors():
+        return writes.job_status(conn, me, job_id)
+
+
+@router.get("/search")
+def search(
+    conn: Db,
+    me: Me,
+    q: str = Query(min_length=1, max_length=2000),
+    library_id: UUID | None = None,
+    limit: int = Query(default=10, ge=1, le=50),
+):
+    with mapped_errors():
+        return content.search_knowledge(conn, me, q, [library_id] if library_id else None, limit)
+
+
+@router.get("/libraries/{library_id}/knowledge")
+def knowledge(library_id: UUID, conn: Db, me: Me):
+    with mapped_errors():
+        return writes.list_knowledge(conn, me, library_id)
+
+
+@router.get("/libraries/{library_id}/rules")
+def rules(library_id: UUID, conn: Db, me: Me):
+    with mapped_errors():
+        return content.list_rules(conn, me, library_id)
+
+
+@router.get("/rules/{rule_id}")
+def rule(rule_id: UUID, conn: Db, me: Me):
+    with mapped_errors():
+        return content.get_rule(conn, me, rule_id)
+
+
+@router.post("/libraries/{library_id}/rules", status_code=201)
+def create_rule(
+    library_id: UUID, body: writes.RuleInput, conn: Db, me: Me, replaces: UUID | None = None
+):
+    with mapped_errors():
+        return writes.create_rule(conn, me, library_id, body, replaces)
+
+
+@router.post("/rules/{rule_id}/publish")
+def publish_rule(rule_id: UUID, conn: Db, me: Me):
+    with mapped_errors():
+        return writes.publish(conn, me, rule_id)
+
+
+@router.post("/knowledge/{knowledge_id}/publish")
+def publish_knowledge(knowledge_id: UUID, conn: Db, me: Me):
+    with mapped_errors():
+        return writes.publish(conn, me, knowledge_id, knowledge=True)
+
+
+@router.post("/uses", status_code=201)
+def start_use(body: UseInput, conn: Db, me: Me):
+    with mapped_errors():
+        return writes.start_use(conn, me, **body.model_dump())
+
+
+@router.get("/uses")
+def uses(conn: Db, me: Me):
+    with mapped_errors():
+        return writes.list_uses(conn, me)
+
+
+@router.post("/uses/{use_id}/applied")
+def applied(use_id: UUID, conn: Db, me: Me):
+    with mapped_errors():
+        return writes.mark_applied(conn, me, use_id)
+
+
+@router.post("/uses/{use_id}/outcomes", status_code=201)
+def outcome(use_id: UUID, body: OutcomeInput, conn: Db, me: Me):
+    with mapped_errors():
+        return writes.record_outcome(conn, me, use_id, **body.model_dump())
+
+
+@router.post("/libraries/{library_id}/export")
+def export(library_id: UUID, body: ExportInput, conn: Db, me: Me):
+    with mapped_errors():
+        return content.export_skill(conn, me, library_id, body.rule_ids)

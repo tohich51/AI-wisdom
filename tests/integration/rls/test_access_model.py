@@ -171,11 +171,15 @@ def test_project_membership_does_not_grant_source_library(pg_server, psql_strict
 
 def test_published_rule_is_immutable(pg_server, psql_strict, schema):
     s = _seed(psql_strict)
+    rule = str(uuid.uuid4())
     _rc, _out = psql_strict(
         f"INSERT INTO kb.rule (id, library_id, version_no, title, when_to_apply, "
         f"expected_effect, publication) "
-        f"VALUES (gen_random_uuid(),'{s['library']}',1,'r','when','effect','published');"
+        f"VALUES ('{rule}','{s['library']}',1,'r','when','effect','draft');"
+        f"INSERT INTO kb.rule_action VALUES ('{rule}',0,'take action');"
+        f"UPDATE kb.rule SET publication='published' WHERE id='{rule}';"
     )
+    assert _rc == 0, _out
     out = _as(psql_strict, str(OWNER), "UPDATE kb.rule SET title='changed';")
     assert "immutable" in out.lower(), out
 
@@ -184,14 +188,17 @@ def test_own_use_history_only(pg_server, psql_strict, schema):
     s = _seed(psql_strict)
     rule = str(uuid.uuid4())
     _rc, _out = psql_strict(
-        f"INSERT INTO kb.rule (id, library_id, version_no, title) "
-        f"VALUES ('{rule}','{s['library']}',1,'r');"
+        f"INSERT INTO kb.rule (id, library_id, version_no, title,when_to_apply,expected_effect) "
+        f"VALUES ('{rule}','{s['library']}',1,'r','when','effect');"
+        f"INSERT INTO kb.rule_action VALUES ('{rule}',0,'take action');"
+        f"UPDATE kb.rule SET publication='published' WHERE id='{rule}';"
     )
     _rc, _out = psql_strict(
         f"INSERT INTO kb.use_record (id, rule_id, rule_version_no, principal_id) "
         f"VALUES (gen_random_uuid(),'{rule}',1,'{READER}'),"
         f"       (gen_random_uuid(),'{rule}',1,'{CONTRIB}');"
     )
+    assert _rc == 0, _out
     mine = _as(psql_strict, str(READER), "SELECT count(*) FROM kb.use_record;")
     assert "1" in mine, mine
 

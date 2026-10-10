@@ -93,6 +93,8 @@ class StartUseArgs(ToolArgs):
     rule_id: UUID
     version_no: int = Field(ge=1)
     note: str | None = Field(default=None, max_length=2000)
+    expected_result: str | None = Field(default=None, max_length=4000)
+    where_applied: str | None = Field(default=None, max_length=2000)
 
 
 class StartUseResult(BaseModel):
@@ -107,17 +109,17 @@ class RecordOutcomeArgs(ToolArgs):
     rating: int | None = Field(default=None, ge=1, le=5)
     rating_basis: str | None = Field(default=None, max_length=2000)
     is_correction: bool = False
+    confirm_applied: bool = False
 
 
 # 8 -------------------------------------------------------- submit source
 class SubmitSourceArgs(ToolArgs):
     library_id: UUID
     title: str = Field(min_length=1, max_length=500)
-    media_type: str = Field(min_length=1)
-    object_key: str = Field(pattern=r"^[a-z0-9][a-z0-9/_.-]*$")
-    content_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
-    idempotency_key: str = Field(min_length=1, max_length=200)
-    from_url: str | None = None  # SSRF/redirect/IP checks apply server-side
+    idempotency_key: str = Field(min_length=8, max_length=200)
+    source_id: UUID | None = None
+    from_url: str | None = Field(default=None, max_length=2048)
+    extract: bool = False
 
 
 class SubmitSourceResult(BaseModel):

@@ -1,0 +1,21 @@
+ARG PYTHON_IMAGE
+FROM ${PYTHON_IMAGE}
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends libstdc++6 ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+COPY requirements-runtime.lock /app/
+RUN pip install --no-cache-dir --require-hashes -r /app/requirements-runtime.lock
+
+COPY dist/*.whl /app/wheels/
+RUN pip install --no-deps --no-cache-dir /app/wheels/*.whl
+
+COPY migrations /app/migrations
+
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1
+
+ENTRYPOINT ["python", "-m", "kb.cli"]

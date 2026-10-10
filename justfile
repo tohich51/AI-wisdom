@@ -61,8 +61,7 @@ lint:
     "{{RUFF}}" format --check src tests scripts
 
 types:
-    "{{MYPY}}" --no-error-summary || true
-    "{{MYPY}}" 2>&1 | tail -20
+    "{{MYPY}}"
 
 unit:
     "{{PYTEST}}" -m "not integration and not acceptance" -q

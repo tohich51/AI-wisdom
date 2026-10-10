@@ -403,7 +403,9 @@ class SessionStore:
                 UPDATE kb.browser_session
                    SET last_seen_at = %(now)s,
                        last_served_by_instance = %(instance)s,
-                       idle_expires_at = GREATEST(idle_expires_at, %(idle)s)
+                       idle_expires_at = LEAST(
+                           absolute_expires_at, GREATEST(idle_expires_at, %(idle)s)
+                       )
                  WHERE id = %(id)s
                    AND secret_hash = %(secret_hash)s
                    AND revoked_at IS NULL

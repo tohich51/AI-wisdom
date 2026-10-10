@@ -43,6 +43,9 @@ def db_connection(request: Request) -> Iterator[psycopg.Connection]:
     gateway's job, not a route's. A router that opened its own connection per
     request would also make it easy to forget the transaction-local identity.
     """
+    resolver = getattr(request.app.state, "resolve_principal", None)
+    if resolver is not None:
+        resolver(request)  # authenticate before checking out the endpoint connection
     pool: ConnectionPool | None = getattr(request.app.state, "db_pool", None)
     if pool is None:
         raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, "database pool is not configured")

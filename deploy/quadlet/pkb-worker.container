@@ -1,0 +1,25 @@
+[Unit]
+Description=Personal Knowledge Base worker
+Requires=pkb-postgres.service pkb-model-runner.service
+After=pkb-postgres.service pkb-model-runner.service
+
+[Container]
+Image=localhost/ai-wisdom:__RELEASE_SHA__
+Network=pkb.network
+ReadOnly=true
+NoNewPrivileges=true
+EnvironmentFile=%h/ai-wisdom-config/worker.env
+Tmpfs=/tmp:rw,nosuid,nodev,size=128m
+ContainerName=pkb-worker
+Exec=worker
+PodmanArgs=--network-alias=pkb-worker
+Volume=%h/ai-wisdom-data/originals:/data/originals:ro
+
+[Service]
+Restart=on-failure
+TimeoutStartSec=300
+MemoryMax=1536M
+CPUQuota=100%
+
+[Install]
+WantedBy=default.target

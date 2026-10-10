@@ -259,7 +259,7 @@ class World:
         rule = uuid.uuid4()
         self.conn.execute(
             "INSERT INTO kb.rule (id, library_id, version_no, title, when_to_apply, "
-            "expected_effect, publication) VALUES (%s, %s, %s, %s, 'when', 'effect', 'published')",
+            "expected_effect, publication) VALUES (%s, %s, %s, %s, 'when', 'effect', 'draft')",
             (rule, library_id, version_no, title),
         )
         # a published rule with no action steps is not a rule the contract will
@@ -269,6 +269,7 @@ class World:
                 "INSERT INTO kb.rule_action (rule_id, ordinal, body) VALUES (%s, %s, %s)",
                 (rule, ordinal, body),
             )
+        self.conn.execute("UPDATE kb.rule SET publication='published' WHERE id=%s", (rule,))
         return rule
 
     def pin(

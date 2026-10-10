@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import pathlib
 import shutil
+import subprocess
 import tempfile
 
 import pytest
@@ -33,6 +34,19 @@ def pg_server():
     pgdata = pathlib.Path(tempfile.mkdtemp(prefix="kb-pgdata-"))
     try:
         srv = pgserver.get_server(pgdata=str(pgdata), cleanup_mode=None)
+        # pgserver 0.1.4's convenience method uses shell=True and does not
+        # quote its executable. Keep the same psql behavior with an argv
+        # invocation so real integration gates also work in paths with spaces.
+        from pgserver.postgres_server import POSTGRES_BIN_PATH
+
+        def psql(sql: str) -> str:
+            return subprocess.check_output(  # noqa: S603 - absolute bundled executable
+                [str(POSTGRES_BIN_PATH / "psql"), srv.get_uri()],
+                input=sql.encode(),
+                timeout=60,
+            ).decode()
+
+        srv.psql = psql
         yield srv
     finally:
         # The server is still holding the directory; stopping it is the

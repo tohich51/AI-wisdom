@@ -1,0 +1,8 @@
+*
+!containers/
+!containers/**
+!requirements-runtime.lock
+!dist/
+!dist/**
+!migrations/
+!migrations/**
