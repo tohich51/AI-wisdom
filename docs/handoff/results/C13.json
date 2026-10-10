@@ -1,0 +1,327 @@
+{
+  "schema_version": "1.0",
+  "task_id": "C13",
+  "status": "implemented_checked",
+  "review_status": "not_reviewed",
+  "workspace_absolute": "/workspace/knowledge-hub/.worktrees/feature-c13-jobs",
+  "branch": "feature-c13-jobs",
+  "executor": {
+    "product": "MiniMax Cloud",
+    "model_observed": null,
+    "model_observed_reason": "not observable from inside the agent. No environment variable, config file or API response in this workspace reports the resolved model id or provider, and AGENTS.md rule 2 forbids declaring a setting confirmed on the strength of the prompt alone. Recorded as null rather than copied forward from C10's entry, which was written by a different session.",
+    "thinking_observed": null,
+    "thinking_observed_reason": "same reason as model_observed; no runtime surface reports the thinking setting",
+    "provider_contract_verified": false,
+    "model_substitution_occurred": false,
+    "paid_api_or_byok_used": false
+  },
+  "source_before": {
+    "git_sha": "49a6cf964483927537e46669409bfef754005ce7",
+    "manifest_sha256": "209ab00a406cf5a4a554dbffc1a7b5069bfb201b06587c6ba32ab8d3938c0909",
+    "note": "the manifest hash is dist/source-manifest.json in the primary checkout, produced by an earlier `just package`; it is the pre-change tree this branch was cut from. `just package` was NOT re-run for this card: scripts/build_bundle.py is outside the card's allowed paths and dist/ is gitignored, so running it would have produced an artefact that is neither committed nor attributable. Reproduce with `just package` on the committed SHA."
+  },
+  "source_after": {
+    "git_sha": "307fbc11cabf1aaefb30da09dff3d1689fecb79f",
+    "manifest_sha256": null,
+    "manifest_sha256_reason": "see source_before.note: the bundle was not rebuilt, so there is no post-change manifest hash to report. A null here means 'not produced', not 'unchanged'.",
+    "git_sha_note": "the SHA every check in this file was actually run against: commit 307fbc1, the code and the tests. This result file is committed on top of it, and a commit cannot contain its own hash; resolve the branch tip with `git log --oneline -2` and re-run `just check` and `just integration`. The tree differs from 307fbc1 only by this document."
+  },
+  "changed_paths": [
+    "src/kb/processing/jobs.py",
+    "src/kb/processing/jobs_queue.py",
+    "src/kb/processing/stages.py",
+    "src/kb/processing/worker.py",
+    "tests/integration/jobs/conftest.py",
+    "tests/integration/jobs/test_actor_binding.py",
+    "tests/integration/jobs/test_attempt_fencing.py",
+    "tests/integration/jobs/test_idempotency.py",
+    "tests/integration/jobs/test_reads_and_quota.py",
+    "tests/integration/jobs/test_stage_ladder.py",
+    "tests/integration/jobs/test_state_machine.py",
+    "tests/integration/jobs/test_worker_queue.py",
+    "docs/handoff/results/C13.json"
+  ],
+  "scope_note": "Every changed path matches the card's allowed list: src/kb/processing/jobs*, stages*, worker*, tests/integration/jobs/**, plus this result file. `git show --stat 307fbc1` lists only those files. src/kb/contracts/, migrations/, pyproject.toml, requirements.lock and the justfile were read and not edited; the absence of src/kb/processing/__init__.py is deliberate, because kb.catalog, kb.access and kb.http are already PEP 420 namespace packages and adding one here would have been a file outside the allowed globs. docs/handoff/checkpoint.json was deliberately NOT written: it is a single shared file and other workers are on their own branches. The integrator owns that merge.",
+  "installed_but_not_pinned": {
+    "what": "procrastinate==3.10.0, with its dependencies asgiref 3.12.1, croniter 6.2.4, python-dateutil 2.9.0.post0, six 1.17.0",
+    "how": ".venv/bin/python -m pip install --index-url https://pypi.org/simple/ --trusted-host pypi.org --trusted-host files.pythonhosted.org procrastinate",
+    "note": "PRODUCT-SPEC names Procrastinate as the queue and pyproject.toml does not list it. pyproject.toml and requirements.lock are single-owner and were NOT edited, per the card instruction. The install went into the shared .venv, so every worktree sees it. The single owner still has to add the pin to requirements.lock; until then a fresh `just prepare` on another machine produces a tree in which kb.processing.jobs_queue cannot be imported."
+  },
+  "artifacts": [
+    {
+      "path": "src/kb/processing/jobs.py",
+      "sha256": "00741e8235238b6d1c1337b9062dc9632810e3172c79e033a1d8556c0cdf8c7d",
+      "note": "the canonical job: closed status and kind vocabularies, the state machine as data, idempotent submit, and the fenced attempt lifecycle (claim / take over / renew / commit)."
+    },
+    {
+      "path": "src/kb/processing/jobs_queue.py",
+      "sha256": "3d614b3c1180220f9db80f0c3cf45335fe49d906f3cf8885c865be045b5715c4",
+      "note": "the only module that touches Procrastinate. Transactional enqueue on the caller's own connection, per-stage checkpoint reads, the bounded retry strategy, and the quota message."
+    },
+    {
+      "path": "src/kb/processing/stages.py",
+      "sha256": "4cd435b5ef1e3924791517de8323f1a0b53230be9d08538bc2d29deaf87bf48d",
+      "note": "pure: the ladder per job kind, the resume rule, and the stage outcome vocabulary. No database, no queue, no Procrastinate import."
+    },
+    {
+      "path": "src/kb/processing/worker.py",
+      "sha256": "a206d5a636c4fa5f9d016110ade8ce9012e723c18a3ed7ce2b1d63523c5d458d",
+      "note": "the worker entrypoint: one closed-signature task per stage, identity from deployment configuration, the quota gate, and the two-transaction lease/work split that makes a kill survivable."
+    },
+    {
+      "path": "tests/integration/jobs/",
+      "sha256": "per-file hashes below; 96 tests across 7 modules plus conftest",
+      "note": "real PostgreSQL 16.2 (pgserver) in database kb_c13, migrations 0001-0005 applied once per session, a real Procrastinate 3.10 queue in the same database, and a real Worker process loop draining it."
+    },
+    {
+      "path": "tests/integration/jobs/conftest.py",
+      "sha256": "26ef28a526dd05dda0aa88387bfbee4047fd2fe31e6fbbd6305a1bbcc051930d",
+      "note": "also carries the two test-scoped GRANT helpers described in findings 1 and 2. Those are the only DDL this card executes anywhere, and they stand in for changes the single owner has to make."
+    },
+    {
+      "path": "tests/integration/jobs/test_actor_binding.py",
+      "sha256": "400037bebea15d048ac56adfba7d4e97d9af66cfe72becea1aae6a4507f464d2"
+    },
+    {
+      "path": "tests/integration/jobs/test_attempt_fencing.py",
+      "sha256": "b4006d0300c4ad984548c4b521085fea8ac8066b7edd01bcb268f739167ca86d"
+    },
+    {
+      "path": "tests/integration/jobs/test_idempotency.py",
+      "sha256": "fe0c268759fdeace392da2f74f678545fb26687c68f32d357a51cbc482b667de"
+    },
+    {
+      "path": "tests/integration/jobs/test_reads_and_quota.py",
+      "sha256": "487318450cd1215915c12f8e65912982197da012c66250919150585b6e9eae82"
+    },
+    {
+      "path": "tests/integration/jobs/test_stage_ladder.py",
+      "sha256": "da48be795c62ce5f2cd3af625e2f7cb1a4834d3a8a4760b12fc3cc22542281ca"
+    },
+    {
+      "path": "tests/integration/jobs/test_state_machine.py",
+      "sha256": "16c877134aea4ca4ec8927a3cd0102a0b0e8259cf3f3f90a65b7accb3e58c37b"
+    },
+    {
+      "path": "tests/integration/jobs/test_worker_queue.py",
+      "sha256": "ce7436a35d1ef3d4e26d34abb8c97cac1c1dad3860701b456b2dc82b5705721f"
+    }
+  ],
+  "what_was_built": {
+    "closed_vocabulary": "ProcessingStatus is kb.contracts.enums', not a copy, and parse_status() raises UnknownJobStatus for anything outside it. JobKind mirrors the kb.job.kind CHECK. test_the_enum_in_the_database_and_the_enum_in_the_code_are_the_same_set reads pg_enum and compares it to the StrEnum, so a status added to 0001 without a matching member fails a test rather than drifting.",
+    "state_machine": "ALLOWED_TRANSITIONS is a dict, not a chain of ifs. done and needs_ocr have empty target sets; queued cannot reach done; failed can only be re-armed through queued. The 33 cases in test_state_machine.py include ten junk values ('in_progress', 'needs-ocr', 'paused', 'queued ' with a trailing space, None, 0, True) that must raise rather than be stored.",
+    "idempotency": "submit_job uses INSERT ... ON CONFLICT (library_id, idempotency_key) DO NOTHING and then reads the row back. The DO NOTHING is load-bearing rather than tidy: an ON CONFLICT DO UPDATE would bump the row's xmin and fence out the worker that is running right now. test_a_retry_does_not_disturb_the_attempt_that_is_already_running asserts the fence token is unchanged after a retry and that the original holder can still commit.",
+    "fencing": "The token is the row's xmin. claim_attempt is an UPDATE that returns its own xid; take_over_attempt and renew_attempt and commit_status all carry AND xmin::text = token. Because a status change and a fence change are the same event, a superseded attempt updates zero rows and LeaseLost says so. A renewal returns a NEW Attempt on purpose: returning the same token would fence a live worker out of its own job one stage later.",
+    "queue": "Procrastinate 3.10 with a sync connector for the submitting side and an async one for the worker, sharing one task registry. The enqueue runs on the caller's own connection through Task.configure(connection=...) and the library's own procrastinate_defer_jobs_v1, so the canonical job row and its queue message commit or roll back together. No hand-rolled outbox table and therefore no second DDL path.",
+    "per_stage_checkpoint": "One Procrastinate task per stage, each with queueing_lock = job:<id>:<stage>, which the library enforces with a partial unique index rather than with a read-then-write in this card. 'This stage finished' is 'this task is succeeded', which Procrastinate writes only after the task body returns, and the body only returns after the fenced status write has committed. The reason this is not kb.job.status is finding 4.",
+    "stages": "parse advances kb.source.processing for every source still queued and stops the job at needs_ocr on a page image. index checks the library's generation opt-in. embed, extract_cloud and maintain run their gates and commit their status. What each stage can durably record is bounded by the schema, and that is stated per stage in worker.py's docstring rather than glossed.",
+    "worker": "One task per stage, each async so a slow book does not block the event loop, each with the same closed signature (context, job_id) and a bounded retry strategy that retries StageFailure and nothing else. run_stage uses two transactions on purpose: the lease commits first, so a worker that dies in the second one leaves a running job that a restart knows to take over, and the stage's writes and the job's status commit together.",
+    "identity": "WorkerIdentity is deployment configuration, frozen, with exactly two fields. A message naming an actor is refused by the closed task signature; if a future change widened it, the RLS policies would still decide what the write was allowed to touch."
+  },
+  "acceptance": {
+    "1_kill_restart_neither_loses_the_original_nor_doubles_a_stage_result": "test_a_kill_mid_ladder_loses_nothing_and_doubles_nothing kills the worker between the lease commit and the stage's writes — the only position where anything can be lost — and asserts the lease survived, the source did not move, and no stage result was written; a real restarted worker then drains the queue and the job reaches done with every stage task at attempts=1 and exactly four 'succeeded' events. test_the_original_is_still_readable_after_a_kill checks the source row that names the original. test_re_delivering_a_finished_job_does_nothing re-queues a stage for a finished job and asserts nothing moved.",
+    "2_the_queue_payload_does_not_set_somebody_elses_actor": "test_a_stage_task_has_no_actor_parameter_to_lie_into pins the signature. test_a_payload_that_names_an_actor_is_refused_and_writes_nothing defers a parse carrying actor_id, principal_id, library_id and status; the task cannot be called with them, the job stays queued, the source stays queued, and the message is still on the queue verbatim. test_a_worker_without_a_grant_cannot_write pairs a closed library with a payload naming a principal that does have a grant, and test_a_worker_with_a_grant_runs_the_very_same_message_shape is the control so 'refuse everything' cannot pass.",
+    "3_a_paused_quota_does_not_occupy_a_cpu_slot": "test_a_paused_quota_does_not_occupy_a_worker_slot runs one worker at concurrency 1 over a queue holding a paused cloud job and an allowed one. The paused job ends queued, the allowed one ends running, and both tasks are succeeded: the paused task returned instead of waiting, so the slot was free for the next one. test_a_paused_quota_does_not_spend_the_retry_budget asserts started=1, succeeded=1, deferred_for_retry=0, because a quota that is off in ten seconds must not consume the budget a transient fault needs. test_a_generation_enabled_library_runs_the_cloud_stage is the control.",
+    "4_a_read_does_not_wait_on_the_heavy_queue": "test_a_read_returns_while_another_connection_holds_the_row_lock holds an uncommitted claim on the job row from a second connection and times the read. test_a_read_returns_while_the_queue_table_is_being_written locks a procrastinate_jobs row FOR UPDATE, uncommitted, and times the read the same way. test_the_read_carries_a_statement_timeout asserts the 5s bound is really in force by reading SHOW statement_timeout on the same connection. test_a_reader_never_sees_a_half_written_status rolls the writer back and checks the status never moved."
+  },
+  "central_invariant": {
+    "claim": "a worker that has lost its lease cannot write a result, and it is rejected even when it wakes up late",
+    "proved_by": [
+      "test_two_connections_racing_for_one_lease_produce_exactly_one_winner — connection A claims and does not commit; a second connection is started in a thread and the suite polls pg_stat_activity from a third connection until it sees that backend in state='active' with wait_event_type='Lock'; only then does A commit. A never observed waiting means the statements did not overlap, and _await_block raises rather than passing quietly.",
+      "test_a_takeover_computed_against_a_fence_that_moved_is_refused — a live worker renews its lease uncommitted while a supervisor tries to take the job over on a token it read earlier. The supervisor waits on the real row lock, wakes up, finds its token stale and is refused; the worker that was actually alive keeps the job and can still finish it.",
+      "test_a_stale_attempt_cannot_write_a_result_after_a_newer_one_won — A claims and stalls, B takes the lease over, A wakes up and tries to publish done. LeaseLost, and the row is still running, not politely overwritten.",
+      "test_the_database_rejects_the_stale_token_not_just_the_python — a hand-written UPDATE with A's token matches zero rows, so the refusal is the WHERE clause and not the module raising first.",
+      "test_a_stale_attempt_cannot_renew_either, test_renewal_hands_back_a_new_token, test_a_finished_job_cannot_be_taken_over, test_a_needs_ocr_job_cannot_be_taken_over_either"
+    ],
+    "mutation_tested": "Eight mutations of this card's own code were injected and reverted; seven were each rejected by at least one named test. (1) removing AND xmin::text = %s from the commit statement failed 12 tests across all three suites. (2) removing the fence from take_over_attempt failed 8, including both lock races. (3) changing ON CONFLICT DO NOTHING to DO UPDATE failed 2 idempotency tests — the retry really does disturb the running attempt. (4) removing the claimable-status predicate from claim_attempt failed 24. (5) not committing NEEDS_OCR on an unsupported scan failed 2 worker tests. (6) mutating first_pending to return the last pending stage instead of the first failed 4 ladder tests. (7) removing the fence predicate from the takeover was tested separately from (2) and behaved identically. (8) an earlier attempt to mutate the source-status predicate in parse_stage did not match the file and therefore mutated nothing — recorded here rather than claimed as a result. The one honest limitation is in findings 4 and 5: the ladder's stage ORDER is pinned by test_stage_ladder.py and not by the end-to-end run, because a single worker serving every queue already fetches tasks in enqueue order, so first_pending's index never mattered to _finish, which only asks whether anything is still pending."
+  },
+  "checks": [
+    {
+      "name": "jobs_integration_suite",
+      "command": "PYTHONPATH=src pytest tests/integration/jobs -m integration -q --no-header",
+      "status": "passed",
+      "exit_code": 0,
+      "runtime": "cloud-workspace/PostgreSQL 16.2 (pgserver), database kb_c13, migrations 0001-0005 applied once per session, Procrastinate 3.10.0 queue in the same database, a real Worker loop draining it",
+      "evidence_path": "tests/integration/jobs/",
+      "reason": "96 tests: 8 attempt fencing (2 of them with an observed lock wait), 12 idempotency, 33 state machine and closed vocabulary, 17 stage ladder, 12 worker and queue, 9 actor binding, 5 reads. A real FastAPI-free psycopg pool connected as kb_app and kb_worker, real DDL, real RLS, a real queue, real thread-level races."
+    },
+    {
+      "name": "full_integration_gate",
+      "command": "just integration",
+      "status": "passed",
+      "exit_code": 0,
+      "runtime": "cloud-workspace/PostgreSQL 16.2",
+      "evidence_path": null,
+      "reason": "536 passed, 6 skipped, 91 deselected. The 6 skips are C07's Keycloak legs (E03), not C13's. C13 applies 0001-0005 to its own database kb_c13, so it neither depends on nor disturbs C06's, C09's or C10's. No log was written to docs/handoff/evidence/ — that path is outside this card's allowed paths."
+    },
+    {
+      "name": "static_gate",
+      "command": "just check",
+      "status": "passed",
+      "exit_code": 0,
+      "runtime": "cloud-workspace",
+      "evidence_path": null,
+      "reason": "ruff check and ruff format --check clean on 88 files, mypy clean on 41 source files, 91 unit tests pass. No lint suppression was added: S608 stays ON across this card's tests, every SQL statement is a single string literal with only %s parameters, and the one F821 in conftest was resolved by removing the annotation rather than by a noqa."
+    },
+    {
+      "name": "gate_non_vacuity",
+      "command": "just verify-self",
+      "status": "passed",
+      "exit_code": 0,
+      "runtime": "cloud-workspace",
+      "evidence_path": null,
+      "reason": "an injected defect is still rejected by `just check`, and the tree is green again afterwards; the probe file was removed and `git status` after the run shows only this card's files. Separately, eight targeted mutations of this card's own code were each rejected by a named test; see central_invariant.mutation_tested, including the two that were tried and did not work."
+    },
+    {
+      "name": "fencing_race_is_observed_not_assumed",
+      "command": "PYTHONPATH=src pytest tests/integration/jobs/test_attempt_fencing.py -m integration -q",
+      "status": "passed",
+      "exit_code": 0,
+      "runtime": "cloud-workspace/PostgreSQL 16.2, two live connections plus a third polling pg_stat_activity",
+      "evidence_path": "tests/integration/jobs/test_attempt_fencing.py",
+      "reason": "The required concurrency evidence, and it is not a sequential call dressed up as one. _await_block polls until the racing backend reports wait_event_type='Lock' and raises AssertionError if that never happens within 10s, so a regression that removed the contention would fail rather than pass. Both races in this file are arranged the same way: a holder leaves a row lock uncommitted, a racer is started in a thread, the block is observed, and only then is the holder released."
+    },
+    {
+      "name": "real_procrastinate_queue_not_a_stand_in",
+      "command": "PYTHONPATH=src pytest tests/integration/jobs/test_worker_queue.py::test_the_queue_table_is_procrastinates_own_and_not_ours -m integration -q",
+      "status": "passed",
+      "exit_code": 0,
+      "runtime": "cloud-workspace/PostgreSQL 16.2",
+      "evidence_path": "tests/integration/jobs/test_worker_queue.py",
+      "reason": "procrastinate_jobs exists, is owned by postgres rather than by any kb_ role, and no file under migrations/ mentions procrastinate. The schema is created by the library's own SchemaManager, never by this card. The worker tests run procrastinate.worker.Worker itself, which fetches, locks, runs and finishes tasks for real."
+    },
+    {
+      "name": "openviking_projection_and_index_generation",
+      "command": "n/a",
+      "status": "not_run",
+      "exit_code": null,
+      "runtime": null,
+      "evidence_path": null,
+      "reason": "OpenViking is not installed and projection work is C04. More seriously, no runtime role can open an index generation at all: kb.index_generation carries only a SELECT policy, so this card's index stage can check the library's opt-in and nothing more. That is a real, currently-true fact and it is asserted as a test (test_no_runtime_role_can_open_an_index_generation) rather than worked around. A11 — a stale index must not serve withdrawn content — is untouched by C13 and remains uncovered."
+    },
+    {
+      "name": "keycloak_verified_identity",
+      "command": "n/a",
+      "status": "not_run",
+      "exit_code": null,
+      "runtime": null,
+      "evidence_path": null,
+      "reason": "no Keycloak in this environment (E03 pending). C13 has no HTTP surface: the identity it binds is a worker service identity from deployment configuration, bound transaction-locally exactly as C06's transport does. The token/issuer/audience half of A12 and A20 is not exercised here and is not C13's."
+    },
+    {
+      "name": "a19_backup_restore",
+      "command": "n/a",
+      "status": "not_run",
+      "exit_code": null,
+      "runtime": null,
+      "evidence_path": null,
+      "reason": "no real pg_dump/pg_restore cycle was run. The kill/restart half of acceptance 1 is covered by a worker restart over the same database, and the source-manifest chain from C10 is untouched by this card, but a genuine dump and restore is not exercised here and is not in this card's acceptance list."
+    },
+    {
+      "name": "s01_s04_scaling_and_global_quota",
+      "command": "n/a",
+      "status": "not_run",
+      "exit_code": null,
+      "runtime": null,
+      "evidence_path": null,
+      "reason": "The per-library quota gate is tested; the installation-wide concurrency of one for generative stages that PRODUCT-SPEC requires is not implemented, because S01-S04 belong to C35 and there is no table to hold the gate. The cloud stage checks only kb.generation_policy and says so in its docstring rather than pretending to be a global limiter."
+    },
+    {
+      "name": "source_bundle",
+      "command": "just package",
+      "status": "not_run",
+      "exit_code": null,
+      "runtime": null,
+      "evidence_path": null,
+      "reason": "deliberately not run. scripts/build_bundle.py is outside this card's allowed paths, so executing it would have written outside the card's scope. The bundle is the integrator's to produce from the committed SHA 307fbc11cabf1aaefb30da09dff3d1689fecb79f."
+    }
+  ],
+  "findings_for_the_next_owner": [
+    {
+      "severity": "high",
+      "where": "migrations/0002_rls.sql, kb.index_generation",
+      "finding": "kb.index_generation has RLS enabled and forced with exactly one policy, index_generation_read, which is SELECT-only. There is no write policy for any runtime role, so kb_app's blanket GRANT INSERT on every table is unreachable and the index stage cannot open a generation. Exactly the same shape C10 found on kb.source_version, and found the same way: by running it.",
+      "action_taken": "not worked around. A workaround would mean a second DDL path for a table 0001 already declares, and C13 may not edit migrations/. Asserted as a test instead (test_no_runtime_role_can_open_an_index_generation) so the gap cannot be forgotten, and the index stage was reduced to the check it can honestly perform. Proposed DDL: CREATE POLICY index_generation_write ON kb.index_generation FOR INSERT WITH CHECK (kb.role_rank(kb.effective_role(kb.current_principal(), library_id)) >= 20); plus a matching UPDATE policy restricted to the building -> current transition."
+    },
+    {
+      "severity": "high",
+      "where": "migrations/0002_rls.sql, the kb_worker grants",
+      "finding": "As shipped, kb_worker can do nothing a stage needs. It holds SELECT, UPDATE on kb.job and SELECT on kb.source, and nothing else in the schema: it cannot UPDATE a source, cannot read kb.generation_policy, cannot read kb.library, and cannot INSERT anywhere. The processing pipeline this card delivers is unreachable by the role that is supposed to run it. Found by running a stage, not by reading the grants.",
+      "action_taken": "worked around in fixture setup only, never in migrations/: tests/integration/jobs/conftest.py::_grant_worker_stage_access applies GRANT SELECT, UPDATE ON kb.source and GRANT SELECT ON kb.generation_policy, no wider than the two stages need. Proposed for the owner: add those two grants to 0002 (or a new migration) so the container works without a test-only patch."
+    },
+    {
+      "severity": "high",
+      "where": "the Procrastinate schema, and the transactional enqueue",
+      "finding": "The enqueue runs on the caller's connection, so the gateway's role must be able to execute procrastinate_defer_jobs_v1 and write procrastinate_jobs and procrastinate_events. Procrastinate ships its schema granting nothing to anybody, and 0002 grants the runtime roles on kb only. The first real submission therefore fails with procrastinate's bare 'Database error.' — a message that names neither the missing privilege nor the object.",
+      "action_taken": "worked around in fixture setup only: _grant_queue_access in the same conftest. Proposed for the owner: the same grants against the Procrastinate schema, applied by whichever migration or bootstrap step applies procrastinate's schema — which is also a decision someone has to make, because nothing in migrations/ applies it today and the deployment kit has no step for it."
+    },
+    {
+      "severity": "high",
+      "where": "migrations/0001_initial.sql, kb.job",
+      "finding": "kb.job has no attempt column, no lease deadline, no actor column and no subject column. Three consequences, all of which this card had to work around or report: the fence is the row's xmin rather than an attempt number; the human who caused a job cannot be stored on the job; and a job cannot name what it is processing, so every stage is defined over a library rather than over a source. A job is currently a bag of status with an idempotency key attached.",
+      "action_taken": "the fence is implemented on xmin and its costs are written out in kb.processing.jobs.FENCE_IMPLEMENTATION rather than left implicit. Proposed DDL for the owner, not applied: ALTER TABLE kb.job ADD COLUMN attempt integer NOT NULL DEFAULT 0 CHECK (attempt >= 0), ADD COLUMN lease_expires_at timestamptz, ADD COLUMN actor_id uuid, ADD COLUMN subject_kind text, ADD COLUMN subject_id uuid. With those four the fence becomes an explicit monotonic counter, a take-over can be gated on a real deadline rather than on a supervisor's opinion, and the stage run of ARCHITECTURE §5 ('Job/stage run | Actor, ... попытка') becomes recordable."
+    },
+    {
+      "severity": "medium",
+      "where": "migrations/0001_initial.sql, the processing_status enum",
+      "finding": "One status column and a five-stage ladder do not fit in six values without inventing states the enum does not have. The per-stage checkpoint therefore had to go somewhere else, and it went to the queue: a stage is a Procrastinate task and 'this stage finished' is 'this task is succeeded'. That is durable and transactional, but it means the catalogue cannot answer 'which stage is this job on' without reading the queue's own bookkeeping, and ARCHITECTURE's per-chapter partial progress has nowhere to live at all.",
+      "action_taken": "implemented against the queue and said so in kb.processing.jobs_queue's docstring, in worker.py's, and in the KB_INDEXING note of the ladder module. Proposed for the owner: a kb.job_stage table (job_id, stage, state, attempt, output_hash, started_at, finished_at, UNIQUE (job_id, stage)) which is where per-chapter partial progress would live as well."
+    },
+    {
+      "severity": "medium",
+      "where": "migrations/0002_rls.sql, generation_policy_read",
+      "finding": "The generation policy requires curator, so a worker holding only contributor cannot see whether generative stages are enabled and its quota gate would silently answer 'not enabled' — a worker refusing real work for lack of a grant rather than because the owner said no. The same gate is what stops a reader seeing a library's generation policy at all.",
+      "action_taken": "the worker service account is granted curator on each library it processes, which is a kb.library_grant row and therefore a provisioning decision rather than a schema change. The fixture does it and the reason is stated at tests/integration/jobs/conftest.py::WORKER_LIBRARY_ROLE. Whoever owns provisioning (C15) has to make it real, and it is worth a look on its own: a service account with curator on every library is a lot of authority for a quota check."
+    },
+    {
+      "severity": "low",
+      "where": "src/kb/processing/jobs_queue.py, build_worker_app",
+      "finding": "Procrastinate's App is one object with one connector, and a Worker needs an async connector while a transactional deferral needs the sync one. App.replace_connector mutates the application it is called on, so a caller holding both ends up holding the same object twice and the sync enqueue starts going through the async path — which fails with asgiref's 'You cannot use AsyncToSync in the same thread as an async event loop'. The arrangement used instead is two App objects sharing one task registry, which is what Procrastinate's own deprecated with_connector did.",
+      "action_taken": "documented at the function, with the reason. If Procrastinate makes the connector swappable per call, this should be revisited; the two-App arrangement is correct today and depends on an implementation detail that could change."
+    },
+    {
+      "severity": "low",
+      "where": "src/kb/processing/jobs.py, JobKind",
+      "finding": "The job-kind vocabulary is duplicated here rather than living in kb/contracts/enums.py, because that file is another card's owner and this card may not edit it. The CHECK constraint in 0001 is the real authority and parse_kind raises on anything outside it, so the risk is drift rather than corruption — and test_state_machine.py pins the status side of that drift but not the kind side.",
+      "action_taken": "closed and enforced at both ends, and flagged here. The owner should move JobKind into kb/contracts/enums.py next to ProcessingStatus; nothing else has to change."
+    },
+    {
+      "severity": "low",
+      "where": "src/kb/processing/worker.py, the stage bodies",
+      "finding": "Three of the five stages — embed, extract_cloud and maintain — have no table in 0001-0005 that could record a result, so they perform their gates and commit their status through the fence, and the durable record is the queue row. Only parse and the generation opt-in check touch real tables today. This is the schema's limit rather than the card's design, and the module docstring says which is which.",
+      "action_taken": "stated per stage rather than glossed, and the index stage was deliberately reduced to a check instead of being given a write it cannot make. As the embeddings and model-runner tables arrive (C04 and the model card), the bodies are the place to fill in; the fencing around them does not change."
+    },
+    {
+      "severity": "informational",
+      "where": "src/kb/processing/worker.py, run_stage(on_kill=...)",
+      "finding": "run_stage takes an on_kill hook so the suite can kill a worker at exactly the point where the lease has committed and the work has not. It is a seam in production code, and a seam is a place a future change could widen.",
+      "action_taken": "required to be None outside the tests, documented in the docstring, and the only caller that passes it is the kill/restart test. It cannot reach a queue path: the task body never supplies it."
+    }
+  ],
+  "blockers": [
+    {
+      "id": "C13-B1",
+      "severity": "high",
+      "statement": "The worker cannot execute any stage in the installation as committed. kb_worker holds SELECT, UPDATE on kb.job and SELECT on kb.source and nothing else, and the Procrastinate schema grants nothing to the runtime roles, so the pipeline this card delivers is unreachable by the role meant to run it.",
+      "why_not_fixed_here": "migrations/ is the single DDL owner's and outside this card's allowed paths, and pyproject.toml/requirements.lock are single-owner too. Both were read and not edited.",
+      "what_would_unblock": "two GRANTs in 0002 (or a new migration) and one grant block against the Procrastinate schema, plus a decision about which step applies that schema — nothing in migrations/ does today and the delivery kit has no step for it. The exact statements this card used in fixture setup are in tests/integration/jobs/conftest.py::_grant_worker_stage_access and ::_grant_queue_access.",
+      "workaround_in_this_card": "applied in fixture setup only, so the behaviour is genuinely exercised rather than mocked; the gap is asserted by a test in the index-generation case and documented in the two cases above."
+    },
+    {
+      "id": "C13-B2",
+      "severity": "high",
+      "statement": "The catalogue schema cannot record what a job is for. kb.job names a library and a kind and nothing else, so there is no source, no export and no rule set for a job to point at, and no per-stage checkpoint either.",
+      "why_not_fixed_here": "same as C13-B1: a new column or a new table is the single owner's decision, and the card explicitly forbids a second DDL path.",
+      "what_would_unblock": "ALTER TABLE kb.job ADD COLUMN subject_kind text, ADD COLUMN subject_id uuid, ADD COLUMN attempt integer, ADD COLUMN lease_expires_at timestamptz, ADD COLUMN actor_id uuid; and a kb.job_stage table for per-stage and per-chapter progress. The card's proposal is in findings 4 and 5 above with the reasoning.",
+      "workaround_in_this_card": "stages are defined over a library, the fence is the row's xmin, and the per-stage checkpoint is the queue row. Each of those three is a real implementation with a real cost, and each is written down at the point it is made."
+    }
+  ],
+  "checkpoint_note": "docs/handoff/checkpoint.json was deliberately NOT written. The card permits it, but it is a single shared file and other workers are running on their own branches; two executors writing the same checkpoint would lose one of them. The integrator owns that merge. Everything needed to reconstruct this card's state is in this file and in the commit message of 307fbc1.",
+  "pending_owner_gates": [
+    "E03",
+    "E04"
+  ],
+  "external_actions_unknown": [],
+  "next_task_id": "C14",
+  "deployment_performed": false
+}
