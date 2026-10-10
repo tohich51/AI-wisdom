@@ -1,0 +1,31 @@
+[Unit]
+Description=Knowledge Hub gateway (FastAPI + MCP SDK + admin UI)
+After=network-online.target kb-postgres.service
+Requires=kb-postgres.service
+
+[Container]
+ContainerName=kb-gateway
+Image=localhost/kb-gateway:latest
+# Rendered from the environment; never a literal here.
+EnvironmentFile=%h/.config/kb/gateway.env
+PublishPort=8080:8080
+MemoryMax=384M
+MemorySwapMax=384M
+CPUQuota=100%
+NoNewPrivileges=true
+ReadOnly=true
+Tmpfs=/tmp:size=64M
+Volume=%h/.local/share/kb/gateway:/app/data:Z
+User=1003:1003
+Label=kb.component=gateway
+
+[Service]
+Restart=always
+RestartSec=5
+# Readiness is a real HTTP probe, not "the process is up".
+ExecStartPost=/usr/bin/podman exec kb-gateway /bin/sh -c 'until wget -qO- http://127.0.0.1:8080/healthz >/dev/null; do sleep 2; done'
+SystemCallFilter=@system-service
+NoNewPrivileges=true
+
+[Install]
+WantedBy=default.target

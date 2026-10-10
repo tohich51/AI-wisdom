@@ -1,12 +1,12 @@
 {
   "schema_version": "1.0",
-  "updated_at": "2026-10-10T03:26:44+00:00",
+  "updated_at": "2026-10-10T03:33:55+00:00",
   "workspace_absolute": "/workspace/knowledge-hub",
   "workspace_absolute_resolved": null,
   "handoff_manifest_sha256": "913d2efe54e55520a68e2ce17cdabbfe4e04c8ff2e0db875bfbc87ca0417c91d",
   "source_identity": {
-    "git_sha": "586320bb418d4e82b1e00dcc19359c11a119146a",
-    "manifest_sha256": "e6dc6b7887ac59b4a1a0ebb81688e94380f3860b6c4487f47dbfc6a4fb8593dd"
+    "git_sha": "4eef711894184cf96c6daf52517d117b0c122e27",
+    "manifest_sha256": "b041da01779e2ee60672caf73a7bb24809e77ddcccd1aa161119735c8c4c2624"
   },
   "requested_model": "MiniMax-M3.1-Flash-Preview",
   "observed_model": "MiniMax-M3.1-Flash-Preview",

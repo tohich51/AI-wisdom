@@ -1,0 +1,26 @@
+[Unit]
+Description=Knowledge Hub PostgreSQL (canonical data + RLS authority)
+After=network-online.target
+
+[Container]
+ContainerName=kb-postgres
+Image=docker.io/library/postgres:16-alpine
+EnvironmentFile=%h/.config/kb/postgres.env
+Volume=%h/.local/share/kb/postgres:/var/lib/postgresql/data:Z
+# Not published to the host. Only the gateway talks to it, over the podman
+# network; exposing 5432 would be an access path the product does not need.
+PublishPort=
+MemoryMax=768M
+MemorySwapMax=768M
+CPUQuota=100%
+NoNewPrivileges=true
+Label=kb.component=postgres
+
+[Service]
+Restart=always
+RestartSec=10
+ExecStartPost=/usr/bin/podman exec kb-postgres sh -c 'until pg_isready -U "$POSTGRES_USER" -d "$POSTGRES_DB" >/dev/null 2>&1; do sleep 2; done'
+TimeoutStartSec=120
+
+[Install]
+WantedBy=default.target

@@ -1,0 +1,23 @@
+[Unit]
+Description=Knowledge Hub Procrastinate worker
+After=kb-postgres.service
+Requires=kb-postgres.service
+
+[Container]
+ContainerName=kb-worker
+Image=localhost/kb-worker:latest
+EnvironmentFile=%h/.config/kb/worker.env
+MemoryMax=1024M
+MemorySwapMax=1024M
+CPUQuota=100%
+NoNewPrivileges=true
+ReadOnly=true
+Tmpfs=/tmp:size=128M
+Label=kb.component=worker
+
+[Service]
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=default.target

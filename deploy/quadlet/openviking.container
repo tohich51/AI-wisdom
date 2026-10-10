@@ -1,0 +1,25 @@
+[Unit]
+Description=Knowledge Hub OpenViking (rebuildable projection, not the source of truth)
+After=kb-postgres.service kb-embeddings.service
+Requires=kb-postgres.service
+
+[Container]
+ContainerName=kb-openviking
+Image=localhost/kb-openviking:latest
+EnvironmentFile=%h/.config/kb/openviking.env
+# Loopback only, exactly like embeddings: this is an internal dependency and
+# publishing it would create a second access path around PostgreSQL.
+PublishPort=127.0.0.1:1933:1933
+MemoryMax=1280M
+MemorySwapMax=1280M
+CPUQuota=150%
+NoNewPrivileges=true
+Label=kb.component=openviking
+
+[Service]
+Restart=always
+RestartSec=15
+TimeoutStartSec=600
+
+[Install]
+WantedBy=default.target

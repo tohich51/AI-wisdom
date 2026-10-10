@@ -1,0 +1,24 @@
+[Unit]
+Description=Knowledge Hub subscription model-runner
+After=network-online.target
+
+[Container]
+ContainerName=kb-model-runner
+Image=localhost/kb-model-runner:latest
+EnvironmentFile=%h/.config/kb/model-runner.env
+# Deliberately NOT published. Nothing external may call the owner's
+# subscription; the gateway reaches it only, and concurrency is 1.
+PublishPort=
+MemoryMax=256M
+MemorySwapMax=256M
+CPUQuota=50%
+NoNewPrivileges=true
+Label=kb.component=model-runner
+
+[Service]
+Restart=on-failure
+RestartSec=30
+TimeoutStartSec=600
+
+[Install]
+WantedBy=default.target

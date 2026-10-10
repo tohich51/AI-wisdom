@@ -1,0 +1,23 @@
+[Unit]
+Description=Knowledge Hub Keycloak (OIDC provider)
+After=network-online.target
+
+[Container]
+ContainerName=kb-keycloak
+Image=quay.io/keycloak/keycloak:26.0
+EnvironmentFile=%h/.config/kb/keycloak.env
+# Reachable from the gateway only.
+PublishPort=127.0.0.1:8081:8080
+MemoryMax=2048M
+MemorySwapMax=2048M
+CPUQuota=150%
+NoNewPrivileges=true
+Label=kb.component=keycloak
+
+[Service]
+Restart=always
+RestartSec=20
+TimeoutStartSec=300
+
+[Install]
+WantedBy=default.target

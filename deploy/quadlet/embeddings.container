@@ -1,0 +1,26 @@
+[Unit]
+Description=Knowledge Hub CPU embeddings (no GPU by design)
+After=network-online.target
+
+[Container]
+ContainerName=kb-embeddings
+# CPU only. No GPU passthrough: the product spec fixes CPU embeddings at
+# 1024 dimensions precisely so this runs on a small host.
+Image=docker.io/ollama/ollama:latest
+EnvironmentFile=%h/.config/kb/embeddings.env
+# Bound to loopback only. The gateway reaches it over the podman network; it
+# must not accept connections from the host or the internet.
+PublishPort=127.0.0.1:11434:11434
+MemoryMax=1536M
+MemorySwapMax=1536M
+CPUQuota=200%
+NoNewPrivileges=true
+Label=kb.component=embeddings
+
+[Service]
+Restart=always
+RestartSec=10
+TimeoutStartSec=300
+
+[Install]
+WantedBy=default.target
