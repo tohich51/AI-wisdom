@@ -22,3 +22,6 @@ Total 7 296 MiB, plus 256 MiB transient allowance for maintenance jobs.
 
 **Secrets are never in these files.** The render step substitutes from the
 environment; the units themselves carry only variable references.
+
+For the tested current xorek base, use ../xorek/README.md. These original
+full-product templates are not validated Podman4.9.3 deployment units.

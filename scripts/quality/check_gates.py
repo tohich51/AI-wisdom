@@ -30,8 +30,9 @@ def main() -> int:
 
     for gid, (desc, required) in GATES.items():
         missing = [b for b in required if shutil.which(b) is None]
-        status = "available" if not missing else "unmet"
-        if missing:
+        status = ("available" if not missing else "unmet") if required else "not_verified"
+        # Empty capability lists are not evidence of backup/identity/restore checks.
+        if missing or not required:
             unmet.append(gid)
         report[gid] = {"description": desc, "status": status, "missing": missing}
 

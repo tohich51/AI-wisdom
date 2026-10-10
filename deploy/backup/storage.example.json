@@ -1,0 +1,9 @@
+{
+  "backend": "restic-local-removable",
+  "status": "awaiting_writable_external_volume",
+  "mount_path": "/Volumes/AI-wisdom Backups",
+  "volume_uuid": "",
+  "repository": "/Volumes/AI-wisdom Backups/AI-wisdom/restic",
+  "schedule_created": false,
+  "exclude": ["live PostgreSQL PGDATA", "MiniMax OAuth profile"]
+}

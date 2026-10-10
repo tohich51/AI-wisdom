@@ -1,0 +1,28 @@
+[Unit]
+Description=AI-wisdom Keycloak with JVM included in the official image
+After=pkb-postgres.service
+Requires=pkb-postgres.service
+
+[Container]
+Image=quay.io/keycloak/keycloak@sha256:09a381c715ab0b111835b70f2905955274843a219c6f27efb348e4d9f4086858
+ContainerName=pkb-keycloak
+Network=pkb.network
+EnvironmentFile=%h/ai-wisdom-config/keycloak.env
+Volume=%h/ai-wisdom-config/identity:/opt/keycloak/data/import:ro,Z
+PublishPort=127.0.0.1:19281:8080
+PublishPort=127.0.0.1:19284:9000
+Exec=start --import-realm
+NoNewPrivileges=true
+PodmanArgs=--memory=2048m --memory-swap=2048m --cpus=1.5 --pids-limit=512 --network-alias=pkb-keycloak
+Label=pkb.component=keycloak
+
+[Service]
+Restart=on-failure
+RestartSec=15
+MemoryMax=2048M
+MemorySwapMax=0
+CPUQuota=150%
+TimeoutStartSec=420
+
+[Install]
+WantedBy=default.target

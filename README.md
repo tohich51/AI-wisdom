@@ -23,6 +23,13 @@ production deployment, no published image, no public endpoint.
 Detail: `docs/handoff/runtime-capabilities.json` and
 `docs/handoff/final-report.md`.
 
+Owner-host infrastructure update (2026-10-11): see `deploy/xorek/README.md`.
+The 8 GiB parent budget, PostgreSQL and Keycloak start/restart/readiness were
+checked on xorek. Embeddings remain unconfigured; server MiniMax OAuth and a
+writable external backup volume still need owner actions. Both DB exports
+were restored to an isolated target; restic roundtrip remains pending.
+This does not change the full product status above.
+
 ## The model
 
 ```
