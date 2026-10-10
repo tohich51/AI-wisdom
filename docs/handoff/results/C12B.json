@@ -22,9 +22,9 @@
     "note": "The pre-change source manifest was not captured. dist/ is gitignored, the worktree started clean at this sha, and inventing a hash I did not compute would be the one thing this file must never contain. source_after carries the manifest built after the change."
   },
   "source_after": {
-    "git_sha": null,
-    "manifest_sha256": null,
-    "note": "filled in by the follow-up commit that records this card's own sha and the post-change bundle hash, exactly as C10 did"
+    "git_sha": "b79af35e42dfde1d2ce61740f3a38236f1bae118",
+    "manifest_sha256": "370de29656856e23c2d3d4efa396b83306f1216610a35a0b0edd153187dd4ea5",
+    "note": "the manifest hash is dist/source-manifest.json produced by `just package` on the post-change tree; the bundle is listed under the source_bundle check and is gitignored, so it is not part of the commit"
   },
   "changed_paths": [
     "src/kb/catalog/fetch_html.py",
