@@ -4,6 +4,13 @@ The product uses the existing `knowledge-hub` realm and confidential `kb-gateway
 client. Keycloak runs in its official container, which includes its Java runtime.
 No host JVM, separate realm, product database or permanent test deployment is needed.
 
+The pinned image is Keycloak 26.8.0 for linux/amd64. Versions below 26.7.0
+have the upstream multi-session bulk logout defect reproduced by our two-device
+test (https://github.com/keycloak/keycloak/pull/49949). Do not weaken the test or
+revoke unrelated sessions to mask that provider defect. Before provider upgrades,
+stop it and save its database, exact Quadlet and private env in an encrypted
+off-host snapshot; a downgrade requires restoring the matching database too.
+
 Browser authentication remains authorization code with PKCE S256 using Authlib.
 MFA is handled by Keycloak; PyOTP is a pinned test-only client. Password grant,
 implicit grant and the gateway's shared service account remain disabled.
@@ -23,8 +30,15 @@ The additive migration is compatible with the previous runtime during rollback.
 After deploying the receiver, configure only the existing client:
 
 - `frontchannelLogout=false`
-- `backchannel.logout.url=<public gateway>/auth/backchannel-logout`
+- `backchannel.logout.url=http://pkb-gateway:8080/auth/backchannel-logout`
 - `backchannel.logout.session.required=true`
+
+This server-to-server callback uses the shared private Podman network and signed
+JWT authentication; it does not carry browser cookies. Allow only `pkb-gateway`
+and `pkb-gateway:8080` in the gateway host allowlist in addition to its public host.
+Browser/OAuth/MCP endpoints retain public HTTPS. The internal callback avoids
+depending on external DNS for notification delivery. On separate nodes use a
+reachable private service address with the same signature checks.
 
 Do not reimport the whole realm or change existing owner/colleague credentials.
 Preserve the old client representation, image, three Quadlets and gateway env for

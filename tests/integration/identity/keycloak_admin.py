@@ -1,7 +1,7 @@
 """Talking to the **running** Keycloak, without the agent ever seeing a secret.
 
 C07 task 1. The C07 stubs were written in a workspace with no JVM. On the
-owner's host Keycloak 26.0.8 is live, so the tests that can be answered by the
+owner's host runs real Keycloak, so the tests that can be answered by the
 running server are answered by the running server. This module is the only
 place that reaches for it.
 
