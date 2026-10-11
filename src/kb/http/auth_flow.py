@@ -55,6 +55,7 @@ from kb.access.session import (
     LoginTransaction,
     LoginTransactionInvalid,
     Session,
+    SessionMissing,
     SessionStore,
     code_challenge_for,
     new_browser_binding,
@@ -178,7 +179,10 @@ class AuthorizationCodeFlow:
             )
             raise LoginRejected(exc.code) from exc
 
-        issued = self._store.create_session(identity, now=now)
+        try:
+            issued = self._store.create_session(identity, now=now)
+        except SessionMissing:
+            raise LoginRejected("provider_session_logged_out") from None
         _log.info(
             "auth.login.ok",
             extra={

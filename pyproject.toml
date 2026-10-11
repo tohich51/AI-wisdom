@@ -39,6 +39,7 @@ dependencies = [
 # production image, where PostgreSQL is a separate container.
 pgtest = ["pgserver==0.1.4"]
 dev = [
+    "pyotp==2.9.0",  # TOTP client for real Keycloak MFA tests
     "pytest==9.1.1",
     "pytest-asyncio==1.3.0",
     "ruff==0.15.7",

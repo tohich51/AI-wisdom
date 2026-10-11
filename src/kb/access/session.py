@@ -47,6 +47,7 @@ from psycopg import Connection
 from psycopg.rows import dict_row
 
 from kb.access.identity import VerifiedIdentity
+from kb.access.logout import VerifiedLogout
 from kb.access.policy import Principal
 
 UTC: Final = dt.UTC
@@ -334,11 +335,127 @@ class SessionStore:
 
     # -- sessions -------------------------------------------------------
 
+    def _lock_provider_session(self, cur: Any, issuer: str, sid: str) -> None:
+        cur.execute(
+            "SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))",
+            (f"{len(issuer)}:{issuer}{sid}",),
+        )
+
+    def _guard_provider_session(self, cur: Any, identity: VerifiedIdentity) -> None:
+        sid = identity.provider_session_id
+        if not sid:
+            return
+
+        self._lock_provider_session(cur, identity.issuer, sid)
+        cur.execute(
+            """
+            SELECT 1
+            FROM kb.oidc_logged_out_session
+            WHERE issuer = %s
+              AND provider_session_id = %s
+              AND (subject IS NULL OR subject = %s)
+            """,
+            (identity.issuer, sid, identity.subject),
+        )
+        if cur.fetchone() is not None:
+            raise SessionMissing("provider_session_logged_out")
+
+    def apply_provider_logout(self, logout: VerifiedLogout, *, now: dt.datetime) -> int:
+        with self._connection() as conn, conn.transaction(), conn.cursor() as cur:
+            self._lock_provider_session(cur, logout.issuer, logout.session_id)
+
+            cur.execute(
+                """
+                INSERT INTO kb.oidc_logout_event (
+                    issuer,
+                    client_id,
+                    jti,
+                    provider_session_id,
+                    subject,
+                    issued_at,
+                    expires_at,
+                    received_at
+                )
+                VALUES (
+                    %(issuer)s,
+                    %(audience)s,
+                    %(jti)s,
+                    %(session_id)s,
+                    %(subject)s,
+                    %(issued_at)s,
+                    %(expires_at)s,
+                    %(now)s
+                )
+                ON CONFLICT DO NOTHING
+                RETURNING jti
+                """,
+                {
+                    "issuer": logout.issuer,
+                    "audience": logout.audience,
+                    "jti": logout.jti,
+                    "session_id": logout.session_id,
+                    "subject": logout.subject,
+                    "issued_at": logout.issued_at,
+                    "expires_at": logout.expires_at,
+                    "now": now,
+                },
+            )
+            if cur.fetchone() is None:
+                return 0
+
+            cur.execute(
+                """
+                INSERT INTO kb.oidc_logged_out_session (
+                    issuer,
+                    provider_session_id,
+                    subject,
+                    recorded_at
+                )
+                VALUES (
+                    %(issuer)s,
+                    %(session_id)s,
+                    %(subject)s,
+                    %(now)s
+                )
+                ON CONFLICT (issuer, provider_session_id) DO UPDATE
+                SET subject = CASE
+                    WHEN EXCLUDED.subject IS NULL THEN NULL
+                    ELSE kb.oidc_logged_out_session.subject
+                END
+                """,
+                {
+                    "issuer": logout.issuer,
+                    "session_id": logout.session_id,
+                    "subject": logout.subject,
+                    "now": now,
+                },
+            )
+
+            cur.execute(
+                """
+                UPDATE kb.browser_session
+                SET revoked_at = %(now)s,
+                    revoked_reason = 'provider_logout'
+                WHERE issuer = %(issuer)s
+                  AND provider_session_id = %(sid)s
+                  AND revoked_at IS NULL
+                  AND (%(subject)s::text IS NULL OR subject = %(subject)s)
+                """,
+                {
+                    "now": now,
+                    "issuer": logout.issuer,
+                    "sid": logout.session_id,
+                    "subject": logout.subject,
+                },
+            )
+            return cur.rowcount
+
     def create_session(self, identity: VerifiedIdentity, *, now: dt.datetime) -> IssuedSession:
         session_id = uuid4()
         cookie_secret = secrets.token_urlsafe(_SECRET_BYTES)
         csrf_token = secrets.token_urlsafe(_CSRF_BYTES)
-        with self._connection() as conn, conn.cursor() as cur:
+        with self._connection() as conn, conn.transaction(), conn.cursor() as cur:
+            self._guard_provider_session(cur, identity)
             cur.execute(
                 """
                 INSERT INTO kb.browser_session (

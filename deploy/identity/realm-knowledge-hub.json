@@ -66,7 +66,7 @@
       "implicitFlowEnabled": false,
       "directAccessGrantsEnabled": false,
       "serviceAccountsEnabled": false,
-      "frontchannelLogout": true,
+      "frontchannelLogout": false,
       "rootUrl": "${KB_APP_ROOT_URL}",
       "baseUrl": "/",
       "adminUrl": "",
@@ -78,6 +78,7 @@
         "access.token.lifespan": "300",
         "oauth2.device.authorization.grant.enabled": "false",
         "backchannel.logout.session.required": "true",
+        "backchannel.logout.url": "${KB_OIDC_BACKCHANNEL_LOGOUT_URL}",
         "require.pushed.authorization.requests": "false"
       },
       "defaultClientScopes": ["profile", "email", "roles", "web-origins"],

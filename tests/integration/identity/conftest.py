@@ -1,34 +1,9 @@
-"""Shared fixtures for the C07 identity integration tests.
+"""Ephemeral PostgreSQL, RSA/JWKS and HTTP protocol fixtures for regression tests.
 
-Two real things and one stand-in, named so nobody has to guess which is which:
-
-* **Real PostgreSQL 16.2** from the ``pg_server`` fixture, with the migrations
-  applied to a dedicated ``kb_identity`` database. A separate database rather
-  than a second schema application in the shared one: ``CREATE POLICY`` and
-  ``CREATE TRIGGER`` are not idempotent, and re-applying 0001-0003 to the same
-  database aborts halfway with an error that names a policy instead of the
-  real cause. The dedicated database also keeps these tests from colliding with
-  the rows C03/C06 leave behind.
-
-* **Real RSA keys and a real JWKS document**, generated per session with
-  ``cryptography`` and signed with RS256 by PyJWT. Nothing about the
-  signature path is mocked: a token that fails these tests would fail against
-  Keycloak for the same reason.
-
-* **A local OIDC provider process** — a real HTTP server on 127.0.0.1 that
-  serves discovery, JWKS, ``/authorize`` and ``/token``, and mints genuinely
-  signed ID tokens.
-
-  This is **NOT Keycloak**. Keycloak is not installed in this workspace (no
-  JVM; see ``docs/handoff/runtime-capabilities.json``), and pretending
-  otherwise would be the single most misleading thing this test suite could
-  do. What this stand-in exercises for real: the discovery/issuer check, the
-  JWKS fetch, RS256 verification, the authorization-code + PKCE sequence, and
-  every refusal the gateway makes. What it cannot exercise: realm import,
-  interactive login, MFA, Keycloak's own quirks, and the MCP audience mapper.
-  That gap is recorded as ``not_run`` behind E03 in
-  ``docs/handoff/results/C07.json`` and as a skipped test in
-  ``test_keycloak_live.py``.
+The loopback HTTP fixture is not Keycloak and is not a production provider.
+It isolates protocol failures for deterministic regressions. The actual current
+Keycloak/gateway is exercised separately by test_keycloak_live.py without skips.
+No fixture here is a separately deployed product stand.
 """
 
 from __future__ import annotations

@@ -11,12 +11,14 @@ from fastapi import FastAPI, Request
 from psycopg_pool import ConnectionPool
 
 from kb.access.identity import IdentitySettings, TokenVerifier, VerifiedIdentity
+from kb.access.logout import LogoutVerifier
 from kb.access.membership_keycloak import KeycloakSessionRevoker
 from kb.access.session import Sealer, SessionStore
 from kb.http import libraries, members
 from kb.http.auth_config import AuthSettings
 from kb.http.auth_flow import AuthorizationCodeFlow
 from kb.http.auth_routes import create_auth_router
+from kb.http.backchannel import create_backchannel_router
 from kb.runtime_identity import create_resolver
 
 
@@ -56,6 +58,13 @@ def install_auth(
     app.include_router(
         create_auth_router(
             flow=flow, store=store, settings=settings, clock=lambda: dt.datetime.now(dt.UTC)
+        )
+    )
+    app.include_router(
+        create_backchannel_router(
+            verifier=LogoutVerifier(coordinates(settings.client_id, settings.client_id), browser),
+            store=store,
+            clock=lambda: dt.datetime.now(dt.UTC),
         )
     )
     resolve, resolve_token = create_resolver(pool, store, settings, bearer)

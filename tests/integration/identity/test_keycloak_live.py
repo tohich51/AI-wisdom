@@ -1,32 +1,10 @@
-"""C07 — the Keycloak leg, and the part of it that can be checked here.
+"""Realm templates and six actual checks against the current Keycloak/gateway.
 
-**Split deliberately.** Four tests in this file run: three check the delivered
-realm *template* as a file, and one checks the *running* server. The other
-five are ``not_run``, because the workspace that wrote them had no JVM and
-therefore no Keycloak (``docs/handoff/runtime-capabilities.json``,
-``keycloak_real.available = false``). They are written out rather than left
-out so the next executor can run them unchanged on a host that has a provider,
-and they report as SKIPPED — never as passed.
-
-What a skipped test means here, precisely: the assertions were never
-evaluated. There is no result. Recording them as anything other than
-``not_run`` in ``docs/handoff/results/C07.json`` would be a false claim, and
-the same is true of the E03 gate.
-
-The live-server test
---------------------
-``test_the_live_realm_publishes_the_configured_issuer_and_scopes_a_token_to_its_client``
-runs against the Keycloak 26.0.8 instance on the host. It **reads** the realm
-back through Admin REST and asks it for a real token; it does not import the
-realm, create a realm, or change a realm setting, and it is named for what it
-does rather than for the import that used to stand in this slot. The one
-object it creates is a confidential ``test-e03-*`` service client that it
-deletes again by exact id, tagged with its run id.
-
-It is not skipped when Keycloak is absent: it fails. A gate that cannot run
-is ``not_run``, and the project's rule is that a silent skip is a false green.
-The cost of that choice — ``just integration`` now needs a reachable Keycloak
-— is recorded against C07 rather than hidden in a skip marker.
+Live tests use exact-ID synthetic fixtures in the existing knowledge-hub realm.
+They fail when their required provider or gateway capability is unavailable.
+Credentials remain in process; no test stand or permanent users are provisioned.
+The foreign-issuer case tests the verifier with a real current-realm token, not
+an uncreated foreign realm. Low-level protocol regressions are in separate files.
 """
 
 from __future__ import annotations
@@ -50,11 +28,6 @@ from keycloak_admin import (
 pytestmark = pytest.mark.integration
 
 DEPLOY = pathlib.Path(__file__).resolve().parents[3] / "deploy" / "identity"
-
-NOT_RUN_REASON = (
-    "no Keycloak in this workspace (no JVM; runtime-capabilities.json "
-    "keycloak_real.available=false). Blocked behind owner gate E03."
-)
 
 
 # ---------------------------------------------------------------- runs here
@@ -93,7 +66,9 @@ def test_the_realm_client_offers_only_the_code_flow() -> None:
     assert client["implicitFlowEnabled"] is False
     assert client["directAccessGrantsEnabled"] is False  # no password grant
     assert client["serviceAccountsEnabled"] is False  # no shared machine token
+    assert client["frontchannelLogout"] is False
     assert client["attributes"]["pkce.code.challenge.method"] == "S256"
+    assert client["attributes"]["backchannel.logout.url"] == "${KB_OIDC_BACKCHANNEL_LOGOUT_URL}"
     assert document["registrationAllowed"] is False  # invite only
     assert "users" not in document  # the product ships empty
     assert document["accessTokenLifespan"] <= 600  # short-lived, per ACCESS-MODEL 7
@@ -222,59 +197,84 @@ def test_the_live_realm_publishes_the_configured_issuer_and_scopes_a_token_to_it
     assert verified["iss"] == live_keycloak.issuer
 
 
-# ---------------------------------------------------------------- not run
+# ------------------------------------------------------ real browser/provider flows
 
 
 @pytest.mark.requires_keycloak
-@pytest.mark.skip(reason=NOT_RUN_REASON)
-def test_an_interactive_login_mints_a_token_this_gateway_accepts() -> None:
-    """A human logs in at Keycloak; the gateway verifies what comes back.
+def test_an_interactive_login_mints_a_token_this_gateway_accepts(live_keycloak) -> None:
+    """Real browser code + PKCE login and default-deny for a nonmember."""
+    from keycloak_live_checks import check_interactive
 
-    Asserts: a real `code` + PKCE exchange yields an ID token that
-    ``TokenVerifier`` accepts, with `iss` and `aud` matching the realm.
-    """
-    raise AssertionError("unreachable: the test is not_run in this workspace")
+    check_interactive(live_keycloak)
 
 
 @pytest.mark.requires_keycloak
-@pytest.mark.skip(reason=NOT_RUN_REASON)
-def test_a_token_minted_by_another_realm_is_rejected() -> None:
-    """A second realm in the same Keycloak must not be usable here.
+def test_a_real_signed_token_is_rejected_for_a_foreign_expected_issuer(
+    live_keycloak: LiveKeycloak, synthetic_client: SyntheticClient
+) -> None:
+    """Compare a current real token with a different expected issuer.
 
-    Asserts: an ID token whose `iss` is the other realm is refused with
-    ``issuer_mismatch`` even though both realms share a signing key set.
+    This neither mints a token in a foreign realm nor exercises the product
+    gateway end to end.
     """
-    raise AssertionError("unreachable: the test is not_run in this workspace")
+    from uuid import UUID
+
+    import httpx
+
+    from kb.access.identity import IdentityRejected, IdentitySettings, TokenVerifier
+
+    discovery = live_keycloak.discovery(public=True)
+    assert discovery["issuer"] == live_keycloak.issuer
+    token = live_keycloak.client_credentials_token(synthetic_client)
+
+    with httpx.Client(timeout=20.0) as http:
+        current = TokenVerifier(
+            IdentitySettings(
+                issuer=live_keycloak.issuer,
+                audience=synthetic_client.client_id,
+                client_id=synthetic_client.client_id,
+                jwks_url=discovery["jwks_uri"],
+            ),
+            http,
+        )
+        accepted = current.verify(token.reveal(), require_scopes=False)
+        assert accepted.issuer == live_keycloak.issuer
+        assert accepted.principal_id == UUID(accepted.subject)
+
+        foreign = TokenVerifier(
+            IdentitySettings(
+                issuer=live_keycloak.issuer + "/foreign",
+                audience=synthetic_client.client_id,
+                client_id=synthetic_client.client_id,
+                jwks_url=discovery["jwks_uri"],
+            ),
+            http,
+        )
+        with pytest.raises(IdentityRejected) as exc:
+            foreign.verify(token.reveal(), require_scopes=False)
+
+    assert exc.value.code == "issuer_mismatch"
 
 
 @pytest.mark.requires_keycloak
-@pytest.mark.skip(reason=NOT_RUN_REASON)
-def test_password_grant_is_refused_by_the_realm() -> None:
-    """The realm configuration, verified against the running server.
+def test_password_grant_is_refused_by_the_realm(live_keycloak) -> None:
+    """Use a real, browser-proven password and confidential product client."""
+    from keycloak_password_check import check_password_grant
 
-    Asserts: a password grant to ``kb-gateway`` is refused. The template says
-    so; only the running server can prove it.
-    """
-    raise AssertionError("unreachable: the test is not_run in this workspace")
+    check_password_grant(live_keycloak)
 
 
 @pytest.mark.requires_keycloak
-@pytest.mark.skip(reason=NOT_RUN_REASON)
-def test_an_mfa_configured_user_completes_the_flow() -> None:
-    """TOTP is enabled in the realm; the browser flow still completes.
+def test_an_mfa_configured_user_completes_the_flow(live_keycloak) -> None:
+    """Real OTP enrollment, wrong-code rejection and successful challenge."""
+    from keycloak_mfa_check import check_mfa
 
-    Asserts: a session is established after a TOTP challenge, and the audit log
-    records no second factor value.
-    """
-    raise AssertionError("unreachable: the test is not_run in this workspace")
+    check_mfa(live_keycloak)
 
 
 @pytest.mark.requires_keycloak
-@pytest.mark.skip(reason=NOT_RUN_REASON)
-def test_logout_at_the_provider_invalidates_the_session_locally() -> None:
-    """The product's own logout path plus a Keycloak backchannel logout.
+def test_logout_at_the_provider_invalidates_the_session_locally(live_keycloak) -> None:
+    """Real provider delivery revokes two devices and preserves an unrelated user."""
+    from keycloak_logout_check import check_provider_logout
 
-    Asserts: a backchannel logout for the provider session revokes the
-    ``kb.browser_session`` rows that carry that ``session_state``.
-    """
-    raise AssertionError("unreachable: the test is not_run in this workspace")
+    check_provider_logout(live_keycloak)
