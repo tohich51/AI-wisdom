@@ -325,6 +325,13 @@ def _commit(
                 (source_id, content_hash),
             )
         cur.execute(
+            "UPDATE kb.source SET origin_url=COALESCE(origin_url,%s), "
+            "retrieved_at=COALESCE(retrieved_at,%s) WHERE id=%s",
+            (source_url, retrieved_at, source_id),
+        )
+        if cur.rowcount != 1:
+            raise AccessDenied("forbidden")
+        cur.execute(
             "UPDATE kb.ingest SET state = 'committed', source_id = %s, committed_at = now(), "
             "content_hash = COALESCE(content_hash, %s), "
             "source_url = COALESCE(source_url, %s), "

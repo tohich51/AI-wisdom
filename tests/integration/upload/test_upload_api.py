@@ -558,6 +558,11 @@ def test_a_url_submission_stores_what_came_back(make_api, people, world) -> None
     assert payload["url"] == "https://public.test/a-book.pdf"
     assert payload["retrieved_at"] is not None, "a fetch really did happen"
     assert payload["original"]["byte_size"] == len(body)
+    origin = world.conn.execute(
+        "SELECT origin_url, retrieved_at FROM kb.source WHERE id = %s",
+        (payload["source"]["id"],),
+    ).fetchone()
+    assert origin is not None and origin[0] == payload["url"] and origin[1] is not None
 
 
 def test_a_refused_url_is_a_400_and_leaves_no_row(make_api, people, world) -> None:

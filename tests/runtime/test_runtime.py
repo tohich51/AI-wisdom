@@ -133,6 +133,10 @@ def test_rule_version_and_explicit_experience(world):
             replaces=original["id"],
         )
         assert version["version_no"] == 2 and version["lineage_id"] == original["id"]
+        assert {r["id"] for r in content.list_rules(conn, world["principal"], world["lib"])} == {
+            original["id"],
+            version["id"],
+        }
         records = writes.list_uses(conn, world["principal"])
         assert records[0]["rule_version_no"] == 1 and len(records[0]["outcomes"]) == 2
         with pytest.raises(AccessDenied):

@@ -453,7 +453,7 @@ def list_rules(
     limit: int = 100,
     offset: int = 0,
 ) -> list[dict[str, Any]]:
-    """List the latest RLS-visible version of each rule lineage in a library."""
+    """List RLS-visible rule versions, keeping published history beside draft corrections."""
     _require_principal(principal)
     library_id = _require_uuid(library_id, "library_id")
     limit = _bounded_integer(limit, "limit", minimum=1, maximum=100)
@@ -462,14 +462,13 @@ def list_rules(
     with transaction_identity(conn, principal), conn.cursor(row_factory=dict_row) as cursor:
         cursor.execute(
             """
-            SELECT DISTINCT ON (r.lineage_id)
-                   r.id, r.library_id, r.lineage_id, r.version_no, r.title,
+            SELECT r.id, r.library_id, r.lineage_id, r.version_no, r.title,
                    r.when_to_apply, r.expected_effect, r.verification,
                    r.publication, r.inputs, r.preconditions, r.exceptions,
                    r.created_at
             FROM kb.rule AS r
             WHERE r.library_id = %s
-            ORDER BY r.lineage_id, r.version_no DESC
+            ORDER BY r.created_at DESC, r.lineage_id, r.version_no DESC
             LIMIT %s OFFSET %s
             """,
             (library_id, limit, offset),
