@@ -1,0 +1,142 @@
+{
+  "fixture": "article.html",
+  "url": "https://example.test/article",
+  "retrieved_at": "2026-01-02T03:04:05+00:00",
+  "content_hash": "8b0d1355eeda3c91d5381da406d1969523dcee66d246b781579be93b0a657f35",
+  "extractor_version": "html-extract/1",
+  "title": "House style — reference",
+  "language": "en",
+  "truncated": false,
+  "truncation_reason": null,
+  "fragment_count": 20,
+  "fragments": [
+    {
+      "ordinal": 0,
+      "heading": "House style",
+      "truncated": false,
+      "text": "House style"
+    },
+    {
+      "ordinal": 1,
+      "heading": "House style",
+      "truncated": false,
+      "text": "This is the reference edition. It is superseded by nothing; when it changes, the change is a new version of this page."
+    },
+    {
+      "ordinal": 2,
+      "heading": "Capitalisation",
+      "truncated": false,
+      "text": "Capitalisation"
+    },
+    {
+      "ordinal": 3,
+      "heading": "Capitalisation",
+      "truncated": false,
+      "text": "Headings use sentence case. Acronyms stay upper case: the API, the CSS and the HTML are all written that way, and so is this sentence."
+    },
+    {
+      "ordinal": 4,
+      "heading": "Capitalisation",
+      "truncated": false,
+      "text": "One sentence per idea."
+    },
+    {
+      "ordinal": 5,
+      "heading": "Capitalisation",
+      "truncated": false,
+      "text": "No exclamation marks in body copy."
+    },
+    {
+      "ordinal": 6,
+      "heading": "Capitalisation",
+      "truncated": false,
+      "text": "Numbers up to nine are written out."
+    },
+    {
+      "ordinal": 7,
+      "heading": "Tables",
+      "truncated": false,
+      "text": "Tables"
+    },
+    {
+      "ordinal": 8,
+      "heading": "Tables",
+      "truncated": false,
+      "text": "Term"
+    },
+    {
+      "ordinal": 9,
+      "heading": "Tables",
+      "truncated": false,
+      "text": "Preferred"
+    },
+    {
+      "ordinal": 10,
+      "heading": "Tables",
+      "truncated": false,
+      "text": "Not used"
+    },
+    {
+      "ordinal": 11,
+      "heading": "Tables",
+      "truncated": false,
+      "text": "Sign-in"
+    },
+    {
+      "ordinal": 12,
+      "heading": "Tables",
+      "truncated": false,
+      "text": "sign-in"
+    },
+    {
+      "ordinal": 13,
+      "heading": "Tables",
+      "truncated": false,
+      "text": "logon"
+    },
+    {
+      "ordinal": 14,
+      "heading": "Tables",
+      "truncated": false,
+      "text": "Colour"
+    },
+    {
+      "ordinal": 15,
+      "heading": "Tables",
+      "truncated": false,
+      "text": "colour"
+    },
+    {
+      "ordinal": 16,
+      "heading": "Tables",
+      "truncated": false,
+      "text": "color"
+    },
+    {
+      "ordinal": 17,
+      "heading": "Tables",
+      "truncated": false,
+      "text": "See the tone chapter and the external glossary. The logo is at and is not part of the text."
+    },
+    {
+      "ordinal": 18,
+      "heading": "Entities & escapes",
+      "truncated": false,
+      "text": "Entities & escapes"
+    },
+    {
+      "ordinal": 19,
+      "heading": "Entities & escapes",
+      "truncated": false,
+      "text": "An ampersand &amp; a less-than < sign, and a non-breaking space that must read as one space."
+    }
+  ],
+  "detection_kinds": [],
+  "detection_offsets": [],
+  "referenced_urls": [
+    "https://example.test/assets/style.css",
+    "https://example.test/handbook/tone",
+    "https://example.test/external",
+    "https://example.test/assets/logo.png"
+  ]
+}
