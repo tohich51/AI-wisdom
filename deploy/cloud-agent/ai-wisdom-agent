@@ -1,0 +1,22 @@
+#!/usr/bin/env bash
+set -euo pipefail
+[[ "$(id -un)" == kb-inspect ]] || { echo '{"status":"error","code":"kb_inspect_required"}'; exit 1; }
+export XDG_RUNTIME_DIR="/run/user/$(id -u)"
+export DBUS_SESSION_BUS_ADDRESS="unix:path=$XDG_RUNTIME_DIR/bus"
+agent_root=/home/kb-inspect/.local/share/ai-wisdom-agent
+agent_config=/home/kb-inspect/ai-wisdom-config/minimax-cloud-client.json
+[[ -r "$agent_config" && -r "$agent_root/cloud_agent_client.py" ]] || {
+  echo '{"status":"error","code":"agent_client_not_configured"}'; exit 1;
+}
+cd /home/kb-inspect
+agent_image=$(podman inspect --type=container --format '{{.Image}}' pkb-gateway)
+[[ "$agent_image" =~ ^(sha256:)?[0-9a-f]{64}$ ]] || {
+  echo '{"status":"error","code":"gateway_image_identity_invalid"}'; exit 1;
+}
+exec podman run --rm --interactive --pull=never --read-only --cap-drop=all \
+  --security-opt=no-new-privileges --network=pkb-network \
+  --memory=256m --cpus=0.5 --pids-limit=64 --tmpfs=/tmp:rw,nosuid,nodev,size=16m \
+  --env=PYTHONDONTWRITEBYTECODE=1 \
+  --volume="$agent_config:/config/client.json:ro" \
+  --volume="$agent_root/cloud_agent_client.py:/client.py:ro" \
+  --entrypoint=python "$agent_image" /client.py "$@"
