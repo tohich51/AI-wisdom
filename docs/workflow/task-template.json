@@ -1,0 +1,50 @@
+{
+  "task_id": "REPLACE_ID",
+  "feature_id": "CXX",
+  "objective": "One observable user result",
+  "risk_class": "atomic|composite|high-risk",
+  "executor": "MiniMax subscription|Luna Codex",
+  "requested_model": "MiniMax-M3.1-Flash-Preview|gpt-6-luna",
+  "reasoning_or_thinking": "verify client-specific setting; MiniMax thinking; Luna low/medium",
+  "workspace_absolute": "REPLACE_VERIFIED_ISOLATED_PATH",
+  "base_sha": "REPLACE_EXACT_SHA",
+  "transport_capabilities": {
+    "files": false,
+    "shell": false,
+    "note": "Text chat has no files/shell; coding sandbox must be freshly verified."
+  },
+  "allowed_files": [],
+  "read_only_context": [],
+  "frozen_interfaces": [],
+  "dependencies_accepted": [],
+  "file_and_resource_leases": [],
+  "provider_capacity_verified": false,
+  "constraints": [
+    "preserve user edits",
+    "local-first focused checks",
+    "root-owned shared contracts/schema/locks",
+    "no secrets or private materials in prompt",
+    "no PAYG coding fallback",
+    "no unrelated push/deploy",
+    "do not set final accepted"
+  ],
+  "expected_artifact": "patch or complete allowed-file content plus receipt",
+  "checks_required": [],
+  "observable_acceptance": [],
+  "retry_budget": {
+    "max_corrected_attempts": 2,
+    "identical_retry": false,
+    "unknown_write": "reconcile same attempt before retry"
+  },
+  "result_required": [
+    "task_id",
+    "status",
+    "artifact_or_patch",
+    "checks_actually_run",
+    "unresolved",
+    "next_step",
+    "elapsed_seconds",
+    "model_wait_seconds",
+    "test_wait_seconds"
+  ]
+}

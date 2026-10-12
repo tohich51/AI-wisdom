@@ -1,0 +1,711 @@
+{
+  "schema_version": 1,
+  "recorded_date": "2026-10-12",
+  "mode": "planning_board_no_dispatch",
+  "owner": "root Codex",
+  "baseline_deployed_sha": "1fc0e5f6f38915165187849dd59a055ba2223680",
+  "baseline_cloud_sha": "45c4af57eaed2d338c76a46569fa12ed117f96d5",
+  "warning": "Status is dated; verify SHA and live receipt before assigning. Executor may propose updates but only root writes shared acceptance. No claim whole v1 ready.",
+  "target_coding_wip": 3,
+  "capacity_confirmed_for_three": false,
+  "shared_xorek_heavy_jobs_max": 1,
+  "features": [
+    {
+      "id": "C00",
+      "feature": "Среда, модель и рабочая папка",
+      "packages": [
+        "P00"
+      ],
+      "depends_on": [],
+      "implementation_status": "implemented",
+      "card_acceptance": "not_accepted_as_complete_card",
+      "remaining": "Функция есть в пилоте; отдельная полная card acceptance не приписывается автоматически.",
+      "running_task": null,
+      "file_leases": []
+    },
+    {
+      "id": "C01",
+      "feature": "Каркас backend и реальные команды проверки",
+      "packages": [
+        "P00"
+      ],
+      "depends_on": [
+        "C00"
+      ],
+      "implementation_status": "implemented",
+      "card_acceptance": "not_accepted_as_complete_card",
+      "remaining": "Функция есть в пилоте; отдельная полная card acceptance не приписывается автоматически.",
+      "running_task": null,
+      "file_leases": []
+    },
+    {
+      "id": "C02",
+      "feature": "Предметные и API-контракты",
+      "packages": [
+        "P00",
+        "P16"
+      ],
+      "depends_on": [
+        "C01"
+      ],
+      "implementation_status": "implemented",
+      "card_acceptance": "not_accepted_as_complete_card",
+      "remaining": "Функция есть в пилоте; отдельная полная card acceptance не приписывается автоматически.",
+      "running_task": null,
+      "file_leases": []
+    },
+    {
+      "id": "C03",
+      "feature": "Проверочный стык Keycloak и MCP",
+      "packages": [
+        "P01"
+      ],
+      "depends_on": [
+        "C01",
+        "C02"
+      ],
+      "implementation_status": "implemented",
+      "card_acceptance": "not_accepted_as_complete_card",
+      "remaining": "Функция есть в пилоте; отдельная полная card acceptance не приписывается автоматически.",
+      "running_task": null,
+      "file_leases": []
+    },
+    {
+      "id": "C04",
+      "feature": "Проверочный стык OpenViking и embeddings",
+      "packages": [
+        "P01"
+      ],
+      "depends_on": [
+        "C01",
+        "C02"
+      ],
+      "implementation_status": "implemented",
+      "card_acceptance": "not_accepted_as_complete_card",
+      "remaining": "Функция есть в пилоте; отдельная полная card acceptance не приписывается автоматически.",
+      "running_task": null,
+      "file_leases": []
+    },
+    {
+      "id": "C05",
+      "feature": "Новая схема БД и пустой bootstrap",
+      "packages": [
+        "P02"
+      ],
+      "depends_on": [
+        "C02",
+        "C03",
+        "C04"
+      ],
+      "implementation_status": "implemented",
+      "card_acceptance": "not_accepted_as_complete_card",
+      "remaining": "Функция есть в пилоте; отдельная полная card acceptance не приписывается автоматически.",
+      "running_task": null,
+      "file_leases": []
+    },
+    {
+      "id": "C06",
+      "feature": "RLS и единая серверная проверка доступа",
+      "packages": [
+        "P02"
+      ],
+      "depends_on": [
+        "C05"
+      ],
+      "implementation_status": "implemented",
+      "card_acceptance": "not_accepted_as_complete_card",
+      "remaining": "Функция есть в пилоте; отдельная полная card acceptance не приписывается автоматически.",
+      "running_task": null,
+      "file_leases": []
+    },
+    {
+      "id": "C07",
+      "feature": "Вход браузера и durable session",
+      "packages": [
+        "P03",
+        "P16"
+      ],
+      "depends_on": [
+        "C03",
+        "C06"
+      ],
+      "implementation_status": "implemented",
+      "card_acceptance": "not_accepted_as_complete_card",
+      "remaining": "Функция есть в пилоте; отдельная полная card acceptance не приписывается автоматически.",
+      "running_task": null,
+      "file_leases": []
+    },
+    {
+      "id": "C08",
+      "feature": "Пользователи, membership и отключение",
+      "packages": [
+        "P03"
+      ],
+      "depends_on": [
+        "C07"
+      ],
+      "implementation_status": "partial",
+      "card_acceptance": "not_accepted_as_complete_card",
+      "remaining": "API есть; UI пользователей/групп/grants отсутствует, приглашения передаются вручную.",
+      "running_task": null,
+      "file_leases": []
+    },
+    {
+      "id": "C09",
+      "feature": "Типы библиотек, доступ и связи проектов",
+      "packages": [
+        "P10"
+      ],
+      "depends_on": [
+        "C06"
+      ],
+      "implementation_status": "implemented",
+      "card_acceptance": "not_accepted_as_complete_card",
+      "remaining": "Функция есть в пилоте; отдельная полная card acceptance не приписывается автоматически.",
+      "running_task": null,
+      "file_leases": []
+    },
+    {
+      "id": "C10",
+      "feature": "Оригиналы и самостоятельная загрузка",
+      "packages": [
+        "P04",
+        "P16"
+      ],
+      "depends_on": [
+        "C09"
+      ],
+      "implementation_status": "implemented",
+      "card_acceptance": "not_accepted_as_complete_card",
+      "remaining": "Оригинал/metadata/dedup есть; полноценной замены издания/reingest нет.",
+      "running_task": null,
+      "file_leases": []
+    },
+    {
+      "id": "C11",
+      "feature": "PDF и EPUB с точным происхождением",
+      "packages": [
+        "P04"
+      ],
+      "depends_on": [
+        "C10"
+      ],
+      "implementation_status": "partial",
+      "card_acceptance": "not_accepted_as_complete_card",
+      "remaining": "Текстовые PDF/EPUB есть; scans needs_ocr, OCR отсутствует.",
+      "running_task": null,
+      "file_leases": []
+    },
+    {
+      "id": "C12A",
+      "feature": "DOCX: текст и структура",
+      "packages": [
+        "P04"
+      ],
+      "depends_on": [
+        "C10"
+      ],
+      "implementation_status": "implemented",
+      "card_acceptance": "not_accepted_as_complete_card",
+      "remaining": "Функция есть в пилоте; отдельная полная card acceptance не приписывается автоматически.",
+      "running_task": null,
+      "file_leases": []
+    },
+    {
+      "id": "C12B",
+      "feature": "Статьи по URL и ограниченный fetch",
+      "packages": [
+        "P04"
+      ],
+      "depends_on": [
+        "C10"
+      ],
+      "implementation_status": "implemented",
+      "card_acceptance": "not_accepted_as_complete_card",
+      "remaining": "Функция есть в пилоте; отдельная полная card acceptance не приписывается автоматически.",
+      "running_task": null,
+      "file_leases": []
+    },
+    {
+      "id": "C13",
+      "feature": "Очередь и возобновление обработки",
+      "packages": [
+        "P05"
+      ],
+      "depends_on": [
+        "C06",
+        "C10"
+      ],
+      "implementation_status": "implemented",
+      "card_acceptance": "not_accepted_as_complete_card",
+      "remaining": "Функция есть в пилоте; отдельная полная card acceptance не приписывается автоматически.",
+      "running_task": null,
+      "file_leases": []
+    },
+    {
+      "id": "C14",
+      "feature": "Общие лимиты и устаревшие попытки",
+      "packages": [
+        "P05",
+        "P16"
+      ],
+      "depends_on": [
+        "C13"
+      ],
+      "implementation_status": "partial",
+      "card_acceptance": "not_accepted_as_complete_card",
+      "remaining": "Concurrency1 и guards есть; полные org/actor caps и multiworker acceptance отсутствуют.",
+      "running_task": null,
+      "file_leases": []
+    },
+    {
+      "id": "C15",
+      "feature": "Provisioning библиотечных accounts",
+      "packages": [
+        "P07"
+      ],
+      "depends_on": [
+        "C04",
+        "C09"
+      ],
+      "implementation_status": "implemented",
+      "card_acceptance": "not_accepted_as_complete_card",
+      "remaining": "Функция есть в пилоте; отдельная полная card acceptance не приписывается автоматически.",
+      "running_task": null,
+      "file_leases": []
+    },
+    {
+      "id": "C16",
+      "feature": "Индексирование, manifest и поколения",
+      "packages": [
+        "P07",
+        "P16"
+      ],
+      "depends_on": [
+        "C11",
+        "C12A",
+        "C12B",
+        "C14",
+        "C15"
+      ],
+      "implementation_status": "implemented",
+      "card_acceptance": "not_accepted_as_complete_card",
+      "remaining": "Индексируются только опубликованные знания; semantic rules/experience не заявляются.",
+      "running_task": null,
+      "file_leases": []
+    },
+    {
+      "id": "C17",
+      "feature": "Поиск и каноническая выдача",
+      "packages": [
+        "P07"
+      ],
+      "depends_on": [
+        "C16"
+      ],
+      "implementation_status": "partial",
+      "card_acceptance": "not_accepted_as_complete_card",
+      "remaining": "Semantic и PostgreSQL FTS есть; unified RRF fusion отсутствует.",
+      "running_task": null,
+      "file_leases": []
+    },
+    {
+      "id": "C18",
+      "feature": "book-to-skill и контракт извлечения",
+      "packages": [
+        "P06"
+      ],
+      "depends_on": [
+        "C02",
+        "C11",
+        "C12A",
+        "C12B"
+      ],
+      "implementation_status": "partial",
+      "card_acceptance": "not_accepted_as_complete_card",
+      "remaining": "Свой MiniMax extraction prompt; upstream book-to-skill не интегрирован.",
+      "running_task": null,
+      "file_leases": []
+    },
+    {
+      "id": "C19",
+      "feature": "Изолированный model-runner и fake adapter",
+      "packages": [
+        "P06"
+      ],
+      "depends_on": [
+        "C14",
+        "C18"
+      ],
+      "implementation_status": "implemented",
+      "card_acceptance": "not_accepted_as_complete_card",
+      "remaining": "Функция есть в пилоте; отдельная полная card acceptance не приписывается автоматически.",
+      "running_task": null,
+      "file_leases": []
+    },
+    {
+      "id": "C20",
+      "feature": "Адаптер существующей MiniMax-подписки",
+      "packages": [
+        "P06",
+        "P01"
+      ],
+      "depends_on": [
+        "C19"
+      ],
+      "implementation_status": "implemented",
+      "card_acceptance": "not_accepted_as_complete_card",
+      "remaining": "Функция есть в пилоте; отдельная полная card acceptance не приписывается автоматически.",
+      "running_task": null,
+      "file_leases": []
+    },
+    {
+      "id": "C21",
+      "feature": "Знания, review и публикация правил",
+      "packages": [
+        "P06",
+        "P11"
+      ],
+      "depends_on": [
+        "C06",
+        "C18",
+        "C19"
+      ],
+      "implementation_status": "partial",
+      "card_acceptance": "not_accepted_as_complete_card",
+      "remaining": "Draft/publication есть; редактирование knowledge, reject, batch-review и conflict workflow неполны.",
+      "running_task": null,
+      "file_leases": []
+    },
+    {
+      "id": "C22",
+      "feature": "Версии и обязательные правила проекта",
+      "packages": [
+        "P11",
+        "P10"
+      ],
+      "depends_on": [
+        "C09",
+        "C21"
+      ],
+      "implementation_status": "partial",
+      "card_acceptance": "not_accepted_as_complete_card",
+      "remaining": "Pins/required links есть; автоматический brand manifest неполон.",
+      "running_task": null,
+      "file_leases": []
+    },
+    {
+      "id": "C23",
+      "feature": "Ожидания, результаты и личный опыт",
+      "packages": [
+        "P12"
+      ],
+      "depends_on": [
+        "C22"
+      ],
+      "implementation_status": "partial",
+      "card_acceptance": "not_accepted_as_complete_card",
+      "remaining": "Explicit exact-rule use/outcome и manual rating есть; автооценка каждого read и агрегаты отсутствуют.",
+      "running_task": null,
+      "file_leases": []
+    },
+    {
+      "id": "C24",
+      "feature": "Экспорт навыков с версиями",
+      "packages": [
+        "P11"
+      ],
+      "depends_on": [
+        "C22"
+      ],
+      "implementation_status": "implemented",
+      "card_acceptance": "not_accepted_as_complete_card",
+      "remaining": "Функция есть в пилоте; отдельная полная card acceptance не приписывается автоматически.",
+      "running_task": null,
+      "file_leases": []
+    },
+    {
+      "id": "C25",
+      "feature": "MCP: чтение и поиск",
+      "packages": [
+        "P08"
+      ],
+      "depends_on": [
+        "C08",
+        "C17",
+        "C22"
+      ],
+      "implementation_status": "partial",
+      "card_acceptance": "not_accepted_as_complete_card",
+      "remaining": "Native Codex принят; native MiniMax Cloud и второй device не приняты.",
+      "running_task": null,
+      "file_leases": []
+    },
+    {
+      "id": "C26",
+      "feature": "MCP: загрузка, опыт, задания и экспорт",
+      "packages": [
+        "P08",
+        "P12"
+      ],
+      "depends_on": [
+        "C23",
+        "C24",
+        "C25",
+        "C13"
+      ],
+      "implementation_status": "partial",
+      "card_acceptance": "not_accepted_as_complete_card",
+      "remaining": "10 MCP handlers есть; полная matrix/client/idempotency acceptance не завершена.",
+      "running_task": null,
+      "file_leases": []
+    },
+    {
+      "id": "C27",
+      "feature": "React-admin: каркас и авторизация",
+      "packages": [
+        "P09"
+      ],
+      "depends_on": [
+        "C07",
+        "C09"
+      ],
+      "implementation_status": "partial",
+      "card_acceptance": "not_accepted_as_complete_card",
+      "remaining": "Функциональный static UI; planned React-admin/семь разделов отсутствуют.",
+      "running_task": null,
+      "file_leases": []
+    },
+    {
+      "id": "C28",
+      "feature": "UI загрузки, provenance и review",
+      "packages": [
+        "P09"
+      ],
+      "depends_on": [
+        "C10",
+        "C13",
+        "C21",
+        "C27"
+      ],
+      "implementation_status": "partial",
+      "card_acceptance": "not_accepted_as_complete_card",
+      "remaining": "Upload/fragment/read/publish есть; URL form/PDF.js/batch review отсутствуют.",
+      "running_task": null,
+      "file_leases": []
+    },
+    {
+      "id": "C29",
+      "feature": "UI библиотек, доступа и проектов",
+      "packages": [
+        "P09",
+        "P10"
+      ],
+      "depends_on": [
+        "C08",
+        "C09",
+        "C22",
+        "C27"
+      ],
+      "implementation_status": "partial",
+      "card_acceptance": "not_accepted_as_complete_card",
+      "remaining": "Минимальные library links есть; users/groups/grants/project pins screens отсутствуют.",
+      "running_task": null,
+      "file_leases": []
+    },
+    {
+      "id": "C30",
+      "feature": "UI применения, оценок и экспорта",
+      "packages": [
+        "P09",
+        "P12"
+      ],
+      "depends_on": [
+        "C23",
+        "C24",
+        "C27"
+      ],
+      "implementation_status": "partial",
+      "card_acceptance": "not_accepted_as_complete_card",
+      "remaining": "Ручные expectations/outcomes/export есть; аналитика и автоматический feedback неполны.",
+      "running_task": null,
+      "file_leases": []
+    },
+    {
+      "id": "C31A",
+      "feature": "OCI-образы и воспроизводимая упаковка",
+      "packages": [
+        "P14"
+      ],
+      "depends_on": [
+        "C15",
+        "C19",
+        "C25",
+        "C28",
+        "C29",
+        "C30"
+      ],
+      "implementation_status": "implemented",
+      "card_acceptance": "not_accepted_as_complete_card",
+      "remaining": "Функция есть в пилоте; отдельная полная card acceptance не приписывается автоматически.",
+      "running_task": null,
+      "file_leases": []
+    },
+    {
+      "id": "C31B",
+      "feature": "Podman + Quadlet и закрытая сеть",
+      "packages": [
+        "P14"
+      ],
+      "depends_on": [
+        "C31A"
+      ],
+      "implementation_status": "implemented",
+      "card_acceptance": "not_accepted_as_complete_card",
+      "remaining": "Функция есть в пилоте; отдельная полная card acceptance не приписывается автоматически.",
+      "running_task": null,
+      "file_leases": []
+    },
+    {
+      "id": "C32",
+      "feature": "Резервная копия и восстановление",
+      "packages": [
+        "P14"
+      ],
+      "depends_on": [
+        "C31B"
+      ],
+      "implementation_status": "partial",
+      "card_acceptance": "not_accepted_as_complete_card",
+      "remaining": "Encrypted off-host backup есть; полный текущий product restore не принят.",
+      "running_task": null,
+      "file_leases": []
+    },
+    {
+      "id": "C33A",
+      "feature": "Приёмка identity и изоляции SQL",
+      "packages": [
+        "P13"
+      ],
+      "depends_on": [
+        "C25",
+        "C26",
+        "C29"
+      ],
+      "implementation_status": "acceptance_pending",
+      "card_acceptance": "not_accepted_as_complete_card",
+      "remaining": "Матрица A01-A20 не принята целиком; реальные частичные evidence существуют.",
+      "running_task": null,
+      "file_leases": []
+    },
+    {
+      "id": "C33B",
+      "feature": "Приёмка routing и lineage",
+      "packages": [
+        "P13"
+      ],
+      "depends_on": [
+        "C17",
+        "C22",
+        "C24",
+        "C30"
+      ],
+      "implementation_status": "acceptance_pending",
+      "card_acceptance": "not_accepted_as_complete_card",
+      "remaining": "Semantic/provenance/revoke проверены; вся lineage/routing matrix не принята.",
+      "running_task": null,
+      "file_leases": []
+    },
+    {
+      "id": "C33C",
+      "feature": "Приёмка гонок, входных данных и модели",
+      "packages": [
+        "P13"
+      ],
+      "depends_on": [
+        "C12B",
+        "C14",
+        "C19",
+        "C23",
+        "C26"
+      ],
+      "implementation_status": "acceptance_pending",
+      "card_acceptance": "not_accepted_as_complete_card",
+      "remaining": "Негативные regression tests есть; вся матрица не принята.",
+      "running_task": null,
+      "file_leases": []
+    },
+    {
+      "id": "C33D",
+      "feature": "Приёмка сети и восстановления",
+      "packages": [
+        "P13"
+      ],
+      "depends_on": [
+        "C31B",
+        "C32"
+      ],
+      "implementation_status": "acceptance_pending",
+      "card_acceptance": "not_accepted_as_complete_card",
+      "remaining": "Full auth/UI/index restored runtime не принят.",
+      "running_task": null,
+      "file_leases": []
+    },
+    {
+      "id": "C34",
+      "feature": "Качество поиска и ресурсный профиль",
+      "packages": [
+        "P13"
+      ],
+      "depends_on": [
+        "C17",
+        "C25",
+        "C31B"
+      ],
+      "implementation_status": "acceptance_pending",
+      "card_acceptance": "not_accepted_as_complete_card",
+      "remaining": "Canary есть; 50-query hit@5 и целевой load/P95 отсутствуют.",
+      "running_task": null,
+      "file_leases": []
+    },
+    {
+      "id": "C35",
+      "feature": "Чистый старт и несколько исполнителей",
+      "packages": [
+        "P17"
+      ],
+      "depends_on": [
+        "C14",
+        "C25",
+        "C31B"
+      ],
+      "implementation_status": "partial",
+      "card_acceptance": "not_accepted_as_complete_card",
+      "remaining": "Clean catalogue/restart проверены; полная S01-S04 не принята.",
+      "running_task": null,
+      "file_leases": []
+    },
+    {
+      "id": "C36",
+      "feature": "Возврат исходников и итоговой ведомости",
+      "packages": [
+        "P15"
+      ],
+      "depends_on": [
+        "C20",
+        "C32",
+        "C33A",
+        "C33B",
+        "C33C",
+        "C33D",
+        "C34",
+        "C35"
+      ],
+      "implementation_status": "partial",
+      "card_acceptance": "not_accepted_as_complete_card",
+      "remaining": "Bundle/handoff есть; full acceptance и colleague/two-device путь не принят. GitHub не pushed.",
+      "running_task": null,
+      "file_leases": []
+    }
+  ]
+}
