@@ -1,5 +1,6 @@
 """FastAPI application factory for the knowledge-base gateway."""
 
+import hashlib
 import os
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -7,7 +8,7 @@ from pathlib import Path
 import anyio
 import httpx
 from fastapi import FastAPI, Request
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from psycopg_pool import ConnectionPool
 from starlette.middleware.trustedhost import TrustedHostMiddleware
@@ -96,10 +97,14 @@ def create_app() -> FastAPI:
     app.include_router(content.router, prefix="/api")
     static = Path(__file__).parent / "static"
     app.mount("/static", StaticFiles(directory=static), name="static")
+    index_html = (static / "index.html").read_text(encoding="utf-8")
+    for asset in ("app.js", "style.css"):
+        digest = hashlib.sha256((static / asset).read_bytes()).hexdigest()[:16]
+        index_html = index_html.replace(f"/static/{asset}", f"/static/{asset}?v={digest}")
 
     @app.get("/", include_in_schema=False)
     def index():
-        return FileResponse(static / "index.html")
+        return HTMLResponse(index_html, headers={"Cache-Control": "no-cache"})
 
     @app.get("/healthz")
     def healthz() -> dict[str, str]:
