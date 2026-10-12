@@ -744,6 +744,11 @@ opentelemetry-api==1.45.1 \
     # via
     #   fastapi
     #   mcp
+openviking-sdk==0.1.14 \
+    --hash=sha256:482984351c1bb978d33ec5e6e0e55eaed8944c8df12e08e55b8de707ed067213 \
+    --hash=sha256:1b13fc5019f89954a02991749871c9dc91af3ec386c94544041340e754794179
+    # via kb (pyproject.toml)
+
 orjson==3.11.7 \
     --hash=sha256:043d3006b7d32c7e233b8cfb1f01c651013ea079e08dcef7189a29abd8befe11 \
     --hash=sha256:0527a4510c300e3b406591b0ba69b5dc50031895b0a93743526a3fc45f59d26e \

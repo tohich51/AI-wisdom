@@ -1,0 +1,25 @@
+[Unit]
+Description=AI-wisdom semantic indexer (one writer, published knowledge only)
+Requires=pkb-postgres.service pkb-openviking.service
+After=pkb-postgres.service pkb-openviking.service
+
+[Container]
+Image=localhost/ai-wisdom:__RELEASE_SHA__
+Network=pkb.network
+ContainerName=pkb-indexer
+Exec=indexer
+ReadOnly=true
+NoNewPrivileges=true
+EnvironmentFile=%h/ai-wisdom-config/indexer.env
+Volume=%h/ai-wisdom-config/openviking/root.key:/run/secrets/openviking-root:ro
+Volume=%h/ai-wisdom-config/openviking-service-keys:/run/index-keys
+Volume=%h/ai-wisdom-config/openviking-bootstrap:/run/bootstrap-keys
+Tmpfs=/tmp:rw,nosuid,nodev,size=128m
+PodmanArgs=--memory=768m --memory-swap=768m --cpus=1 --pids-limit=256
+
+[Service]
+Restart=on-failure
+TimeoutStartSec=300
+
+[Install]
+WantedBy=default.target

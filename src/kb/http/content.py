@@ -2,7 +2,7 @@
 
 from uuid import UUID
 
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, Query, Request
 from pydantic import BaseModel, ConfigDict, Field
 
 from kb.catalog import content, writes
@@ -82,6 +82,7 @@ def job(job_id: UUID, conn: Db, me: Me):
 
 @router.get("/search")
 def search(
+    request: Request,
     conn: Db,
     me: Me,
     q: str = Query(min_length=1, max_length=2000),
@@ -89,7 +90,14 @@ def search(
     limit: int = Query(default=10, ge=1, le=50),
 ):
     with mapped_errors():
-        return content.search_knowledge(conn, me, q, [library_id] if library_id else None, limit)
+        return content.search_knowledge(
+            conn,
+            me,
+            q,
+            [library_id] if library_id else None,
+            limit,
+            semantic=getattr(request.app.state, "semantic_search", None),
+        )
 
 
 @router.get("/libraries/{library_id}/knowledge")

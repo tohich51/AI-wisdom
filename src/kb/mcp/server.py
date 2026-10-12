@@ -120,7 +120,14 @@ def build_mcp(app, hosts):
         )
         if args.use_generation:
             raise ValueError("generation_is_not_retrieval")
-        return call(ctx, content.search_knowledge, args.query, args.library_ids, args.limit)
+        return call(
+            ctx,
+            content.search_knowledge,
+            args.query,
+            args.library_ids,
+            args.limit,
+            semantic=getattr(app.state, "semantic_search", None),
+        )
 
     @server.tool()
     def read_source(source_id: UUID, ctx: Context, from_fragment: int = 0, limit: int = 20):

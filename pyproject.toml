@@ -16,6 +16,7 @@ dependencies = [
     "sqlalchemy==2.1.4",
     "alembic==1.20.0",
     "httpx==0.28.1",
+    "openviking-sdk==0.1.14",
     # OIDC: authlib provides discovery, PKCE, code exchange and ID-token
     # verification as a library. The card forbids a hand-rolled OAuth flow,
     # and httpx+PyJWT is exactly the choreography-by-hand that a reviewer

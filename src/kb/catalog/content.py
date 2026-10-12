@@ -344,7 +344,58 @@ def read_source(
     }
 
 
-def search_knowledge(
+def attach_knowledge_provenance(cursor, hits) -> None:
+    provenance_by_hit: dict[UUID, list[dict[str, Any]]] = {hit["id"]: [] for hit in hits}
+    if hits:
+        cursor.execute(
+            """
+            SELECT kp.knowledge_id, kp.source_id, kp.fragment_id,
+                   kp.author, kp.publication_ref, kp.url, kp.retrieved_at,
+                   f.id AS located_fragment_id,
+                   f.ordinal, f.locator_kind, f.file_page, f.printed_label,
+                   f.chapter, f.paragraph, f.snapshot_url, f.snapshot_at
+            FROM kb.knowledge_provenance AS kp
+            LEFT JOIN kb.fragment AS f
+              ON f.id = kp.fragment_id
+             AND f.source_id = kp.source_id
+            WHERE kp.knowledge_id = ANY(%s::uuid[])
+            ORDER BY kp.knowledge_id, kp.source_id,
+                     kp.fragment_id NULLS FIRST
+            """,
+            ([hit["id"] for hit in hits],),
+        )
+        for row in cursor.fetchall():
+            locator = None
+            if row["located_fragment_id"] is not None:
+                locator = {
+                    "ordinal": row["ordinal"],
+                    "locator_kind": row["locator_kind"],
+                    "file_page": row["file_page"],
+                    "printed_label": row["printed_label"],
+                    "chapter": row["chapter"],
+                    "paragraph": row["paragraph"],
+                    "snapshot_url": row["snapshot_url"],
+                    "snapshot_at": row["snapshot_at"],
+                }
+            bucket = provenance_by_hit.get(row["knowledge_id"])
+            if bucket is not None:
+                bucket.append(
+                    {
+                        "source_id": row["source_id"],
+                        "fragment_id": row["fragment_id"],
+                        "author": row["author"],
+                        "publication_ref": row["publication_ref"],
+                        "url": row["url"],
+                        "retrieved_at": row["retrieved_at"],
+                        "locator": locator,
+                    }
+                )
+
+    for hit in hits:
+        hit["provenance"] = provenance_by_hit[hit["id"]]
+
+
+def lexical_search_knowledge(
     conn: psycopg.Connection,
     principal: Principal,
     query: str,
@@ -372,6 +423,10 @@ def search_knowledge(
             FROM request
             CROSS JOIN kb.knowledge AS k
             WHERE request.tsquery IS NOT NULL
+              AND k.publication <> 'withdrawn'
+              AND NOT EXISTS(SELECT 1 FROM kb.knowledge_provenance p
+                             JOIN kb.source s ON s.id=p.source_id
+                             WHERE p.knowledge_id=k.id AND s.publication='withdrawn')
               AND to_tsvector('simple', k.statement) @@ request.tsquery
               AND (
                   %s::uuid[] IS NULL
@@ -389,54 +444,7 @@ def search_knowledge(
         )
         hits = [dict(row) for row in cursor.fetchall()]
 
-        provenance_by_hit: dict[UUID, list[dict[str, Any]]] = {hit["id"]: [] for hit in hits}
-        if hits:
-            cursor.execute(
-                """
-                SELECT kp.knowledge_id, kp.source_id, kp.fragment_id,
-                       kp.author, kp.publication_ref, kp.url, kp.retrieved_at,
-                       f.id AS located_fragment_id,
-                       f.ordinal, f.locator_kind, f.file_page, f.printed_label,
-                       f.chapter, f.paragraph, f.snapshot_url, f.snapshot_at
-                FROM kb.knowledge_provenance AS kp
-                LEFT JOIN kb.fragment AS f
-                  ON f.id = kp.fragment_id
-                 AND f.source_id = kp.source_id
-                WHERE kp.knowledge_id = ANY(%s::uuid[])
-                ORDER BY kp.knowledge_id, kp.source_id,
-                         kp.fragment_id NULLS FIRST
-                """,
-                ([hit["id"] for hit in hits],),
-            )
-            for row in cursor.fetchall():
-                locator = None
-                if row["located_fragment_id"] is not None:
-                    locator = {
-                        "ordinal": row["ordinal"],
-                        "locator_kind": row["locator_kind"],
-                        "file_page": row["file_page"],
-                        "printed_label": row["printed_label"],
-                        "chapter": row["chapter"],
-                        "paragraph": row["paragraph"],
-                        "snapshot_url": row["snapshot_url"],
-                        "snapshot_at": row["snapshot_at"],
-                    }
-                bucket = provenance_by_hit.get(row["knowledge_id"])
-                if bucket is not None:
-                    bucket.append(
-                        {
-                            "source_id": row["source_id"],
-                            "fragment_id": row["fragment_id"],
-                            "author": row["author"],
-                            "publication_ref": row["publication_ref"],
-                            "url": row["url"],
-                            "retrieved_at": row["retrieved_at"],
-                            "locator": locator,
-                        }
-                    )
-
-    for hit in hits:
-        hit["provenance"] = provenance_by_hit[hit["id"]]
+        attach_knowledge_provenance(cursor, hits)
 
     return {
         "mode": "lexical",
@@ -444,6 +452,18 @@ def search_knowledge(
         "hits": hits,
         "retrieved_only": True,
     }
+
+
+def search_knowledge(conn, principal, query, library_ids=None, limit=10, *, semantic=None):
+    """Shared HTTP/MCP search; the configured service owns semantic retrieval."""
+    _require_principal(principal)
+    if not isinstance(query, str) or not query.strip() or len(query) > 2000:
+        raise ValueError("query must contain 1..2000 characters")
+    scopes = _normalise_uuids(library_ids, "library_ids", deny_none=False)
+    limit = _bounded_integer(limit, "limit", minimum=1, maximum=50)
+    if semantic is not None:
+        return semantic.search(conn, principal, query, scopes, limit)
+    return lexical_search_knowledge(conn, principal, query, scopes, limit)
 
 
 def list_rules(

@@ -620,6 +620,9 @@ def run_provisioning(
     request_id: UUID,
     admin: IndexAdminPort,
     sink: SecretSink,
+    *,
+    dimension: int = DEFAULT_DIMENSION,
+    embedding_profile: str = DEFAULT_EMBEDDING_PROFILE,
 ) -> ProvisioningOutcome:
     """Carry out one provisioning request. Resumable, and it never leaks a key.
 
@@ -683,7 +686,7 @@ def run_provisioning(
         )
         current_attempt = attempt + 1
 
-    spec = build_account_spec(library_id)
+    spec = build_account_spec(library_id, dimension=dimension, embedding_profile=embedding_profile)
     done = _completed_steps(conn, principal, request_id)
     outcomes: list[StepOutcome] = []
     refs: list[SecretRef] = []

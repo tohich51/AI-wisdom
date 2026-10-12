@@ -7,7 +7,7 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description="Run a personal knowledge base service.")
     parser.add_argument(
         "service",
-        choices=("gateway", "worker", "model-runner", "migrate"),
+        choices=("gateway", "worker", "model-runner", "indexer", "migrate"),
     )
     args, remaining = parser.parse_known_args(sys.argv[1:] if argv is None else argv)
 
@@ -28,6 +28,7 @@ def main(argv=None):
         "worker": "kb.ingestion",
         "model-runner": "kb.model_runner",
         "migrate": "kb.migrate",
+        "indexer": "kb.indexer",
     }
     return import_module(modules[args.service]).main()
 

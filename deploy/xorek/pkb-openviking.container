@@ -1,0 +1,22 @@
+[Unit]
+Description=AI-wisdom OpenViking vectors and isolated library accounts
+After=network-online.target
+
+[Container]
+Image=ghcr.io/volcengine/openviking@sha256:2c104187d17d9b5c837d578990ae574807ad8ab78ba84191ddafabfde207af38
+Network=pkb.network
+ContainerName=pkb-openviking
+PodmanArgs=--network-alias=pkb-openviking --memory=2G --memory-swap=2G --cpus=1.5 --pids-limit=512
+Environment=OPENVIKING_WITH_BOT=0
+Environment=OPENVIKING_CONFIG_FILE=/etc/openviking/ov.conf
+PublishPort=127.0.0.1:19285:1933
+Volume=%h/ai-wisdom-config/openviking/ov.conf:/etc/openviking/ov.conf:ro
+Volume=%h/ai-wisdom-data/openviking:/data
+NoNewPrivileges=true
+
+[Service]
+Restart=on-failure
+TimeoutStartSec=300
+
+[Install]
+WantedBy=default.target

@@ -38,7 +38,7 @@ def install_queue(dsn):
                         sql.SQL("REVOKE ALL ON {} FROM PUBLIC").format(sql.Identifier(name))
                     )
                     conn.execute(
-                        sql.SQL("GRANT ALL ON {} {} TO kb_app,kb_worker").format(
+                        sql.SQL("GRANT ALL ON {} {} TO kb_app,kb_worker,kb_provisioner").format(
                             sql.SQL(kind), sql.Identifier(name)
                         )
                     )

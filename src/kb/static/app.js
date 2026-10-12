@@ -182,7 +182,7 @@ byId('create-library').addEventListener('submit', safe(async event => {
 }));
 byId('search').addEventListener('submit', safe(async event => {
   const query = new FormData(event.target).get('q'); const result = await api('/api/search?q=' + encodeURIComponent(query));
-  const list = byId('search-results'); list.replaceChildren(node('p', 'Лексический поиск · ' + result.hits.length + ' совпадений'));
+  const list = byId('search-results'); list.replaceChildren(node('p', ({semantic:'Поиск по смыслу',hybrid:'Поиск по смыслу и словам',lexical:'Поиск по словам'}[result.mode] || result.mode) + ' · ' + result.hits.length + ' совпадений'));
   for (const hit of result.hits) list.append(node('p', hit.statement), node('pre', JSON.stringify(hit.provenance, null, 2)));
 }));
 byId('logout').addEventListener('click', safe(async () => { await post('/auth/logout'); location.reload(); }));
@@ -193,6 +193,7 @@ for (const tab of document.querySelectorAll('[data-tab]')) tab.addEventListener(
 }));
 safe(async () => {
   identity = await api('/api/me'); document.querySelector('.login').hidden = true;
-  message('Эмбеддинги не настроены · поиск лексический · извлечение создаёт черновики через MiniMax.');
+  const readiness = await api('/readyz');
+  message(readiness.semantic_search_enabled ? 'Поиск по смыслу доступен для опубликованных знаний. Извлечение создаёт черновики для проверки.' : 'Поиск по словам · извлечение создаёт черновики для проверки.');
   await loadLibraries();
 })();
