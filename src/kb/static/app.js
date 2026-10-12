@@ -160,7 +160,17 @@ async function openLibrary(lib) {
   for (const item of await api('/api/libraries/' + lib.id + '/knowledge')) {
     const card = node('article', null, {class: 'card'});
     card.append(node('p', item.kind + ' · ' + item.publication), node('p', item.statement));
-    if (curator && item.publication !== 'published') card.append(button('Подтвердить знание', async () => { await post('/api/knowledge/' + item.id + '/publish'); await openLibrary(lib); }));
+    if (item.publication === 'withdrawn') card.append(node('p', 'Знание отозвано.'));
+    if (curator && ['draft', 'needs_review'].includes(item.publication)) {
+      const publish = button('Подтвердить знание', async () => { await post('/api/knowledge/' + item.id + '/publish'); await openLibrary(lib); });
+      const reject = button('Отклонить черновик', async event => {
+        const action = event.currentTarget; action.disabled = true;
+        try { await post('/api/knowledge/' + item.id + '/reject'); await openLibrary(lib); }
+        catch (error) { message(error.message); }
+        finally { action.disabled = false; }
+      });
+      card.append(publish, reject);
+    }
     root.append(card);
   }
   root.append(node('h3', 'Правила и навыки'));
@@ -168,7 +178,17 @@ async function openLibrary(lib) {
     const card = node('article', null, {class: 'card'}); card.append(node('h4', rule.title + ' · v' + rule.version_no + ' · ' + rule.publication));
     for (const [title, value] of [['Когда', rule.when_to_apply], ['Входные данные', rule.inputs?.join('\n')], ['Шаги', rule.actions?.join('\n')], ['Исключения', rule.exceptions?.join('\n')], ['Ожидаемый эффект', rule.expected_effect]]) card.append(node('strong', title), node('p', value ?? 'не указано'));
     card.append(node('details', null)); const detail = card.lastChild; detail.append(node('summary', 'Происхождение'), node('pre', JSON.stringify(rule.provenance, null, 2)));
-    if (curator && rule.publication !== 'published') card.append(button('Опубликовать', async () => { await post('/api/rules/' + rule.id + '/publish'); await openLibrary(lib); }));
+    if (rule.publication === 'withdrawn') card.append(node('p', 'Правило отозвано.'));
+    if (curator && ['draft', 'needs_review'].includes(rule.publication)) {
+      const publish = button('Опубликовать', async () => { await post('/api/rules/' + rule.id + '/publish'); await openLibrary(lib); });
+      const reject = button('Отклонить черновик', async event => {
+        const action = event.currentTarget; action.disabled = true;
+        try { await post('/api/rules/' + rule.id + '/reject'); await openLibrary(lib); }
+        catch (error) { message(error.message); }
+        finally { action.disabled = false; }
+      });
+      card.append(publish, reject);
+    }
     if (contributor) card.append(button('Новая версия', () => ruleEditor(lib, rule)));
     if (rule.publication === 'published') {
       card.append(button('Я применил это правило', () => dialogForm('Зафиксировать применение', form => {
