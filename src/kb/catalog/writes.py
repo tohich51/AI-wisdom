@@ -93,6 +93,103 @@ def publish(conn, principal, ident, *, knowledge=False):
         return {"id": str(row[0]), "publication": "published"}
 
 
+def reject(conn, principal, ident, *, knowledge=False):
+    """Withdraw a draft or a rule awaiting review, for a curator of *that* library.
+
+    Rejection is a change of publication_status and nothing else: the row, its
+    provenance and its version history are left exactly as they were. There is
+    no ``reason`` parameter, because there is nowhere to put one.
+
+    **The authority test is part of the mutation, not a statement before it.**
+    An earlier version read the role in its own SELECT and then issued a bare
+    ``UPDATE ... WHERE id=%s``. Nothing locked ``kb.library_grant`` between the
+    two statements, so a demotion committed in that window was invisible to the
+    read and visible to the write; the row lock was on the rule, not on the
+    grant. RLS did not save it either: ``knowledge_write``/``rule_write`` only
+    require contributor, and the 0006 triggers only guard a row becoming
+    *published*, not one becoming withdrawn. One statement means one snapshot,
+    so the authority to write and the decision to write are the same decision.
+
+    The mutation therefore carries its own predicates, and a refusal is a zero
+    row count reported as ``AccessDenied`` — the same answer as a row that was
+    never there, and as a row the caller cannot see. Repeats are answered by a
+    second statement that re-runs the identical predicates against the state
+    *now*, so a curator whose grant or membership has gone answers 403 even
+    though the row is already withdrawn and the answer would otherwise be the
+    same.
+    """
+    if principal.generation_watermark < 1:
+        raise AccessDenied("forbidden")
+    with transaction_identity(conn, principal), conn.cursor() as cur:
+        # Identifiers are fixed literals; never interpolate request values.
+        # 30 is kb.role_rank('curator'): the same bar the 0006 triggers set for
+        # publication, and the same one the RLS policies use for curation.
+        update = (
+            """UPDATE kb.knowledge SET publication='withdrawn'
+          WHERE id=%s AND publication IN ('draft','needs_review')
+            AND COALESCE(kb.role_rank(kb.effective_role(%s, kb.knowledge.library_id)),0) >= 30
+            AND kb.membership_allows(%s)
+            AND EXISTS (SELECT 1 FROM kb.library l JOIN kb.membership m
+                          ON m.organisation_id = l.organisation_id
+                        WHERE l.id = kb.knowledge.library_id
+                          AND m.principal_id = %s AND m.status = 'active')
+          RETURNING id"""
+            if knowledge
+            else """UPDATE kb.rule SET publication='withdrawn'
+          WHERE id=%s AND publication IN ('draft','needs_review')
+            AND COALESCE(kb.role_rank(kb.effective_role(%s, kb.rule.library_id)),0) >= 30
+            AND kb.membership_allows(%s)
+            AND EXISTS (SELECT 1 FROM kb.library l JOIN kb.membership m
+                          ON m.organisation_id = l.organisation_id
+                        WHERE l.id = kb.rule.library_id
+                          AND m.principal_id = %s AND m.status = 'active')
+          RETURNING id"""
+        )
+        cur.execute(
+            update, (ident, principal.principal_id, principal.principal_id, principal.principal_id)
+        )
+        if cur.rowcount:
+            return {"id": str(ident), "publication": "withdrawn"}
+
+        # Nothing was written. The identical predicates run again, now, to tell
+        # an already-withdrawn row from a published one from a refusal. They
+        # are not a cache of the first statement: this is a second read of the
+        # grant and the membership, under this statement's snapshot.
+        classify = (
+            """SELECT id,publication FROM kb.knowledge WHERE id=%s
+            AND COALESCE(kb.role_rank(kb.effective_role(%s, kb.knowledge.library_id)),0) >= 30
+            AND kb.membership_allows(%s)
+            AND EXISTS (SELECT 1 FROM kb.library l JOIN kb.membership m
+                          ON m.organisation_id = l.organisation_id
+                        WHERE l.id = kb.knowledge.library_id
+                          AND m.principal_id = %s AND m.status = 'active')"""
+            if knowledge
+            else """SELECT id,publication FROM kb.rule WHERE id=%s
+            AND COALESCE(kb.role_rank(kb.effective_role(%s, kb.rule.library_id)),0) >= 30
+            AND kb.membership_allows(%s)
+            AND EXISTS (SELECT 1 FROM kb.library l JOIN kb.membership m
+                          ON m.organisation_id = l.organisation_id
+                        WHERE l.id = kb.rule.library_id
+                          AND m.principal_id = %s AND m.status = 'active')"""
+        )
+        cur.execute(
+            classify,
+            (ident, principal.principal_id, principal.principal_id, principal.principal_id),
+        )
+        row = cur.fetchone()
+        if row is None:
+            # Not here, not visible, not a curator, not an active member: one
+            # answer, because the difference is a directory of invisible rows.
+            raise AccessDenied("forbidden")
+        if row[1] == "withdrawn":
+            return {"id": str(row[0]), "publication": "withdrawn"}
+        if row[1] == "published":
+            raise ValueError("a published item is not withdrawn here")
+        # draft or needs_review, and yet the mutation matched nothing. Refused
+        # rather than reported as a withdrawal: a zero count is not a success.
+        raise AccessDenied("forbidden")
+
+
 def start_use(conn, principal, rule_id, version_no, expected_result=None, where_applied=None):
     with transaction_identity(conn, principal), conn.cursor(row_factory=dict_row) as cur:
         cur.execute(

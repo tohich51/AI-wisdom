@@ -91,7 +91,7 @@ async function openLibrary(lib) {
   const contributor = curator || mine?.role === 'contributor';
   root.append(node('p', 'Тип: ' + lib.kind + ' · Доступ: ' + (mine?.role ?? 'через группу')));
   if (contributor) {
-    const form = node('form'); field(form, 'Название материала', 'title');
+    const form = node('form'); form.append(node('h3', 'Загрузить файл')); field(form, 'Название материала', 'title');
     const input = field(form, 'PDF, EPUB, DOCX, HTML или текст', 'file', '', 'file'); input.required = true;
     field(form, 'Автор (если известен)', 'author'); field(form, 'Издание (если известно)', 'edition');
     const extract = node('input', null, {type: 'checkbox', id: 'extract'});
@@ -103,6 +103,47 @@ async function openLibrary(lib) {
       await api('/api/sources/' + saved.source.id + '/metadata', {method: 'PATCH', body: JSON.stringify({author: values.get('author') || null, edition: values.get('edition') || null, publication_ref: null})});
       await processSource(saved.source.id, extract.checked);
     })); root.append(form);
+    const urlForm = node('form'); urlForm.append(node('h3', 'Добавить статью по URL'));
+    const urlInput = field(urlForm, 'URL статьи (http или https)', 'url', '', 'url');
+    urlInput.required = true; urlInput.maxLength = 2048; urlInput.autocomplete = 'url';
+    const titleInput = field(urlForm, 'Название материала (необязательно)', 'title'); titleInput.maxLength = 300;
+    const extractUrl = node('input', null, {type: 'checkbox', id: 'extract-url'});
+    urlForm.append(extractUrl, node('label', 'Извлечь знания и правила через мою подписку MiniMax (для владельца)', {for: 'extract-url'}));
+    const urlSubmit = node('button', 'Добавить и обработать', {type: 'submit'});
+    urlForm.append(urlSubmit);
+    let pendingUrlOperation = null;
+    const submitUrl = async () => {
+      const url = urlInput.value.trim();
+      const title = titleInput.value.trim();
+      const extract = extractUrl.checked;
+      const unchanged = pendingUrlOperation && pendingUrlOperation.url === url && pendingUrlOperation.title === title && pendingUrlOperation.extract === extract;
+      if (!url || url.length > 2048) { pendingUrlOperation = null; message('Укажите URL статьи длиной до 2048 символов.'); urlInput.focus(); return; }
+      if (title.length > 300) { pendingUrlOperation = null; message('Название должно содержать не более 300 символов.'); titleInput.focus(); return; }
+      try {
+        const parsed = new URL(url);
+        if (!['http:', 'https:'].includes(parsed.protocol)) throw Error();
+      } catch (_) { pendingUrlOperation = null; message('Введите полный URL статьи, начинающийся с http:// или https://.'); urlInput.focus(); return; }
+      if (!unchanged) pendingUrlOperation = {url, title, key: crypto.randomUUID(), extract};
+      urlSubmit.disabled = true;
+      message('Сохраняю URL статьи…');
+      try {
+        const body = {url: pendingUrlOperation.url, idempotency_key: pendingUrlOperation.key};
+        if (pendingUrlOperation.title) body.title = pendingUrlOperation.title;
+        const saved = await post('/api/libraries/' + lib.id + '/sources/from-url', body);
+        const operation = pendingUrlOperation;
+        pendingUrlOperation = null;
+        urlForm.reset();
+        message('Статья сохранена как источник ' + saved.source.id + '. Запускаю обработку…');
+        try {
+          await processSource(saved.source.id, operation.extract);
+        } catch (error) {
+          message('Источник ' + saved.source.id + ' сохранён, но статус обработки получить не удалось: ' + error.message + '. Проверьте обработку в списке источников.');
+        }
+      } catch (error) {
+        message(error.message + (pendingUrlOperation ? ' При неопределённом результате повторите отправку этой же статьи: ключ операции сохранён.' : ''));
+      } finally { urlSubmit.disabled = false; }
+    };
+    urlForm.addEventListener('submit', safe(submitUrl)); root.append(urlForm);
     root.append(button('Создать правило вручную', () => ruleEditor(lib)));
   }
   root.append(node('h3', 'Источники и происхождение'));

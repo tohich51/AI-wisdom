@@ -1,0 +1,215 @@
+{
+  "task": "M01",
+  "title": "Rejection of knowledge drafts and rules awaiting review",
+  "status": "review",
+  "accepted_by": null,
+  "round": 2,
+  "round_note": "Round 1 was 0cb2ff (code) and 1095404 (receipt). This round fixes the P2 TOCTOU found by the independent review of 1095404 and corrects three false claims in the round-1 receipt. Status is still review; only root sets accepted.",
+  "worktree": "/home/kb-inspect/projects/m01-reject",
+  "branch": "m01-reject",
+  "base_sha": "45c4af57eaed2d338c76a46569fa12ed117f96d5",
+  "reviewed_commit": "1095404455ee038ce5f08164bb3ed7ba25c0bff0",
+  "head_sha": "5af70f6eff5ab6496013df9bfcee5b14b72ae094",
+  "head_sha_note": "head_sha is the code commit for this round: the implementation and test files, parented on reviewed_commit. This report is committed on top of it as the receipt commit, so the review range is 45c4af5..m01-reject.",
+  "changed_files_this_round": [
+    "src/kb/catalog/writes.py",
+    "tests/runtime/test_draft_review.py",
+    "docs/handoff/results/M01.json"
+  ],
+  "lease_respected": true,
+  "untouched": [
+    "src/kb/static/app.js",
+    "src/kb/http/libraries.py",
+    "migrations/",
+    "pyproject.toml",
+    "justfile",
+    "requirements.lock",
+    "tests/runtime/test_runtime.py"
+  ],
+  "p2_toctou": {
+    "finding": "Round 1 checked the caller's role in a separate SELECT and then issued a bare UPDATE carrying only id and publication. A curator-to-contributor grant change committing between those two statements would let the UPDATE proceed on contributor RLS. SELECT ... FOR UPDATE did not help: the lock was on kb.knowledge/kb.rule, not on kb.library_grant, and the 0006 triggers only guard a row becoming published, not one becoming withdrawn.",
+    "fix": "The authority test now lives inside the mutation statement. The UPDATE carries its own WHERE predicates, so the decision to write and the authority to write are the same statement under the same snapshot. There is no statement boundary between them for a concurrent grant change to fall into.",
+    "what_the_mutation_statement_requires": [
+      "publication IN ('draft','needs_review')",
+      "COALESCE(kb.role_rank(kb.effective_role(<principal>, <table>.library_id)),0) >= 30, read on the target row's own library",
+      "kb.membership_allows(<principal>), the product's own global membership fence",
+      "EXISTS an active kb.membership row for <principal> in the target library's organisation"
+    ],
+    "identifier_handling": "unchanged from round 1 and still satisfied: the two statements are complete literal strings chosen by a branch, never formatted from a request value. All values are bound with %s.",
+    "replay_path": "A repeat issues a second statement carrying the identical predicates, evaluated against the state now. A caller whose grant or membership has gone therefore gets 403 even though the row is already withdrawn and the answer would otherwise be identical. The role is re-read in that statement; it is not a value carried over from the first one.",
+    "watermark": "principal.generation_watermark < 1 is refused before any SQL, preserving the generation check that kb.access.policy.authorize used to perform here. The authorize() call itself was removed: the role comparison now happens in SQL, and leaving a Python role check in front of it would have reintroduced the two-decision shape this round exists to remove."
+  },
+  "membership_finding": {
+    "summary": "The reviewer asked for active membership to be required, not only a grant row. It is now required, and the investigation turned up two different defence stories that the tests state separately rather than blur together.",
+    "deactivated_membership": "kb.membership_allows returns false while a deactivated row exists, and membership_must_be_active is a RESTRICTIVE policy on kb.library_grant, which kb.effective_role reads. So the database already refuses this caller's bare write (verified in the test: the unguarded UPDATE reports 0 rows). The endpoint's own predicate is defence in depth on top of that, not the only thing standing there.",
+    "absent_membership": "kb.membership_allows deliberately treats an absent membership row as not-a-block, documented in 0004_membership.sql as 'a principal who never went through the invite lifecycle is not blocked by it'. So RLS does not stop this caller: the unguarded UPDATE lands, verified in the test. The mutation's own requirement of an active membership row is the only thing that refuses, which is why that case is the one that is pinned by a mutation check.",
+    "consequence_for_tests": "The 'active' half of the membership predicate cannot be isolated by a test, because in every state where it would matter the RLS fence refuses first. A mutation that keeps the row-existence requirement but drops status='active' leaves all 23 cases green. That is reported here rather than papered over; see uncovered below."
+  },
+  "concurrent_demotion_test": {
+    "file": "tests/runtime/test_draft_review.py::test_a_demotion_committed_after_the_authority_read_cannot_ride_along",
+    "shape": "two connections, deterministic interleaving, no sleep",
+    "barrier": "an advisory lock. The demoting connection takes pg_advisory_lock(GATE) before the reader thread starts, so the reader cannot pass its gate and commit its write until the demotion is committed; a threading.Event carries the other direction, so the demotion cannot commit until the reader's authority read has completed. Both orderings are enforced by synchronisation, not by timing. The reader also sets lock_timeout so a parked test fails instead of hanging.",
+    "what_it_proves": [
+      "the reader's authority read returned 30 (curator) while the committed grant is 'contributor', which is only possible if the read happened before the demotion and the check happened after it",
+      "the unguarded UPDATE the old shape issued in that exact window does land, 1 row, i.e. the hazard is real and reproducible on demand rather than theoretical",
+      "reject() in that same state answers 403 and leaves the row a draft"
+    ],
+    "what_it_does_not_prove": "It does not prove that reject()'s own check and write are atomic. No test can prove that from outside: the window between round 1's two statements contained no lock wait another connection could hook, so no external interleaving can be made to land inside it. Atomicity here rests on the single-statement structure, which is a code property, not an observable one. The test pins the presence of the in-statement guard, not the elimination of the window.",
+    "also_added": "test_a_demotion_that_commits_after_the_call_does_not_undo_it pins the other side of the same boundary: a demotion still uncommitted when the statement runs is invisible to it, the withdrawal lands, and the next call is refused. That is what one statement under one snapshot means, and it is now a stated decision rather than a surprise."
+  },
+  "receipt_corrections": [
+    {
+      "round_1_claim": "line 183: 'SELECT ... FOR UPDATE' is taken before the role is read, so a concurrent revoke of the grant is ordered against the same transaction.",
+      "was_false_because": "the lock is on the target rule or knowledge row. Nothing locked kb.library_grant, so a concurrent grant change was never ordered against this transaction at all.",
+      "now": "the FOR UPDATE is gone entirely and the row lock no longer carries any claim about the grant. The single statement is what removes the window, and the test file says so in the same words."
+    },
+    {
+      "round_1_claim": "lines 185 and 215: a contributor can publish, so the asymmetry with this endpoint is worth a follow-up.",
+      "was_false_because": "check_rule_publication and check_knowledge_publication in 0006_runtime_safeguards.sql already require rank >= 30 for NEW.publication='published' and raise insufficient_privilege below it. A contributor cannot publish.",
+      "now": "publish and reject agree on the bar. The round-1 'unresolved' entry claiming otherwise is withdrawn. What remains true and worth saying: publish enforces curator in a trigger and reject enforces it in the statement's WHERE clause, so the two express the same rule in two different places. That is a consistency observation, not a defect, and it is not something this lease unifies."
+    },
+    {
+      "round_1_claim": "lines 226-238 and 484-512 cover revoked and downgraded membership.",
+      "was_wrong_because": "those cases remove a grant row or change its role. They never touched kb.membership. Grant removal and membership are different things: kb.membership_allows reads membership, and a grant row can outlive the person it names.",
+      "now": "those tests are described as what they are, grant removal and downgrade. New tests cover the membership cases, and the deactivated and absent cases are separated because they are defended differently."
+    },
+    {
+      "round_1_claim": "the HTTP fixture's account was consistent between the middleware and the world.",
+      "was_false_because": "the middleware built Principal(subject, ACCOUNT) from a module constant while World generated a random account per test, so the principal the endpoint saw was not the principal the fixture described.",
+      "now": "the api fixture depends on world and passes world.principal, so the Principal the middleware sets is the same object the fixture describes, same account and same ids. Principal is still imported for the type and for as_principal's signature."
+    }
+  ],
+  "test_evidence": {
+    "file": "tests/runtime/test_draft_review.py",
+    "cases": 23,
+    "database": "a real PostgreSQL 16.2 started by the shared tests/conftest.py pg_server fixture, a database per module, all 14 migrations applied through kb.migrate.apply_migrations",
+    "http": "a real FastAPI app over a real psycopg_pool connected as kb_app, driven by fastapi.testclient.TestClient",
+    "stability": "the barrier test was run three times in a row before it was accepted, to check it is not flaky: 23 passed in 3.66s, 3.55s, 3.71s",
+    "carried_over_from_round_1_unchanged": [
+      "test_a_curator_withdraws_a_draft_or_a_rule_awaiting_review x4 (knowledge/rule x draft/needs_review)",
+      "test_a_repeat_call_is_the_same_result_and_writes_nothing",
+      "test_a_repeat_call_after_a_different_actor_also_writes_nothing",
+      "test_write_access_is_not_curation[contributor|reader|stranger]",
+      "test_a_contributor_is_refused_the_decision_and_not_the_library",
+      "test_a_curator_elsewhere_is_refused_here",
+      "test_a_foreign_id_and_an_unknown_id_answer_the_same_way",
+      "test_a_revoked_curator_cannot_replay_the_call",
+      "test_a_published_item_is_not_withdrawn_here[knowledge|rule]",
+      "test_rejection_keeps_the_row_its_provenance_and_its_history",
+      "test_a_withdrawn_statement_leaves_the_search_index"
+    ],
+    "added_this_round": [
+      "test_a_deactivated_member_is_refused",
+      "test_a_grant_with_no_membership_row_at_all_is_refused",
+      "test_the_replay_path_re_checks_a_membership_that_is_gone",
+      "test_a_demotion_committed_after_the_authority_read_cannot_ride_along",
+      "test_a_demotion_that_commits_after_the_call_does_not_undo_it"
+    ],
+    "how_idempotency_is_proven_not_asserted": "kb.knowledge.xmin / kb.rule.xmin is the row's write version and moves on every real UPDATE. The repeat test reads it after the first call and again after the second and requires them equal, so 'no second write' is observed. The same test requires it to MOVE on the first call, so it is not passing because nothing ever writes."
+  },
+  "mutation_checks_round_2": {
+    "why": "a green test proves nothing unless a wrong implementation goes red. Each mutation was applied to src/kb/catalog/writes.py, run, and the file restored; the restored file's md5 was checked against the committed copy.",
+    "method_note": "the first attempt at these mutations removed a %s placeholder without removing its bound parameter, so every call raised and 22 cases went red. That was a broken harness, not a finding, and it was discarded and rebuilt as mutations that keep the placeholder (a tautology) or keep the clause and lower its bar.",
+    "results": [
+      {
+        "mutation": "the UPDATE's curator bar lowered to >= 0",
+        "observed": "3 failed, 20 passed: test_write_access_is_not_curation[contributor], test_a_downgrade_stops_the_call, test_a_demotion_committed_after_the_authority_read_cannot_ride_along",
+        "conclusion": "the in-statement curator bar is load-bearing, and the barrier test is the discriminating one the review asked for"
+      },
+      {
+        "mutation": "the UPDATE's membership clause removed entirely",
+        "observed": "1 failed, 22 passed: test_a_grant_with_no_membership_row_at_all_is_refused",
+        "conclusion": "the membership requirement is pinned"
+      },
+      {
+        "mutation": "the classify statement's curator bar lowered to >= 0",
+        "observed": "1 failed, 22 passed: test_a_demotion_that_commits_after_the_call_does_not_undo_it",
+        "conclusion": "the replay re-check is pinned, though only by the demotion case. After a full grant removal the refusal is enforced by RLS, because knowledge_read also needs rank >= 10, so that case would pass either way."
+      },
+      {
+        "mutation": "the UPDATE keeps requiring a membership row but drops status='active'",
+        "observed": "23 passed",
+        "conclusion": "NOT pinned. See uncovered below."
+      },
+      {
+        "mutation": "the classify statement keeps requiring a membership row but drops status='active'",
+        "observed": "23 passed",
+        "conclusion": "NOT pinned, same reason."
+      }
+    ]
+  },
+  "uncovered": [
+    "status='active' in either statement is not isolated by any test. Mutating it to status IS NOT NULL leaves all 23 green, because in every state where it would change the answer, membership_must_be_active on kb.library_grant has already refused the write through RLS. The clause is defence in depth and is kept because the review asked for it and because a destructive action should not depend on one mechanism, but it is honestly untested in isolation. Closing that would need a state the product cannot currently represent, and inventing one would have meant a migration.",
+    "The replay path after a full grant *removal* is also not isolated: RLS hides the row from the classify SELECT (knowledge_read needs rank >= 10), so that refusal would happen with or without the predicate. Only the demotion case pins it.",
+    "No test distinguishes the single-statement structure from round 1's two-statement shape at the reject() boundary, because no external interleaving can be made to land between two back-to-back statements that contain no wait point. This is a property of the code, not an observable, and the test file says so in the same words rather than implying coverage."
+  ],
+  "commands": [
+    {
+      "command": "ruff check src tests scripts",
+      "exit_code": 0,
+      "output": "All checks passed!"
+    },
+    {
+      "command": "ruff format --check src tests scripts",
+      "exit_code": 0,
+      "output": "116 files already formatted"
+    },
+    {
+      "command": "mypy",
+      "exit_code": 0,
+      "output": "Success: no issues found in 60 source files"
+    },
+    {
+      "command": "pytest -q --no-header tests/runtime/test_draft_review.py",
+      "exit_code": 0,
+      "output": "23 passed in 3.66s (and 3.55s, 3.71s on two repeat runs of the same tree)"
+    },
+    {
+      "command": "pytest -q --no-header tests/runtime/test_draft_review.py tests/runtime/test_runtime.py tests/integration/rls tests/integration/libraries",
+      "exit_code": 0,
+      "output": "102 passed in 6.51s"
+    },
+    {
+      "command": "pytest -m 'integration and not (requires_keycloak or requires_openviking or requires_podman)' -q",
+      "exit_code": "not_run",
+      "reason": "root's release gate for this fix; the brief told me not to run the full suite on this round. The focused set above covers the changed module and its neighbours. Round 1 did run this leg, 507 passed, at commit 0cb2ff."
+    }
+  ],
+  "not_run": [
+    {
+      "check": "the live provider leg: 151 tests marked requires_keycloak / requires_openviking / requires_podman",
+      "reason": "needs a live Keycloak, OpenViking or Podman that root owns. Deselected, not passed and not failed."
+    },
+    {
+      "check": "the real Keycloak and CSRF path for these two routes",
+      "reason": "the HTTP fixture replaces both. Its middleware accepts a UUID from the X-Test-Auth-Subject test header and puts a Principal on request.state; that is the shape of what kb.runtime_identity.resolve_principal does after verifying a token, but it does not verify anything, and the app in this file has no session store, no kb_csrf cookie and no x-kb-csrf check, so CSRF is not exercised at all here. Both routes are POST on the same router as publish, behind the same Db dependency, and the gateway's CSRF middleware sits in resolve_principal, so they inherit the same protection publish has. That is an argument from the code, not a test result, and it is not offered as one."
+    },
+    {
+      "check": "the full 639-test release gate on the exact candidate SHA",
+      "reason": "root's gate; the brief forbade it on this fix round."
+    },
+    {
+      "check": "just check / just integration through the justfile",
+      "reason": "this worktree has no .venv of its own. The identical commands were run with the prepared venv at /home/kb-inspect/projects/AI-wisdom-agent/.venv, listed above verbatim. No dependency was installed."
+    }
+  ],
+  "unresolved": [
+    "No UI. src/kb/static/app.js is Luna's, so a curator has no button for this yet.",
+    "A withdrawal is a single publication_status value with no reason and no actor recorded, by the brief, because there is nowhere to store either. A later reader cannot tell who withdrew a draft or when. That needs a table and a migration, which is a different card and a different owner.",
+    "publish enforces the curator bar in a 0006 trigger; reject enforces it in the statement's WHERE clause. Same rule, two mechanisms, two places. Unifying them is a SQL change and outside this lease.",
+    "The absent-membership case is the one where this endpoint is strictly stricter than the database: RLS treats a missing membership row as not-a-block by design, and this endpoint refuses anyway. That is the stricter direction, which is the right direction for a destructive action, but it is a behaviour difference between two layers of the same product and root should know it exists rather than discover it later."
+  ],
+  "boundaries_observed": {
+    "deploy": false,
+    "github_push": false,
+    "realm_edits": false,
+    "external_model_calls": false,
+    "real_books": false,
+    "secrets_printed_or_transmitted": false,
+    "existing_tests_deleted_or_weakened": false,
+    "migrations_written": false,
+    "files_outside_lease_modified": false,
+    "note": "The untracked AGENTS.md, docs/workflow/ and .m01-brief.md that root placed in the worktree remain uncommitted. Only leased files are in the commit."
+  },
+  "next_step": "root reviews 1095404..HEAD. Three things to decide: whether the 400 for a published target should be a 409, whether the single-statement authority test is accepted as the fix for the P2 given that its atomicity is a code property no external test can pin, and whether the stricter-than-RLS absent-membership behaviour is wanted or should be relaxed to match kb.membership_allows. Then the full release gate on the exact candidate SHA."
+}

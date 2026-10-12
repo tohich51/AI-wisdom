@@ -138,6 +138,22 @@ def publish_knowledge(knowledge_id: UUID, conn: Db, me: Me):
         return writes.publish(conn, me, knowledge_id, knowledge=True)
 
 
+@router.post("/rules/{rule_id}/reject")
+def reject_rule(rule_id: UUID, conn: Db, me: Me):
+    """Withdraw a rule that is not published yet. No body, and no reason field:
+    there is nowhere to store one, and CSRF protection is the same as for every
+    other state-changing route because the handler adds nothing to it.
+    """
+    with mapped_errors():
+        return writes.reject(conn, me, rule_id)
+
+
+@router.post("/knowledge/{knowledge_id}/reject")
+def reject_knowledge(knowledge_id: UUID, conn: Db, me: Me):
+    with mapped_errors():
+        return writes.reject(conn, me, knowledge_id, knowledge=True)
+
+
 @router.post("/uses", status_code=201)
 def start_use(body: UseInput, conn: Db, me: Me):
     with mapped_errors():
