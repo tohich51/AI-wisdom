@@ -156,7 +156,6 @@ def build_queue(dsn, principal, config):
             for library_id in registry.pending_libraries(conn, principal):
                 try:
                     index.configure(
-                        connection=conn,
                         lock="semantic-installation",
                         queueing_lock=f"semantic:{library_id}",
                     ).defer(library_id=str(library_id))
