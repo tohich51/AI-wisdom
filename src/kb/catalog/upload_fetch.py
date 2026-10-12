@@ -359,19 +359,13 @@ def fetch_url(
     transport: httpx.BaseTransport | None = None,
     resolver: Resolver | None = None,
 ) -> FetchedObject:
-    """Fetch ``url``, applying the checks above before and during the transfer.
-
-    Redirects are followed by hand rather than by httpx for one reason: httpx
-    would follow them, and the check has to run on *each* hop. ``follow_redirects``
-    is left off the client so that no hop can happen without passing through
-    ``check_url`` first.
-    """
+    """Fetch ``url``, validating and verifying the peer on every hop."""
     check_url(url, policy, resolver=resolver)
 
     limits = httpx.Limits(max_connections=4, max_keepalive_connections=0)
     timeout = httpx.Timeout(policy.read_timeout, connect=policy.connect_timeout)
     with httpx.Client(
-        follow_redirects=False,  # deliberate: every hop goes through check_url
+        follow_redirects=False,
         transport=transport,
         limits=limits,
         timeout=timeout,
@@ -383,52 +377,57 @@ def fetch_url(
             _scheme, host, port, _path = check_url(current, policy, resolver=resolver)
             approved = _approved(host, port, policy, resolver)
             try:
-                response = client.get(current)
+                with client.stream("GET", current) as response:
+                    _verify_peer(response, approved)
+
+                    if response.is_redirect:
+                        location = response.headers.get("location", "")
+                        if hop >= policy.max_redirects:
+                            raise TooManyRedirects(policy.max_redirects)
+                        if not location:
+                            raise UrlRefused(
+                                "bad_redirect",
+                                "the redirect carried no destination",
+                            )
+                        current = _next_url(current, location)
+                        continue
+
+                    if response.status_code >= 400:
+                        raise UrlRefused(
+                            "http_error",
+                            f"the remote server answered {response.status_code}",
+                        )
+                    body = _bounded_body(response, policy.max_bytes)
+                    return FetchedObject(
+                        content=body,
+                        declared_media_type=response.headers.get("content-type"),
+                        media_type=sniff_media_type(body, response.headers.get("content-type")),
+                        final_url=current,
+                        status_code=response.status_code,
+                        hops=hop,
+                        approved_addresses=tuple(approved),
+                    )
             except httpx.InvalidURL as exc:
-                # A URL httpx itself will not build. Refused, not surfaced as a
-                # 500: the caller sent it, and a 500 teaches operators to
-                # ignore 500s.
                 raise UrlRefused("malformed_url", "the URL could not be parsed") from exc
-            except httpx.HTTPError as exc:
-                # A transport error may carry the peer address in its string.
-                # Only the exception class is propagated.
+            except (httpx.HTTPError, OSError) as exc:
                 raise UrlRefused("fetch_failed", f"the fetch failed: {type(exc).__name__}") from exc
-            _verify_peer(response, approved)
-
-            if response.is_redirect:
-                location = response.headers.get("location", "")
-                response.close()
-                if hop >= policy.max_redirects:
-                    raise TooManyRedirects(policy.max_redirects)
-                if not location:
-                    raise UrlRefused("bad_redirect", "the redirect carried no destination")
-                current = _next_url(current, location)
-                # the loop body re-runs check_url on the new URL: that is the
-                # per-hop re-validation, and it is why follow_redirects is off
-                continue
-
-            if response.status_code >= 400:
-                raise UrlRefused("http_error", f"the remote server answered {response.status_code}")
-            body = _bounded_body(response, policy.max_bytes)
-            return FetchedObject(
-                content=body,
-                declared_media_type=response.headers.get("content-type"),
-                media_type=sniff_media_type(body, response.headers.get("content-type")),
-                final_url=current,
-                status_code=response.status_code,
-                hops=hop,
-                approved_addresses=tuple(approved),
-            )
-    raise TooManyRedirects(policy.max_redirects)  # pragma: no cover - loop always returns or raises
+    raise TooManyRedirects(policy.max_redirects)
 
 
 def _approved(
     host: str, port: int, policy: FetchPolicy, resolver: Resolver | None
 ) -> Sequence[str]:
-    try:
-        return list(_addresses_for(host, port, policy, resolver))
-    except OSError:  # pragma: no cover - check_url already resolved this host
+    if not policy.require_public_ip:
         return ()
+    try:
+        addresses = list(_addresses_for(host, port, policy, resolver))
+    except OSError as exc:
+        raise UrlRefused("dns_failure", "the host could not be resolved") from exc
+    if not addresses:
+        raise UrlRefused("dns_failure", "the host resolved to no address")
+    if any(is_blocked_address(address) for address in addresses):
+        raise UrlRefused("address_not_allowed", "the host resolved to a non-public address")
+    return addresses
 
 
 def _next_url(current: str, location: str) -> str:
@@ -446,23 +445,23 @@ def _next_url(current: str, location: str) -> str:
 
 
 def _bounded_body(response: httpx.Response, max_bytes: int) -> bytes:
-    """Read the body, refusing it if it is over the limit.
-
-    The ``Content-Length`` is checked first so an oversized download is refused
-    before it is transferred, and the real length is checked again while reading
-    because a header is a claim.
-    """
+    """Read at most ``max_bytes`` incrementally, also checking Content-Length."""
     declared = response.headers.get("content-length")
     if declared is not None:
         try:
             if int(declared) > max_bytes:
                 raise FetchTooLarge(max_bytes)
         except ValueError:
-            pass  # an unparseable Content-Length is ignored, not trusted
-    body = response.content
-    if len(body) > max_bytes:
-        raise FetchTooLarge(max_bytes)
-    return body
+            pass
+
+    chunks: list[bytes] = []
+    size = 0
+    for chunk in response.iter_bytes():
+        size += len(chunk)
+        if size > max_bytes:
+            raise FetchTooLarge(max_bytes)
+        chunks.append(chunk)
+    return b"".join(chunks)
 
 
 # ---------------------------------------------------------------- sniffing
