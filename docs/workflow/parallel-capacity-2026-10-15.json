@@ -1,0 +1,44 @@
+{
+  "recorded_date": "2026-10-15",
+  "provider": "MiniMax existing OAuth subscription",
+  "model": "MiniMax-M3.1-Flash-Preview",
+  "cli_version": "1.0.25",
+  "route": "existing xorek model-runner CLI, one heavy allocation",
+  "concurrent_cli_requests_observed": 3,
+  "all_three_overlap_seconds": 61.76,
+  "group_elapsed_seconds": 90.54,
+  "completed_provider_responses": 3,
+  "complete_artifacts_in_parallel": 2,
+  "token_truncated_artifacts": 1,
+  "tasks": [
+    {
+      "task_id": "W01",
+      "started_seconds": 0.45,
+      "finished_seconds": 79.75,
+      "stop_reason": "end_turn",
+      "artifact_complete": true
+    },
+    {
+      "task_id": "W02",
+      "started_seconds": 0.45,
+      "finished_seconds": 62.2,
+      "stop_reason": "end_turn",
+      "artifact_complete": true
+    },
+    {
+      "task_id": "W03",
+      "started_seconds": 0.45,
+      "finished_seconds": 90.43,
+      "stop_reason": "max_tokens",
+      "artifact_complete": false
+    }
+  ],
+  "corrected_W03R_artifact_received": true,
+  "quota_or_provider_error_observed": false,
+  "not_a_guaranteed_capacity": true,
+  "scope": "three small sanitized documentation requests; not production generation, benchmark or unlimited concurrency",
+  "product_generation_concurrency_unchanged": true,
+  "openviking_single_writer_unchanged": true,
+  "server_heavy_lock_preserved": true,
+  "no_payg_coding": true
+}

@@ -7,7 +7,6 @@
   "baseline_cloud_sha": "45c4af57eaed2d338c76a46569fa12ed117f96d5",
   "warning": "Status is dated; verify SHA and live receipt before assigning. Executor may propose updates but only root writes shared acceptance. No claim whole v1 ready.",
   "target_coding_wip": 3,
-  "capacity_confirmed_for_three": false,
   "shared_xorek_heavy_jobs_max": 1,
   "features": [
     {
@@ -707,5 +706,25 @@
       "running_task": null,
       "file_leases": []
     }
-  ]
+  ],
+  "execution_policy": {
+    "owner_decision_date": "2026-10-15",
+    "efficiency_priority": true,
+    "parallel_by_default": true,
+    "target_independent_tasks": 3,
+    "ready_packets_min": 3,
+    "buffer_packets_min": 2,
+    "blocked_scope": "task_or_conflicting_resource_only",
+    "acceptance_owner": "root Codex",
+    "additional_review_requires": "named_unresolved_risk_or_explicit_required_contract",
+    "after_fix": "changed_behavior_and_related_risks_only",
+    "full_release_gate": "final_exact_sha_before_release; rerun_when_invalidated",
+    "provider_capacity": "resource_scoped_evidence; no blanket pipeline block",
+    "product_generation_max": 1,
+    "openviking_writers_max": 1,
+    "shared_server_heavy_allocations_max": 1,
+    "release_owners_max": 1,
+    "observed_capacity_evidence": "docs/workflow/parallel-capacity-2026-10-15.json",
+    "provider_limit_scope": "current provider/account/host/workload; lower only constrained resource"
+  }
 }

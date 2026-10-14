@@ -45,6 +45,73 @@
     "next_step",
     "elapsed_seconds",
     "model_wait_seconds",
-    "test_wait_seconds"
-  ]
+    "test_wait_seconds",
+    "timing",
+    "capacity_evidence",
+    "scheduling",
+    "next_ready_task",
+    "retry_count",
+    "review_passes"
+  ],
+  "scheduling": {
+    "lane": null,
+    "state": "planned",
+    "priority": null,
+    "next_ready_task": null,
+    "alternative_task": null,
+    "blocked_scope": {
+      "kind": "task_or_resource",
+      "target": null
+    }
+  },
+  "ready_prerequisites": {
+    "exact_sha": null,
+    "objective": null,
+    "files": null,
+    "frozen_dependencies": null,
+    "resource_lease": {
+      "resource": null,
+      "lease": null
+    },
+    "checks": null,
+    "artifact": null
+  },
+  "acceptance_policy": {
+    "acceptance_owner": "root Codex",
+    "sole_acceptance": true,
+    "extra_reviewer_allowed_only_for": [
+      "named_risk",
+      "required_contract"
+    ],
+    "after_fix_review_scope": [
+      "changed_behavior",
+      "linked_risks"
+    ],
+    "full_release_gate": {
+      "use_final_exact_sha": true,
+      "rerun_if_invalidated": true
+    }
+  },
+  "timing": {
+    "queued_at": null,
+    "started_at": null,
+    "artifact_ready_at": null,
+    "review_started_at": null,
+    "accepted_at": null,
+    "queue_wait_seconds": null,
+    "model_wait_seconds": null,
+    "test_wait_seconds": null,
+    "resource_wait_seconds": null,
+    "acceptance_wait_seconds": null,
+    "fix_seconds": null,
+    "coordinator_active_seconds": null
+  },
+  "capacity_evidence": {
+    "scope": null,
+    "recorded_at": null,
+    "receipt": null,
+    "observed_concurrent_requests": null,
+    "unknown_blocks": "additional_calls_to_same_provider_only",
+    "other_ready_work_continues": true
+  }
 }

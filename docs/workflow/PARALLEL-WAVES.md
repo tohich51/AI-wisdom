@@ -1,26 +1,50 @@
 # Параллельная работа и ближайшие волны
 
-Это исполнимый план распределения, не сообщение о запуске cloud задач.
-Не менять работающий runtime ради внедрения правил. В каждой сессии сверить
-cloud и deployed HEAD: на 12 октября deployed `1fc0e5f`, cloud `45c4af5`.
-Новые cloud auth tests не приняты автоматически и не должны потеряться.
+Решение владельца15.10.2026: эффективность и полезная работа имеют приоритет.
+Это правило распределения, не сообщение о запуске feature/cloud задач.
+Актуальные deployed/cloud HEAD устанавливать по receipts, а не историческому README.
 
-## Capacity и владение
+## Очередь и приёмка
 
-- Целевой WIP — до трёх независимых coding задач после проверки реальных
-  лимитов MiniMax/Codex и RAM/CPU. До подтверждения capacity запускать одну;
-  исторические пять CMS slots не являются лимитом AI-wisdom.
-- Допустимы отдельные лёгкие локальные проверки. На общем xorek одновременно
-  не больше одного тяжёлого PG/full-suite/live-fixture/build/restore задания.
-- Coding parallelism не повышает product model-runner concurrency: остаётся
-  одна генерация и один OpenViking writer. Cloud Luna не получает root/секреты.
-- Root фиксирует leases для файлов и ресурсов в task packets. Изолированный
-  worktree не отменяет коллизии общей БД, браузера, test users и provider quota.
-- `migrations/`, contracts, `pyproject.toml`, locks, auth, gateway/MCP, общий
-  `static/app.js` и `tests/runtime/test_runtime.py` — по одному владельцу.
-  Новые интерфейсы/DDL интегрирует root; не редактировать их из нескольких задач.
-- У задания точный base SHA. Root проверяет base→artifact diff и применяет
-  patch/cherry-pick по одному. Не делать force/reset/rebase активного агента.
+- По умолчанию до трёх независимых направлений: backend, UI существующих API,
+  качество/документация. Для большой волны заранее держать три готовых пакета и
+  два запасных; для малого остатка не создавать работу ради числа исполнителей.
+- Готовый пакет: цель, exact base SHA, workspace, allowed files/owner, принятые
+  зависимости и frozen interfaces, точные checks, ожидаемый артефакт и leases.
+- Пока один пакет работает, исправляется или ждёт приёмки/ресурс, root запускает,
+  подготавливает или принимает другой готовый. Блокер касается только своей
+  задачи/ресурса. Не перечитывать весь проект и не перепланировать принятую работу.
+- Один артефакт — одна независимая приёмка Codex. Дополнительный reviewer только
+  для указанного нерешённого риска или обязательного контракта. После фикса
+  перепроверить изменённый сценарий и связанные риски без нового полного цикла.
+- Проверки во время правок focused; полный обязательный gate — на конечном
+  exact SHA перед release. Новый кандидат, ошибка или неизвестный риск
+  инвалидируют относящееся evidence и требуют соответствующей повторной проверки.
+- Ожидать событие только после исчерпания полезной независимой работы в текущем
+  scope. Модельные вызовы только ради статуса запрещены. Метрики очереди,
+  выполнения, ресурса, приёмки и фиксов разделять; неизвестные значения — null.
+
+## Ресурсы и владельцы
+
+- Capacity относится к конкретному provider/account/host/workload; неизвестный
+  лимит проверять ограниченным probe, а не блокировать весь pipeline. При429/
+  перегрузке снизить только затронутый ресурс. Target3 не гарантирует3 тяжёлых jobs.
+- Бounded documentation probe описан в [parallel-capacity-2026-10-15.json](parallel-capacity-2026-10-15.json).
+  Его результат не является production load benchmark или бессрочной квотой.
+- Network-only coding requests и CPU-heavy jobs — разные ресурсы. Проверенные
+  малые coding calls можно группировать в одну серверную allocation; production
+  locks не удалять. На общем xorek один тяжёлый PG/full-suite/live/build/restore
+  прогон, одна product generation, один OpenViking writer. Merge/release — root.
+- Изолировать worktrees, файлы, браузер, БД, test users и build directories.
+  Один owner у migrations/contracts/locks/auth, общего static/app.js и
+  tests/runtime/test_runtime.py. Общие интерфейсы согласует root; serial merge
+  сохраняется, остальные независимые пакеты продолжают execution.
+- MiniMax остаётся на существующей OAuth-подписке. Для Luna/Cloud сначала
+  проверить конкретные модель, подписку, инструменты и workspace. Не переносить
+  owner secrets, не заменять модель и не выдавать review-agent за Cloud executor.
+- Ресурсное ожидание отмечать resource_wait с точной причиной/следующим шагом;
+  root использует следующую или запасную карточку. Отдельный ограниченный
+  retry исправления не запускает новое исследование или общий reviewer chain.
 
 ## Волна 0 — снять повторную подготовку
 
@@ -36,7 +60,7 @@ Root разрешает конкретную задачу, перечисляе�
 |---|---|---|---|
 | A: workflow review/знания/опыт | MiniMax, один backend owner | Назначенная часть `catalog/writes.py`, `http/content.py`, новый изолированный regression file; общие schemas только root | Один завершённый сценарий, например отклонение черновика; real PG positive/negative и стабильный API |
 | B: формы существующих API | Luna Codex с проверенными инструментами | `static/app.js` единственный owner; нужные `index.html`/`style.css` только если зарезервированы ему | Одна форма URL либо membership/grants; node syntax + browser positive/error/denied; новая API зависимость блокируется до контракта root |
-| C: качество/документация | Luna или второй MiniMax после capacity check | Новый `evals/retrieval/*.json`, собственный `docs/workflow/*` документ, отдельные synthetic fixtures | Набор 50 answerable запросов и relevance/citation expectations; schema/provenance review, без provider calls и shared runtime test edits |
+| C: качество/документация | Luna или второй MiniMax с resource-scoped capacity evidence | Новый `evals/retrieval/*.json`, собственный `docs/workflow/*` документ, отдельные synthetic fixtures | Набор 50 answerable запросов и relevance/citation expectations; schema/provenance review, без provider calls и shared runtime test edits |
 
 Пути `evals/`/новые тесты — предложенные новые файлы, а не существующая
 инфраструктура. B может работать с уже существующими API одновременно с A;
@@ -60,7 +84,7 @@ S01–S04. По очереди выполнять restore, real service tests и
 два gateway/worker до увеличения concurrency. Root завершает exact-SHA bundle,
 разрешённый release и независимый MCP readback; GitHub publication — отдельный scope.
 
-Состояния: `planned → running → review → accepted`. `blocked` требует точной
+Состояния: `planned → ready → running → review → accepted`. `blocked` требует точной
 недостающей зависимости; другие lanes продолжаются. Каждый executor сдаёт
 checks, unresolved и следующий шаг; root меняет общую доску. Принятый patch
 не равен развёрнутой функции. Новую сессию начинать с карточки/receipt, а не
