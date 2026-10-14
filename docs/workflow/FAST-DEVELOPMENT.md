@@ -25,3 +25,24 @@
 11. Dev receipt кэшируется только для тех же tested files, dependency closure, schema и env; для release любое изменение source SHA инвалидирует full receipt. `stop_reason=max_tokens` и пустой JSON отклоняются. После failure идентичный retry запрещён: дробить задачу, допустимы максимум две исправленные попытки; `UNKNOWN` внешних writes сверять в той же попытке.
 
 12. Оставлять малый progress/receipt: source SHA, artifact, checks, unresolved, next. Worker достигает review, root принимает. Не выражать status процентами от test count. Измерять elapsed task, model wait, test wait, integration и fail attempts; не заявлять достигнутый speedup без данных.
+
+
+## Research/Studio/maps runtime extension · 2026-10-14
+
+The original ten MCP tools remain; fourteen additive tools use the same authenticated catalog.
+Research/Studio use immutable selected-source snapshots, own-principal runs/notes, exact Unicode
+citation offsets and hashes, and full dependency RLS. Generated output stays a draft. The runner
+holds the existing single slot across generation and conservative support verification. Runtime
+stream completion is accepted only with the configured model, thinking block, message_stop and
+end_turn; truncated or malformed output is never a usable result. No paid API fallback.
+
+Studio covers summary, FAQ, comparison, checklist and flashcards, plus a persisted topic hierarchy
+and library-scoped semantic drafts. Sampling is bounded and explicitly disclosed; it is not a
+claim of full-book coverage. Semantic relations are typed and directed, with evidence/hypothesis
+labels; no embedding-similarity score is invented. The concept similarity overlay awaits its own
+compatible index. Manual revisions of generated concepts retain all inherited source dependencies.
+
+HTTP and MCP use identical functions. Only explicit curator review publishes semantic records;
+rule handoff creates a draft and never creates usage/outcomes. Canonical graphs contain only
+stored source/fragment/provenance/exact-version usage/outcome records. Audio/video/slides are not
+implemented. New features do not close the entire original acceptance matrix by test count.

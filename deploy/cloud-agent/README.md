@@ -65,3 +65,14 @@ Codex проверяет реальный маршрут от kb-inspect: tools/
 Для отзыва продуктового доступа владелец отключает Keycloak client `kb-minimax-cloud` и деактивирует его membership штатным API. Deactivated membership блокирует каждый следующий gateway/MCP вызов, включая ещё не истёкший токен. Для полного отзыва административного SSH-доступа владелец отдельно удаляет предоставленный ключ MiniMax из `kb-inspect/authorized_keys`. При восстановлении старого backup сверить наличие новой identity и серверного client config; секреты не отправлять в чат.
 
 Два CLI-пакета MiniMax не вернули артефакт (`max_tokens`, только thinking); клиент и независимая приёмка выполнены Codex как явный fallback. Подписочный маршрут не менялся.
+
+## Research/Studio/maps · 2026-10-14
+
+После выпуска доступны `research_sources`, `list_research`, `start_research`, `research_status`,
+заметки/Markdown/черновик правила и графы через ту же MCP точку. Свежий `tools` возвращает полный
+каталог. Генерация сохраняет ограничение owner/admin + contributor по каждому выбранному источнику;
+наличие SSH и имени tool не выдаёт права на приватные материалы. Результаты/заметки приватны для
+создавшего principal. `get_knowledge_graph` и `get_semantic_network` не запускают модель. Публикация
+понятий/связей — только явный curator review. Никаких вымышленных semantic similarity scores.
+Семантический поиск опубликованных знаний уже работает через OpenRouter qwen/qwen3-embedding-8b;
+старые строки выше про заглушку и лимит 8 GiB относятся к историческому bootstrap, не текущему runtime.

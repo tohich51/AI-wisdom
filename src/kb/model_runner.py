@@ -155,9 +155,23 @@ def _write_private_json(path: Path, value: object) -> None:
             os.close(descriptor)
 
 
-def _run_cli(text: str, fragment_ids: list[UUID], launcher: str) -> bytes:
+def _run_cli(
+    text: str,
+    fragment_ids: list[UUID],
+    launcher: str,
+    *,
+    system_prompt: str | None = None,
+    timeout_s: int = 300,
+    stream: bool = False,
+) -> bytes:
+    if not 30 <= timeout_s <= 900:
+        raise _RunnerFailure("invalid_timeout")
     child_environment = os.environ.copy()
     child_environment.pop("KB_MODEL_RUNNER_TOKEN", None)
+    if stream:
+        child_environment["NODE_OPTIONS"] = "--require=" + str(
+            Path(__file__).with_name("subscription-proof.cjs")
+        )
 
     try:
         source = upload_data.as_data_payload(text)
@@ -165,7 +179,9 @@ def _run_cli(text: str, fragment_ids: list[UUID], launcher: str) -> bytes:
             [str(value) for value in sorted(fragment_ids)],
             separators=(",", ":"),
         )
-        system_prompt = f"{_SYSTEM_PROMPT}\nPERMITTED_FRAGMENT_IDS_JSON={permitted_ids}"
+        system_prompt = (
+            f"{system_prompt or _SYSTEM_PROMPT}\nPERMITTED_FRAGMENT_IDS_JSON={permitted_ids}"
+        )
         messages = [{"role": "user", "content": source.framed_text}]
 
         with tempfile.TemporaryDirectory(
@@ -192,8 +208,10 @@ def _run_cli(text: str, fragment_ids: list[UUID], launcher: str) -> bytes:
                 "--no-color",
                 "--non-interactive",
                 "--timeout",
-                "300",
+                str(timeout_s),
             ]
+            if stream:
+                args.append("--stream")
             try:
                 process = subprocess.Popen(  # noqa: S603 - configured absolute guarded CLI
                     args,
@@ -204,7 +222,7 @@ def _run_cli(text: str, fragment_ids: list[UUID], launcher: str) -> bytes:
                     start_new_session=True,
                 )
                 try:
-                    stdout, stderr = process.communicate(timeout=330)
+                    stdout, stderr = process.communicate(timeout=timeout_s + 30)
                 except subprocess.TimeoutExpired:
                     os.killpg(process.pid, signal.SIGTERM)
                     try:
@@ -224,6 +242,36 @@ def _run_cli(text: str, fragment_ids: list[UUID], launcher: str) -> bytes:
             raise _RunnerFailure("model_unavailable")
         if not isinstance(completed.stdout, bytes):
             raise _RunnerFailure("invalid_output")
+        if stream:
+            try:
+                proofs = [
+                    _strict_json_loads(line.split("=", 1)[1])
+                    for line in completed.stderr.decode("utf-8").splitlines()
+                    if line.startswith("MMX_STREAM_PROOF=")
+                ]
+                if len(proofs) != 1 or not isinstance(proofs[0], dict):
+                    raise ValueError("missing_completion_proof")
+                proof = proofs[0]
+                if (
+                    proof.get("model") != _MODEL
+                    or proof.get("stop_reason") != "end_turn"
+                    or proof.get("message_stop") is not True
+                    or proof.get("error") is not False
+                    or proof.get("thinking_seen") is not True
+                ):
+                    raise ValueError("incomplete_output")
+                envelope = _strict_json_loads(completed.stdout.decode("utf-8"))
+                if not isinstance(envelope, dict) or not isinstance(envelope.get("content"), str):
+                    raise ValueError("invalid_output")
+                return json.dumps(
+                    {
+                        "model": _MODEL,
+                        "stop_reason": "end_turn",
+                        "content": [{"type": "text", "text": envelope["content"]}],
+                    }
+                ).encode()
+            except (UnicodeDecodeError, ValueError, TypeError):
+                raise _RunnerFailure("incomplete_output") from None
         return completed.stdout
     except _RunnerFailure:
         raise
@@ -361,6 +409,9 @@ def create_app() -> FastAPI:
         finally:
             _MODEL_SLOT.release()
 
+    from kb.model_research import install_research_runner
+
+    install_research_runner(app)
     return app
 
 

@@ -25,6 +25,7 @@ async function api(path, options = {}) {
   }
   const response = await fetch(path, {...options, headers, credentials: 'same-origin'});
   if (!response.ok) {
+    if ([401,403].includes(response.status)) {window.WisdomResearch?.invalidate();window.WisdomMap?.invalidate();document.querySelectorAll("dialog[data-wisdom-private]").forEach(d=>d.close());}
     if (response.status === 401) throw Error('Войдите в свой аккаунт через кнопку «Войти».');
     if (response.status === 403) throw Error('Для этого действия недостаточно прав.');
     const data = await response.json().catch(() => ({}));
@@ -44,7 +45,7 @@ function field(form, title, name, value = '', type = 'text') {
   return input;
 }
 function dialogForm(title, render, submit) {
-  const dialog = node('dialog'); const form = node('form');
+  const dialog = node('dialog',null,{'data-wisdom-private':'true'}); const form = node('form');
   dialog.append(node('h2', title), form);
   render(form);
   form.append(node('button', 'Сохранить', {type: 'submit'}), button('Отмена', () => dialog.close()));
@@ -74,7 +75,7 @@ async function processSource(id, extract) {
 }
 async function viewSource(id) {
   const result = await api('/api/sources/' + id + '?limit=200');
-  const d = node('dialog'); d.append(node('h2', result.source.title));
+  const d = node('dialog',null,{'data-wisdom-private':'true'}); d.append(node('h2', result.source.title));
   d.append(node('p', 'Автор: ' + (result.source.author ?? 'не указан') + ' · Издание: ' + (result.source.edition ?? 'не указано')));
   d.append(node('a', 'Скачать оригинал', {href: '/api/sources/' + id + '/original'}));
   for (const part of result.fragments) {
@@ -247,11 +248,30 @@ byId('search').addEventListener('submit', safe(async event => {
   for (const hit of result.hits) list.append(node('p', hit.statement), node('pre', JSON.stringify(hit.provenance, null, 2)));
 }));
 byId('logout').addEventListener('click', safe(async () => { await post('/auth/logout'); location.reload(); }));
-for (const tab of document.querySelectorAll('[data-tab]')) tab.addEventListener('click', safe(async () => {
-  for (const name of ['libraries', 'uses']) byId(name + '-tab').hidden = name !== tab.dataset.tab;
-  for (const item of document.querySelectorAll('[data-tab]')) item.setAttribute('aria-pressed', String(item === tab));
-  if (tab.dataset.tab === 'uses') await loadUses();
-}));
+function downloadBlob(filename,blob) {
+  const url=URL.createObjectURL(blob),a=node('a',null,{href:url,download:filename});
+  document.body.append(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(url),1000);
+}
+const featureHost={node,button,api,post,notify:message,libraries:()=>libraries,currentLibrary:()=>selected,
+  openSource:viewSource,download:(filename,text,type)=>downloadBlob(filename,new Blob([text],{type})),
+  downloadBlob,dialog:dialogForm,navigateResearch:()=>switchTab('research'),
+  openRuleVersion:async(id,version)=> {
+    const rule=await api('/api/rules/'+id);const d=node('dialog',null,{'data-wisdom-private':'true'});
+    d.append(node('h2',rule.title+' · Версия '+(version||rule.version_no)),node('p',rule.when_to_apply),node('p',rule.expected_effect));
+    for(const a of rule.actions||[])d.append(node('p',a.body||a));
+    d.append(button('Закрыть',()=>d.close()));d.addEventListener('close',()=>d.remove());document.body.append(d);d.showModal();
+  }
+};
+window.WisdomResearch.configure(featureHost);
+async function switchTab(name) {
+  window.WisdomResearch.invalidate();window.WisdomMap.invalidate();
+  for(const section of ['libraries','uses','research','maps'])byId(section+'-tab').hidden=section!==name;
+  for(const item of document.querySelectorAll('[data-tab]'))item.setAttribute('aria-pressed',String(item.dataset.tab===name));
+  if(name==='uses')await loadUses();
+  if(name==='research')await window.WisdomResearch.mount(byId('research-workspace'),featureHost);
+  if(name==='maps')await window.WisdomMap.mount(byId('maps-workspace'),featureHost);
+}
+for (const tab of document.querySelectorAll('[data-tab]')) tab.addEventListener('click',safe(()=>switchTab(tab.dataset.tab)));
 safe(async () => {
   identity = await api('/api/me'); document.querySelector('.login').hidden = true;
   const readiness = await api('/readyz');

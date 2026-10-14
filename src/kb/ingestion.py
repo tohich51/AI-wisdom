@@ -38,6 +38,9 @@ def build_queue(dsn: str):
             os.environ.get("KB_WORKER_TOKEN"),
         )
 
+    from kb.research_worker import register_research_task
+
+    register_research_task(app, dsn)
     return app, process
 
 

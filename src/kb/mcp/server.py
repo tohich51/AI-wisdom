@@ -94,6 +94,10 @@ def build_mcp(app, hosts):
         except Exception:
             raise ValueError("request_refused") from None
 
+    from kb.mcp.research import install_tools
+
+    install_tools(server, call)
+
     @server.tool()
     def list_libraries(
         ctx: Context,

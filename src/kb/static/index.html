@@ -4,6 +4,11 @@
 <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
 <title>AI-wisdom</title>
 <link rel="stylesheet" href="/static/style.css">
+<script src="/static/vendor/cytoscape-3.34.3.min.js" defer></script>
+<script src="/static/graph-canvas.js" defer></script>
+<script src="/static/research-result.js" defer></script>
+<script src="/static/research.js" defer></script>
+<script src="/static/maps.js" defer></script>
 <script src="/static/app.js" defer></script>
 </head>
 <body>
@@ -16,12 +21,13 @@
 </header>
 <aside class="sidebar"><p class="eyebrow">Сервисы</p>
 <div id="status" class="status" role="status" aria-live="polite">
-<span>Эмбеддинги: не настроены</span>
-<span>Поиск: лексический</span>
+<span>Проверяю подключение…</span>
 <span>Извлечение: черновики, подписка MiniMax</span>
 </div>
 <nav class="main-nav" aria-label="Основные разделы">
 <p class="nav-label">Разделы</p><button type="button" data-tab="libraries" aria-controls="libraries-tab" aria-pressed="true">Библиотеки</button><button type="button" data-tab="uses" aria-controls="uses-tab" aria-pressed="false">Опыт</button>
+<button type="button" data-tab="research" aria-controls="research-tab" aria-pressed="false">Исследование и Studio</button>
+<button type="button" data-tab="maps" aria-controls="maps-tab" aria-pressed="false">Карта знаний</button>
 </nav>
 </aside>
 <main>
@@ -60,6 +66,16 @@
 <p>Ожидаемый результат, фактический результат и полезность конкретной версии правила.</p>
 </div>
 <div id="uses-list" aria-live="polite"></div>
+</section>
+<section id="research-tab" aria-labelledby="research-heading" hidden>
+<div class="section-heading"><h1 id="research-heading">Исследование и Studio</h1>
+<p>Выберите источники, задайте вопрос и сохраните полезный результат с цитатами.</p></div>
+<div id="research-workspace"></div>
+</section>
+<section id="maps-tab" aria-labelledby="maps-heading" hidden>
+<div class="section-heading"><h1 id="maps-heading">Карта знаний</h1>
+<p>Происхождение знаний, смысловые связи и зафиксированный опыт.</p></div>
+<div id="maps-workspace"></div>
 </section>
 </main>
 </div>

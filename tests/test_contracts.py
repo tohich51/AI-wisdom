@@ -33,9 +33,17 @@ from kb.contracts.enums import LibraryRole, LocatorKind, PublicationStatus
 from kb.domain.tiers import UsageState
 
 
-def test_all_ten_mcp_tools_are_declared():
+def test_original_and_research_studio_graph_tools_are_declared():
     assert set(MCP_TOOLS) == EXPECTED_TOOLS
-    assert len(MCP_TOOLS) == 10
+    assert len(MCP_TOOLS) == 24
+    assert {
+        "start_research",
+        "research_status",
+        "export_research",
+        "get_knowledge_graph",
+        "get_semantic_network",
+        "save_research_note",
+    } <= EXPECTED_TOOLS
 
 
 def test_no_admin_or_grant_mutation_over_mcp():

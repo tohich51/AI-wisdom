@@ -22,6 +22,7 @@ from kb.contracts.entities import (
     Rule,
     Source,
 )
+from kb.contracts.research_tools import RESEARCH_TOOLS
 
 
 class ToolArgs(BaseModel):
@@ -162,6 +163,9 @@ MCP_TOOLS: dict[str, tuple[type[BaseModel], type[BaseModel] | None]] = {
     "export_skill": (ExportSkillArgs, ExportSkillResult),
 }
 
+
+MCP_TOOLS.update({name: (args, None) for name, args in RESEARCH_TOOLS.items()})
+
 EXPECTED_TOOLS: frozenset[str] = frozenset(
     {
         "list_libraries",
@@ -176,6 +180,8 @@ EXPECTED_TOOLS: frozenset[str] = frozenset(
         "export_skill",
     }
 )
+
+EXPECTED_TOOLS = EXPECTED_TOOLS | frozenset(RESEARCH_TOOLS)
 
 # Mutations that must never be reachable over MCP in v1.
 FORBIDDEN_MCP_TOOLS: frozenset[str] = frozenset(

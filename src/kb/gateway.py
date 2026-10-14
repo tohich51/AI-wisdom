@@ -14,7 +14,7 @@ from psycopg_pool import ConnectionPool
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from kb.catalog.storage import LocalBlobStore
-from kb.http import content, libraries, members, projects, uploads
+from kb.http import content, libraries, members, projects, research, uploads
 from kb.http.auth_config import AuthSettings
 from kb.mcp.server import build_mcp
 from kb.retrieval.embedding_profile import SELECTED_PROFILE
@@ -95,10 +95,19 @@ def create_app() -> FastAPI:
     app.include_router(uploads.router, prefix="/api")
 
     app.include_router(content.router, prefix="/api")
+    app.include_router(research.router, prefix="/api")
     static = Path(__file__).parent / "static"
     app.mount("/static", StaticFiles(directory=static), name="static")
     index_html = (static / "index.html").read_text(encoding="utf-8")
-    for asset in ("app.js", "style.css"):
+    for asset in (
+        "app.js",
+        "style.css",
+        "research.js",
+        "research-result.js",
+        "maps.js",
+        "graph-canvas.js",
+        "vendor/cytoscape-3.34.3.min.js",
+    ):
         digest = hashlib.sha256((static / asset).read_bytes()).hexdigest()[:16]
         index_html = index_html.replace(f"/static/{asset}", f"/static/{asset}?v={digest}")
 

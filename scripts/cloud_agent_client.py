@@ -29,6 +29,25 @@ TOOLS = frozenset(
         "export_skill",
     }
 )
+# Additive Research/Studio/maps use the same per-call gateway identity and ACL.
+TOOLS = TOOLS | frozenset(
+    {
+        "research_sources",
+        "list_research",
+        "start_research",
+        "research_status",
+        "save_research_note",
+        "list_research_notes",
+        "read_research_note",
+        "export_research",
+        "draft_rule_from_research",
+        "get_knowledge_graph",
+        "get_semantic_network",
+        "create_semantic_concept",
+        "create_semantic_relation",
+        "review_semantic_relation",
+    }
+)
 MAX_JSON = 65536
 UUID_PATH = r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"
 GET_PATH = re.compile(
