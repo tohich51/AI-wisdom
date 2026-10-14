@@ -25,7 +25,7 @@ async function api(path, options = {}) {
   }
   const response = await fetch(path, {...options, headers, credentials: 'same-origin'});
   if (!response.ok) {
-    if ([401,403].includes(response.status)) {window.WisdomResearch?.invalidate();window.WisdomMap?.invalidate();document.querySelectorAll("dialog[data-wisdom-private]").forEach(d=>d.close());}
+    if ([401,403].includes(response.status)) {message(response.status===401?'Войдите в свой аккаунт.':'Доступ к материалу отсутствует или отозван.');window.WisdomResearch?.invalidate();window.WisdomMap?.invalidate();document.querySelectorAll("dialog[data-wisdom-private]").forEach(d=>d.close());}
     if (response.status === 401) throw Error('Войдите в свой аккаунт через кнопку «Войти».');
     if (response.status === 403) throw Error('Для этого действия недостаточно прав.');
     const data = await response.json().catch(() => ({}));

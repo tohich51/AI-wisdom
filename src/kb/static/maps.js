@@ -22,7 +22,12 @@ window.WisdomMap = (() => {
       if(valid() && error.name!=='AbortError') { canvas?.destroy();canvas=null;surface.replaceChildren();list.replaceChildren();details.replaceChildren();host.notify(error.message); }
     }};
     const b=(text,fn)=>n('button',text,{type:'button',onclick:act(fn)});
-    function renderDetail(node) {
+    async function renderDetail(node) {
+      const selectedMode=mode.value,selectedLibrary=library.value,selection=++readSerial;
+      const fresh=await host.api(endpoint(),{signal:controller.signal});
+      if(!valid() || selection!==readSerial || selectedMode!==mode.value || selectedLibrary!==library.value) return;
+      node=fresh.nodes.find(value=>value.id===node.id);
+      if(!node) throw Error('Узел больше не доступен. Обновите карту.');
       details.replaceChildren(n('h2',node.label),n('p',[types[node.kind]||node.kind,publication[node.publication]||node.publication,
         node.version_no?'Версия '+node.version_no:null].filter(Boolean).join(' · ')));
       if(node.body) details.append(n('p',node.body));
@@ -54,7 +59,7 @@ window.WisdomMap = (() => {
         surface.append(n('p',mode.value==='semantic'?'Пока нет понятий и связей. Создайте сеть в Studio или добавьте понятие вручную.':'После загрузки источников здесь появится их происхождение.'));
         if(mode.value==='semantic') surface.append(b('Открыть Studio',()=>window.WisdomResearch.question('',[],library.value)));
       } else {
-        canvas=window.WisdomGraphCanvas.render(surface,data,mode.value,node=>renderDetail(node));
+        canvas=window.WisdomGraphCanvas.render(surface,data,mode.value,node=>act(()=>renderDetail(node))());
       }
       for(const node of data.nodes) list.append(b((types[node.kind]||node.kind)+' · '+node.label,()=>renderDetail(node)));
       const labels=new Map(data.nodes.map(v=>[v.id,v.label]));
