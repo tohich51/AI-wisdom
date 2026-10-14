@@ -15,7 +15,7 @@ window.WisdomMap = (() => {
     const details=n('aside',null,{class:'card map-details','aria-live':'polite'});
     controls.append(n('label','Библиотека',{for:'map-library'}),library,n('label','Вид карты',{for:'map-mode'}),mode);
     const surface=n('div',null,{class:'map-surface',tabindex:0,'aria-label':'Граф знаний. Все узлы доступны в списке ниже.'});
-    root.append(controls,content,list,details); content.append(surface);
+    root.append(controls,content,details,list); content.append(surface);
     let data, readSerial=0;
     const endpoint=()=>'/api/graphs/'+mode.value+'?library_id='+library.value+'&limit=200';
     const act=fn=>async e=> { e?.preventDefault(); try { await fn(); } catch(error) {
@@ -42,6 +42,7 @@ window.WisdomMap = (() => {
         if(data.capabilities?.can_review && node.publication==='draft') details.append(b('Подтвердить понятие',()=>review(node.entity_id,'concept','publish')));
         if(data.capabilities?.can_review && node.publication!=='withdrawn') details.append(b('Снять понятие с публикации',()=>review(node.entity_id,'concept','withdraw')));
       }
+      details.scrollIntoView({block:'nearest'});
     }
     async function review(entityId,entityKind,decision) {
       await host.post('/api/graphs/review',{entity_id:entityId,entity_kind:entityKind,decision}); await load();
@@ -54,6 +55,7 @@ window.WisdomMap = (() => {
       const status=n('p',(mode.value==='semantic'?'Понятия и направленные смысловые связи':'Источник → фрагмент → знание или правило → опыт → результат')+
         ' · '+data.nodes.length+' узлов · '+data.edges.length+' связей'+(data.truncated?' · Показана часть карты.':''));
       content.querySelector('.map-summary')?.remove();status.className='map-summary'; content.prepend(status);
+      if(data.nodes.length>40) status.append(n('span',' Нажмите на узел или выберите его в списке, чтобы увидеть подробности.'));
       if(mode.value==='semantic' && !data.similarity?.available) list.append(n('p','Связи построены по цитатам или добавлены вручную. Слой близости понятий по эмбеддингам пока недоступен.'));
       if(!data.nodes.length) {
         surface.append(n('p',mode.value==='semantic'?'Пока нет понятий и связей. Создайте сеть в Studio или добавьте понятие вручную.':'После загрузки источников здесь появится их происхождение.'));

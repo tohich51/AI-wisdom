@@ -12,7 +12,7 @@ window.WisdomResearch = (() => {
   async function mount(container, helpers, libraryId) {
     invalidate(); root = container; host = helpers;
     const generation = epoch; controller = new AbortController();
-    const n = host.node; let selected = new Set(), currentRun, runSerial=0, operation;
+    const n = host.node; let selected = new Set(), currentRun, runSerial=0, operation, listSerial=0;
     const valid = () => generation === epoch;
     const request = async (path, options = {}) => {
       const data = await host.api(path, {...options, signal: controller.signal});
@@ -42,6 +42,12 @@ window.WisdomResearch = (() => {
     const history=n('div',null,{class:'card'}), notes=n('div',null,{class:'card'});
     layout.append(sources,work,studio); root.append(layout); work.append(result,history,notes);
     const freshRun = id => request('/api/research/'+id);
+    const isActive = status => status === 'queued' || status === 'running';
+    const runStatus = new Map();
+    const rememberRun = (id,status) => {
+      runStatus.delete(id); runStatus.set(id,status);
+      if (runStatus.size>100) runStatus.delete(runStatus.keys().next().value);
+    };
     const locate = cite => [cite.locator?.chapter, cite.locator?.file_page != null ? 'Страница файла '+cite.locator.file_page : null,
       cite.locator?.printed_label, cite.locator?.paragraph != null ? 'Абзац '+cite.locator.paragraph : null].filter(Boolean).join(' · ');
     async function citation(id) {
@@ -53,8 +59,10 @@ window.WisdomResearch = (() => {
       d.append(b('Открыть источник',()=>host.openSource(cite.source_id)),b('Закрыть',()=>d.close()));
       d.addEventListener('close',()=>d.remove()); document.body.append(d); d.showModal();
     }
-    async function refreshLists() {
+    async function refreshLists(owner) {
+      const requestSerial=++listSerial;
       const [runs,saved]=await Promise.all([request('/api/research?library_id='+libId),request('/api/notes?library_id='+libId)]);
+      if (!valid() || requestSerial!==listSerial || (owner && (owner.id!==currentRun || owner.serial!==runSerial))) return false;
       history.replaceChildren(n('h3','История исследований'));
       if (!runs.runs.length) history.append(n('p','Пока нет исследований.'));
       for (const run of runs.runs) history.append(b((run.query || labels[run.kind])+' · '+statusLabel(run.status),()=>showRun(run.id)));
@@ -68,6 +76,7 @@ window.WisdomResearch = (() => {
         result.append(n('h3','Личный комментарий'),n('p',fresh.note.comment),b('Изменить заметку',()=>editNote(fresh.note)));
       }));
       if (runs.truncated || saved.truncated) history.append(n('p','Показаны последние записи.'));
+      return true;
     }
     function formFields(form, fields) {
       for (const [key,label,value,type='textarea'] of fields) {
@@ -85,14 +94,35 @@ window.WisdomResearch = (() => {
     }
     async function showRun(id) {
       clearTimeout(timer); currentRun=id; const serial=++runSerial;
-      const run=await freshRun(id); if(serial!==runSerial || currentRun!==id) return false; result.replaceChildren(n('h2',run.query || labels[run.kind]));
-      if (['queued','running'].includes(run.status)) {
+      const run=await freshRun(id); if(serial!==runSerial || currentRun!==id) return false;
+      const wasActive=isActive(runStatus.get(id)), terminal=run.status==='done' || run.status==='failed';
+      rememberRun(id,run.status);
+      const finishTerminal=async()=> {
+        if (terminal && wasActive) {
+          try { await refreshLists({id,serial}); }
+          catch (error) {
+            if (!valid() || serial!==runSerial || currentRun!==id) return false;
+            if (error.name==='AbortError') throw error;
+            host.notify(error.message);
+          }
+        }
+        return valid() && serial===runSerial && currentRun===id;
+      };
+      result.replaceChildren(n('h2',run.query || labels[run.kind]));
+      if (isActive(run.status)) {
         result.append(n('p',statusLabel(run.status)+'. Можно открыть другой раздел: результат сохранится в базе.'));
         timer=setTimeout(()=>action(()=>showRun(id))(),5000); return true;
       }
-      if (run.status==='failed') { result.append(n('p','Не удалось создать результат: '+run.error_code+'. Попробуйте ещё раз после проверки доступа.')); return true; }
+      if (run.status==='failed') {
+        const message=run.error_code==='access_revoked'
+          ? 'Не удалось создать результат: нет доступа к одному или нескольким источникам. Восстановите доступ и попробуйте ещё раз.'
+          : run.error_code==='generation_failed'
+          ? 'Не удалось выполнить генерацию. Попробуйте ещё раз.'
+          : 'Не удалось создать результат. Попробуйте ещё раз.';
+        result.append(n('p',message)); return finishTerminal();
+      }
       window.WisdomResult.render(result,run.result,{node:n,button:b,citation,question:(q,ids)=>question(q,ids,libId),notify:host.notify});
-      if (run.result.no_evidence) return true;
+      if (run.result.no_evidence) return finishTerminal();
       const actions=n('div',null,{class:'actions'}); result.append(actions);
       actions.append(b('Сохранить заметку',()=>host.dialog('Новая заметка',form=>formFields(form,[['title','Название',run.result.title,'input'],['comment','Личный комментарий','']]),async data=> {
         await fetchPost('/api/notes',{run_id:id,title:data.get('title'),comment:data.get('comment')}); await refreshLists(); host.notify('Заметка сохранена в базе.');
@@ -102,7 +132,7 @@ window.WisdomResearch = (() => {
         await fetchPost('/api/research/'+id+'/draft-rule',{run_id:id,title:data.get('title'),when_to_apply:data.get('when_to_apply'),expected_effect:data.get('expected_effect')});
         host.notify('Черновик создан. Проверьте и опубликуйте его в библиотеке.');
       })));
-      return true;
+      return finishTerminal();
     }
     async function start(kind,query) {
       if (!selected.size || selected.size>10) throw Error('Выберите от 1 до 10 готовых источников.');

@@ -15,6 +15,7 @@
     if (container && container.style) container.style.backgroundColor = '#ffffff';
 
     const rows = Array.isArray(data && data.nodes) ? data.nodes : [];
+    const overview = rows.length > 40;
     const actualNodes = new Map();
     const elements = rows.map((node) => {
       actualNodes.set(String(node.id), node);
@@ -39,16 +40,18 @@
     const graph = window.cytoscape({
       container: container,
       elements: elements,
-      minZoom: 0.25,
+      minZoom: 0.04,
       maxZoom: 3,
       wheelSensitivity: 0.15,
-      layout: { name: mode === 'semantic' ? 'circle' : 'breadthfirst',
-        directed: mode !== 'semantic', fit: true, padding: 30, animate: false },
+      layout: { name: mode === 'semantic' ? 'circle' : 'cose',
+        fit: true, padding: 30, animate: false, componentSpacing: 80,
+        idealEdgeLength: 90, nodeRepulsion: 400000, nodeOverlap: 20 },
       style: [
         { selector: 'node', style: {
           shape: 'ellipse', width: 30, height: 30,
           'background-color': node => colors[node.data('kind')] || colors.default,
-          label: 'data(label)', color: '#111827', 'font-size': 11,
+          label: node => overview && node.data('kind') !== 'source' ? '' : node.data('label'),
+          color: '#111827', 'font-size': 11,
           'font-family': 'Arial, sans-serif', 'text-wrap': 'wrap', 'text-max-width': '90px',
           'text-outline-color': '#ffffff', 'text-outline-width': 2,
           'text-valign': 'center', 'text-halign': 'center'
@@ -56,11 +59,12 @@
         { selector: 'edge', style: {
           'curve-style': 'straight', 'target-arrow-shape': 'triangle', 'arrow-scale': 0.8,
           'line-color': '#64748b', 'target-arrow-color': '#64748b', width: 1.25,
-          label: 'data(label)', 'font-size': 11, 'text-rotation': 'autorotate',
+          label: overview ? '' : 'data(label)', 'font-size': 11, 'text-rotation': 'autorotate',
           'text-background-color': '#ffffff', 'text-background-opacity': 0.9,
           'text-background-padding': 1, 'text-outline-color': '#ffffff', 'text-outline-width': 2
         } },
-        { selector: 'edge.hypothesis', style: { 'line-style': 'dashed' } }
+        { selector: 'edge.hypothesis', style: { 'line-style': 'dashed' } },
+        { selector: 'node:selected', style: { 'border-color': '#111827', 'border-width': 3 } }
       ]
     });
 
