@@ -1,6 +1,7 @@
 """Support validation and shared slot release, without paid provider calls."""
 
 import json
+from copy import deepcopy
 from uuid import uuid4
 
 import pytest
@@ -28,6 +29,15 @@ def payload(kind="research"):
         "fragments": fragments,
     }
     return request, draft
+
+
+def model_references(draft):
+    """The model chooses references; exact source quotes belong to the application."""
+    wire = deepcopy(draft)
+    for item in wire["items"] + wire["relations"]:
+        for citation in item["citations"]:
+            del citation["quote"]
+    return wire
 
 
 def test_rejects_quote_and_topic_cycle():
@@ -58,7 +68,14 @@ def test_comparison_no_evidence_and_source_coverage():
 @pytest.mark.parametrize("supported", [True, False])
 def test_verification_and_slot_release(monkeypatch, supported):
     req, draft = payload()
-    answers = iter([draft, {"items": [{"index": 0, "supported": supported}], "relations": []}])
+    if not supported:
+        req["fragments"][0]["text"] = "Unrelated evidence."
+    answers = iter(
+        [
+            model_references(draft),
+            {"items": [{"index": 0, "supported": supported}], "relations": []},
+        ]
+    )
 
     def cli(*args, **kwargs):
         return json.dumps(
@@ -77,13 +94,15 @@ def test_verification_and_slot_release(monkeypatch, supported):
     assert res.json()["support_verified"] is supported
     assert res.json()["no_evidence"] is (not supported)
     assert res.json()["provider_calls"] == 2
+    if supported:
+        assert res.json()["items"][0]["citations"][0]["quote"] == req["fragments"][0]["text"]
     assert model_runner._MODEL_SLOT.acquire(blocking=False)
     model_runner._MODEL_SLOT.release()
 
 
 def test_malformed_verifier_auth_and_busy(monkeypatch):
     req, draft = payload()
-    answers = iter([draft, {"items": [], "relations": []}])
+    answers = iter([model_references(draft), {"items": [], "relations": []}])
 
     def cli(*args, **kwargs):
         return json.dumps(
@@ -147,3 +166,66 @@ def test_runtime_stream_requires_independent_complete_protocol(
     else:
         with pytest.raises(model_runner._RunnerFailure):
             model_runner._run_cli("Synthetic text", [uuid4()], "/synthetic/launcher", stream=True)
+
+
+def test_long_unicode_excerpt_is_canonical_and_verifier_gets_original(monkeypatch):
+    req, draft = payload()
+    original = ("Première ligne.\nDeuxième\u00a0ligne. " * 60)[:1800]
+    req["fragments"][0]["text"] = original
+    draft["items"][0]["text"] = "Первая строка и вторая строка."
+    calls = []
+
+    def cli(text, *args, **kwargs):
+        calls.append(json.loads(text))
+        answer = (
+            model_references(draft)
+            if len(calls) == 1
+            else {"items": [{"index": 0, "supported": True}], "relations": []}
+        )
+        return json.dumps(
+            {
+                "model": model_runner._MODEL,
+                "stop_reason": "end_turn",
+                "content": [{"type": "text", "text": json.dumps(answer)}],
+            }
+        ).encode()
+
+    monkeypatch.setenv("KB_MODEL_RUNNER_TOKEN", "a" * 32)
+    monkeypatch.setattr(model_runner, "_run_cli", cli)
+    with TestClient(model_runner.create_app()) as client:
+        res = client.post("/research", json=req, headers={"X-KB-Worker-Token": "a" * 32})
+    assert res.status_code == 200, res.text
+    assert res.json()["items"][0]["citations"][0]["quote"] == original
+    assert calls[1]["draft"]["items"][0]["citations"][0]["quote"] == original
+    assert "fragments" not in calls[1]
+
+
+@pytest.mark.parametrize("invalid", ["unknown_id", "supplied_quote"])
+def test_invalid_model_reference_never_reaches_verifier(monkeypatch, invalid):
+    req, draft = payload()
+    wire = model_references(draft)
+    ref = wire["items"][0]["citations"][0]
+    if invalid == "unknown_id":
+        ref["fragment_id"] = str(uuid4())
+    else:
+        ref["quote"] = "Fabricated quote"
+    calls = []
+
+    def cli(*args, **kwargs):
+        calls.append(True)
+        return json.dumps(
+            {
+                "model": model_runner._MODEL,
+                "stop_reason": "end_turn",
+                "content": [{"type": "text", "text": json.dumps(wire)}],
+            }
+        ).encode()
+
+    monkeypatch.setenv("KB_MODEL_RUNNER_TOKEN", "a" * 32)
+    monkeypatch.setattr(model_runner, "_run_cli", cli)
+    with TestClient(model_runner.create_app()) as client:
+        res = client.post("/research", json=req, headers={"X-KB-Worker-Token": "a" * 32})
+    assert res.status_code == 503 and res.json()["detail"] == "invalid_output"
+    assert len(calls) == 1
+    assert model_runner._MODEL_SLOT.acquire(blocking=False)
+    model_runner._MODEL_SLOT.release()
