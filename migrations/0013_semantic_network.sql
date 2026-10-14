@@ -19,12 +19,13 @@ CREATE TABLE kb.semantic_relation (
  predicate text NOT NULL CHECK(predicate IN ('supports','part_of','used_for','contradicts')),
  hypothesis boolean NOT NULL DEFAULT true,
  publication text NOT NULL DEFAULT 'draft' CHECK(publication IN ('draft','published','withdrawn')),
- origin text NOT NULL CHECK(origin IN ('manual','generated')),origin_run uuid REFERENCES kb.research_run,
+ origin text NOT NULL CHECK(origin IN ('manual','generated','manual_revision')),origin_run uuid REFERENCES kb.research_run,
  origin_item integer, manifest jsonb,citations jsonb NOT NULL DEFAULT '[]',
  created_at timestamptz NOT NULL DEFAULT now(),UNIQUE(lineage_id,version_no),UNIQUE(origin_run,origin_item),
  CHECK(from_concept<>to_concept),
  CHECK((origin='manual' AND manifest IS NULL AND origin_run IS NULL) OR
-       (origin='generated' AND manifest IS NOT NULL AND origin_run IS NOT NULL AND origin_item IS NOT NULL))
+       (origin='generated' AND manifest IS NOT NULL AND origin_run IS NOT NULL AND origin_item IS NOT NULL) OR
+       (origin='manual_revision' AND manifest IS NOT NULL AND origin_run IS NULL AND origin_item IS NULL))
 );
 ALTER TABLE kb.semantic_concept ENABLE ROW LEVEL SECURITY;
 ALTER TABLE kb.semantic_concept FORCE ROW LEVEL SECURITY;

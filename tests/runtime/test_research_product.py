@@ -148,6 +148,26 @@ def test_semantic_persist_review_version_and_endpoint_visibility(world, monkeypa
             ]
             == "published"
         )
+        relation_v2 = semantic.create_relation(
+            conn,
+            world["principal"],
+            world["lib"],
+            graph["nodes"][0]["entity_id"],
+            graph["nodes"][1]["entity_id"],
+            "supports",
+            True,
+            edge["entity_id"],
+        )
+        assert relation_v2["version_no"] == 2
+        revised_edge = next(
+            e
+            for e in semantic.semantic_network(conn, world["principal"], world["lib"])["edges"]
+            if e["entity_id"] == relation_v2["id"]
+        )
+        assert (
+            revised_edge["basis"] == "manual_revision_with_inherited_sources"
+            and revised_edge["evidence"]
+        )
         semantic.review_semantic(
             conn, world["principal"], graph["nodes"][0]["entity_id"], "concept", "withdraw"
         )

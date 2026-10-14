@@ -10,7 +10,7 @@ def provenance_graph(conn, principal, library_id, source_ids=None, limit=200):
     if not 1 <= limit <= 500 or (source_ids is not None and not 1 <= len(source_ids) <= 10):
         raise ValueError("invalid_graph_scope")
     with transaction_identity(conn, principal), conn.cursor(row_factory=dict_row) as cur:
-        _library(cur, principal, library_id)
+        access = _library(cur, principal, library_id)
         if source_ids is not None:
             cur.execute(
                 "SELECT id FROM kb.source WHERE id=ANY(%s::uuid[]) AND library_id=%s "
@@ -155,4 +155,8 @@ def provenance_graph(conn, principal, library_id, source_ids=None, limit=200):
             "edges": edges,
             "truncated": len(rows) > limit,
             "mode": "provenance",
+            "capabilities": {
+                "can_create": access["rank"] >= 20,
+                "can_review": access["rank"] >= 30,
+            },
         }

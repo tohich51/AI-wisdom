@@ -34,8 +34,8 @@ window.WisdomMap = (() => {
       if(node.kind==='concept') {
         const ids=[...new Set((node.evidence||[]).map(c=>c.source_id))];
         details.append(b('Исследовать понятие',()=>window.WisdomResearch.question('Что означает '+node.label+'?',ids,library.value)));
-        if(node.publication==='draft') details.append(b('Подтвердить понятие',()=>review(node.entity_id,'concept','publish')));
-        if(node.publication!=='withdrawn') details.append(b('Снять понятие с публикации',()=>review(node.entity_id,'concept','withdraw')));
+        if(data.capabilities?.can_review && node.publication==='draft') details.append(b('Подтвердить понятие',()=>review(node.entity_id,'concept','publish')));
+        if(data.capabilities?.can_review && node.publication!=='withdrawn') details.append(b('Снять понятие с публикации',()=>review(node.entity_id,'concept','withdraw')));
       }
     }
     async function review(entityId,entityKind,decision) {
@@ -44,6 +44,7 @@ window.WisdomMap = (() => {
     async function load() {
       const serial=++readSerial; details.replaceChildren();
       const fresh=await host.api(endpoint(),{signal:controller.signal}); if(!valid() || serial!==readSerial) return; data=fresh;
+      manual.hidden=mode.value!=='semantic' || !data.capabilities?.can_create; relationButton.hidden=mode.value!=='semantic' || !data.capabilities?.can_create;
       canvas?.destroy();canvas=null; surface.replaceChildren();list.replaceChildren(n('h2','Узлы и связи'));
       const status=n('p',(mode.value==='semantic'?'Понятия и направленные смысловые связи':'Источник → фрагмент → знание или правило → опыт → результат')+
         ' · '+data.nodes.length+' узлов · '+data.edges.length+' связей'+(data.truncated?' · Показана часть карты.':''));
@@ -61,7 +62,7 @@ window.WisdomMap = (() => {
         const row=n('article',null,{class:'graph-relation'});
         row.append(n('p',labels.get(edge.source)+' → '+(predicates[edge.predicate]||edge.predicate)+' → '+labels.get(edge.target)),
           n('p',(edge.hypothesis?'Гипотеза · ':'')+(publication[edge.publication]||edge.basis)));
-        if(mode.value==='semantic' && edge.publication==='draft') row.append(b('Подтвердить связь',()=>review(edge.entity_id,'relation','publish')));
+        if(data.capabilities?.can_review && mode.value==='semantic' && edge.publication==='draft') row.append(b('Подтвердить связь',()=>review(edge.entity_id,'relation','publish')));
         for(const cite of Array.isArray(edge.evidence)?edge.evidence:[]) row.append(n('blockquote',cite.quote),n('p',cite.title));
         list.append(row);
       }
@@ -77,7 +78,7 @@ window.WisdomMap = (() => {
       }
     },async fields=> { await host.post('/api/graphs/concepts',{library_id:library.value,label:fields.get('label'),body:fields.get('body')});if(valid())await load(); }));
     controls.append(manual);
-    controls.append(b('Добавить связь',()=> {
+    const relationButton=b('Добавить связь',()=> {
       if(mode.value!=='semantic' || data.nodes.length<2) throw Error('Откройте семантическую сеть с двумя понятиями.');
       host.dialog('Ручная связь · без доказательства',form=> {
         for(const [name,label] of [['from_concept','От понятия'],['to_concept','К понятию']]) {
@@ -86,7 +87,8 @@ window.WisdomMap = (() => {
         const select=n('select',null,{id:'predicate',name:'predicate'});
         for(const p of ['supports','part_of','used_for','contradicts'])select.append(n('option',predicates[p],{value:p})); form.append(n('label','Тип связи',{for:'predicate'}),select);
       },async fields=> {await host.post('/api/graphs/relations',{library_id:library.value,from_concept:fields.get('from_concept'),to_concept:fields.get('to_concept'),predicate:fields.get('predicate'),hypothesis:true});if(valid())await load();});
-    }));
+    });
+    controls.append(relationButton);
     await act(load)();
   }
   const types={source:'Источник',fragment:'Фрагмент',knowledge:'Знание',rule:'Правило',use:'Использование',outcome:'Результат',concept:'Понятие'};

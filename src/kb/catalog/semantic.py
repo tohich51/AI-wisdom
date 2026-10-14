@@ -73,7 +73,7 @@ def semantic_network(conn, principal, library_id, limit=200):
     if not 1 <= limit <= 500:
         raise ValueError("invalid_graph_limit")
     with transaction_identity(conn, principal), conn.cursor(row_factory=dict_row) as cur:
-        _library(cur, principal, library_id)
+        access = _library(cur, principal, library_id)
         cur.execute(
             "SELECT * FROM kb.semantic_concept WHERE library_id=%s AND publication<>'withdrawn' "
             "ORDER BY created_at,id LIMIT %s",
@@ -133,7 +133,13 @@ def semantic_network(conn, principal, library_id, limit=200):
                     "origin": row["origin"],
                     "version_no": row["version_no"],
                     "evidence": evidence,
-                    "basis": "inferred_from_sources" if evidence else "manual_without_evidence",
+                    "basis": (
+                        "manual_revision_with_inherited_sources"
+                        if row["origin"] == "manual_revision"
+                        else "inferred_from_sources"
+                        if evidence
+                        else "manual_without_evidence"
+                    ),
                 }
             )
         return {
@@ -141,6 +147,10 @@ def semantic_network(conn, principal, library_id, limit=200):
             "edges": edges,
             "mode": "semantic",
             "truncated": len(rows) > limit or len(rels) > limit * 3,
+            "capabilities": {
+                "can_create": access["rank"] >= 20,
+                "can_review": access["rank"] >= 30,
+            },
             "similarity": {"available": False, "reason": "concept_embedding_index_not_built"},
         }
 
@@ -190,7 +200,7 @@ def create_concept(conn, principal, library_id, label, body, replaces=None):
 
 
 def create_relation(
-    conn, principal, library_id, from_concept, to_concept, predicate, hypothesis=True
+    conn, principal, library_id, from_concept, to_concept, predicate, hypothesis=True, replaces=None
 ):
     if from_concept == to_concept or predicate not in {
         "supports",
@@ -209,19 +219,41 @@ def create_relation(
         if len(cur.fetchall()) != 2:
             raise AccessDenied("forbidden")
         ident = uuid4()
+        lineage = ident
+        version = 1
+        origin, manifest, citations = "manual", None, []
+        if replaces:
+            cur.execute("SELECT * FROM kb.semantic_relation WHERE id=%s FOR UPDATE", (replaces,))
+            old = cur.fetchone()
+            if old is None or old["library_id"] != library_id:
+                raise AccessDenied("forbidden")
+            lineage = old["lineage_id"]
+            if old["manifest"] is not None:
+                check_snapshot(cur, old["manifest"])
+                origin, manifest, citations = "manual_revision", old["manifest"], old["citations"]
+            cur.execute("SELECT id FROM kb.semantic_relation WHERE id=%s FOR UPDATE", (lineage,))
+            cur.execute(
+                "SELECT max(version_no)+1 AS n FROM kb.semantic_relation WHERE lineage_id=%s",
+                (lineage,),
+            )
+            version = cur.fetchone()["n"]
         cur.execute(
             """INSERT INTO kb.semantic_relation(id,library_id,principal_id,lineage_id,version_no,
-                     from_concept,to_concept,predicate,hypothesis,origin)
-                     VALUES(%s,%s,%s,%s,1,%s,%s,%s,%s,'manual') RETURNING id,publication""",
+              from_concept,to_concept,predicate,hypothesis,origin,manifest,citations)
+              VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) RETURNING id,publication,version_no""",
             (
                 ident,
                 library_id,
                 principal.principal_id,
-                ident,
+                lineage,
+                version,
                 from_concept,
                 to_concept,
                 predicate,
                 hypothesis,
+                origin,
+                Jsonb(manifest) if manifest is not None else None,
+                Jsonb(jsonable_encoder(citations)),
             ),
         )
         return dict(cur.fetchone())

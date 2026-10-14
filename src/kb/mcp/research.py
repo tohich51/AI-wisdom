@@ -88,6 +88,7 @@ def install_tools(server, call):
         predicate: Predicate,
         ctx: Context,
         hypothesis: bool = True,
+        replaces: UUID | None = None,
     ):
         return call(
             ctx,
@@ -97,6 +98,7 @@ def install_tools(server, call):
             to_concept,
             predicate,
             hypothesis,
+            replaces,
         )
 
     @server.tool()

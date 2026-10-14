@@ -68,6 +68,7 @@ class RelationArgs(LibraryArgs):
     to_concept: UUID
     predicate: Predicate
     hypothesis: bool = Field(default=True, strict=True)
+    replaces: UUID | None = None
 
 
 class ReviewArgs(Args):
