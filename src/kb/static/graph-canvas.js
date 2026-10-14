@@ -69,6 +69,77 @@
     });
 
     graph.fit(30);
+
+    let destroyed = false;
+    let resizeFrame = null;
+    let resizeObserver = null;
+    let lastWidth = 0;
+    let lastHeight = 0;
+
+    const measureContainer = () => {
+      const width = container.clientWidth;
+      const height = container.clientHeight;
+      const style = window.getComputedStyle ? window.getComputedStyle(container) : null;
+      const hidden = container.isConnected === false || container.hidden === true ||
+        (style && (style.display === 'none' ||
+          style.visibility === 'hidden' || style.visibility === 'collapse')) ||
+        width <= 0 || height <= 0;
+      return {
+        width: hidden ? 0 : width,
+        height: hidden ? 0 : height
+      };
+    };
+
+    const initialSize = measureContainer();
+    lastWidth = initialSize.width;
+    lastHeight = initialSize.height;
+
+    const scheduleFit = () => {
+      if (destroyed || resizeFrame !== null) return;
+      resizeFrame = window.requestAnimationFrame(() => {
+        resizeFrame = null;
+        if (destroyed) return;
+        const size = measureContainer();
+        lastWidth = size.width;
+        lastHeight = size.height;
+        if (size.width <= 0 || size.height <= 0) return;
+        graph.resize();
+        graph.fit(30);
+      });
+    };
+
+    const handleResize = () => {
+      if (destroyed) return;
+      const size = measureContainer();
+      if (size.width === lastWidth && size.height === lastHeight) return;
+      lastWidth = size.width;
+      lastHeight = size.height;
+      if (size.width <= 0 || size.height <= 0) {
+        if (resizeFrame !== null) {
+          window.cancelAnimationFrame(resizeFrame);
+          resizeFrame = null;
+        }
+        return;
+      }
+      scheduleFit();
+    };
+
+    const cleanupResizeLifecycle = () => {
+      if (destroyed) return;
+      destroyed = true;
+      if (resizeFrame !== null) {
+        window.cancelAnimationFrame(resizeFrame);
+        resizeFrame = null;
+      }
+      if (resizeObserver) resizeObserver.disconnect();
+    };
+
+    if (container && typeof window.ResizeObserver === 'function') {
+      resizeObserver = new window.ResizeObserver(handleResize);
+      resizeObserver.observe(container);
+    }
+    graph.on('destroy', cleanupResizeLifecycle);
+
     graph.on('tap', 'node', (event) => {
       const node = actualNodes.get(String(event.target.id()));
       if (node && typeof onSelect === 'function') onSelect(node);

@@ -12,7 +12,7 @@ window.WisdomResearch = (() => {
   async function mount(container, helpers, libraryId) {
     invalidate(); root = container; host = helpers;
     const generation = epoch; controller = new AbortController();
-    const n = host.node; let selected = new Set(), currentRun, runSerial=0, operation, listSerial=0;
+    const n = host.node; let selected = new Set(), currentRun, currentNote, currentNoteData, runSerial=0, operation, listSerial=0;
     const valid = () => generation === epoch;
     const request = async (path, options = {}) => {
       const data = await host.api(path, {...options, signal: controller.signal});
@@ -39,7 +39,7 @@ window.WisdomResearch = (() => {
     const layout=n('div',null,{class:'research-layout'}), sources=n('aside',null,{class:'card'});
     const work=n('div',null,{class:'research-work'}), studio=n('aside',null,{class:'card'});
     const result=n('div',null,{class:'research-result','aria-live':'polite'});
-    const history=n('div',null,{class:'card'}), notes=n('div',null,{class:'card'});
+    const history=n('div',null,{class:'card'}), notes=n('div',null,{class:'card'}), personalNote=n('div',null,{class:'card'});
     layout.append(sources,work,studio); root.append(layout); work.append(result,history,notes);
     const freshRun = id => request('/api/research/'+id);
     const isActive = status => status === 'queued' || status === 'running';
@@ -59,21 +59,31 @@ window.WisdomResearch = (() => {
       d.append(b('Открыть источник',()=>host.openSource(cite.source_id)),b('Закрыть',()=>d.close()));
       d.addEventListener('close',()=>d.remove()); document.body.append(d); d.showModal();
     }
+    function renderNote(note) {
+      currentNoteData=note;
+      personalNote.replaceChildren(n('h3','Личный комментарий'),n('h4',note.title),n('p',note.comment),
+        b('Изменить заметку',()=>editNote(currentNoteData)));
+      result.append(personalNote);
+    }
+    function clearPersonalNote() {
+      currentNoteData=null; personalNote.replaceChildren();
+    }
     async function refreshLists(owner) {
       const requestSerial=++listSerial;
       const [runs,saved]=await Promise.all([request('/api/research?library_id='+libId),request('/api/notes?library_id='+libId)]);
       if (!valid() || requestSerial!==listSerial || (owner && (owner.id!==currentRun || owner.serial!==runSerial))) return false;
       history.replaceChildren(n('h3','История исследований'));
       if (!runs.runs.length) history.append(n('p','Пока нет исследований.'));
-      for (const run of runs.runs) history.append(b((run.query || labels[run.kind])+' · '+statusLabel(run.status),()=>showRun(run.id)));
+      for (const run of runs.runs) history.append(b((run.query || labels[run.kind])+' · '+statusLabel(run.status),()=>showRun(run.id,null)));
       notes.replaceChildren(n('h3','Мои заметки'));
       if (!saved.notes.length) notes.append(n('p','Сохраните полезный результат как заметку. Она будет доступна на других устройствах.'));
       for (const note of saved.notes) notes.append(b(note.title,async()=> {
         const selection=++runSerial;
         const fresh=await request('/api/notes/'+note.id); if(selection!==runSerial) return;
-        const shown=await showRun(fresh.note.research_run_id);
-        if (!valid() || !shown || currentRun!==fresh.note.research_run_id) return;
-        result.append(n('h3','Личный комментарий'),n('p',fresh.note.comment),b('Изменить заметку',()=>editNote(fresh.note)));
+        const noteValue=fresh.note;
+        const shown=await showRun(noteValue.research_run_id,noteValue.id);
+        if (!valid() || !shown || currentRun!==noteValue.research_run_id || currentNote!==noteValue.id) return;
+        renderNote(noteValue);
       }));
       if (runs.truncated || saved.truncated) history.append(n('p','Показаны последние записи.'));
       return true;
@@ -87,13 +97,29 @@ window.WisdomResearch = (() => {
       }
     }
     function editNote(note) {
-      host.dialog('Изменить заметку',form=>formFields(form,[['title','Название',note.title,'input'],['comment','Комментарий',note.comment]]),async data=> {
-        await fetchPost('/api/notes/'+note.id,{title:data.get('title'),comment:data.get('comment'),revision:note.revision},'PATCH');
-        await refreshLists(); host.notify('Заметка сохранена.');
+      if (!note || !valid() || note.id!==currentNote) return;
+      const runId=currentRun, serial=runSerial, noteId=currentNote, editEpoch=epoch;
+      let editableNote=note;
+      const ownsSelection=()=>valid() && editEpoch===epoch && runId===currentRun && serial===runSerial && noteId===currentNote;
+      host.dialog('Изменить заметку',form=>formFields(form,[['title','Название',editableNote.title,'input'],['comment','Комментарий',editableNote.comment]]),async data=> {
+        try {
+          const saved=await fetchPost('/api/notes/'+editableNote.id,{title:data.get('title'),comment:data.get('comment'),revision:editableNote.revision},'PATCH');
+          if (!ownsSelection()) return;
+          editableNote=saved.note;
+          renderNote(editableNote);
+          await refreshLists({id:runId,serial});
+          if (!ownsSelection()) return;
+          host.notify('Заметка сохранена.');
+        } catch (error) {
+          if (!ownsSelection()) return;
+          throw error;
+        }
       });
     }
-    async function showRun(id) {
-      clearTimeout(timer); currentRun=id; const serial=++runSerial;
+    async function showRun(id,noteId=null) {
+      clearTimeout(timer); const selectionChanged=id!==currentRun || noteId!==currentNote;
+      currentRun=id; currentNote=noteId; const serial=++runSerial;
+      if (selectionChanged) clearPersonalNote();
       const run=await freshRun(id); if(serial!==runSerial || currentRun!==id) return false;
       const wasActive=isActive(runStatus.get(id)), terminal=run.status==='done' || run.status==='failed';
       rememberRun(id,run.status);
@@ -111,7 +137,7 @@ window.WisdomResearch = (() => {
       result.replaceChildren(n('h2',run.query || labels[run.kind]));
       if (isActive(run.status)) {
         result.append(n('p',statusLabel(run.status)+'. Можно открыть другой раздел: результат сохранится в базе.'));
-        timer=setTimeout(()=>action(()=>showRun(id))(),5000); return true;
+        timer=setTimeout(()=>action(()=>showRun(id,noteId))(),5000); return true;
       }
       if (run.status==='failed') {
         const message=run.error_code==='access_revoked'
