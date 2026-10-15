@@ -122,6 +122,12 @@ def build_mcp(app, hosts):
         return call(ctx, workspace.experience_summary)
 
     @server.tool()
+    def list_retrievals(ctx: Context):
+        """Own bounded delivery journal; delivery is not reading or application."""
+        ExperienceSummaryArgs()
+        return {"events": call(ctx, workspace.list_retrievals)}
+
+    @server.tool()
     def review_items(
         library_id: UUID,
         item_kind: Literal["knowledge", "rule"],
@@ -273,6 +279,9 @@ def build_mcp(app, hosts):
         is_correction: bool = False,
         confirm_applied: bool = False,
         idempotency_key: str | None = None,
+        achievement: Literal["met", "partly", "not_met", "unknown"] | None = None,
+        assessor_kind: Literal["human", "agent", "measurement", "unknown"] = "unknown",
+        assessment_evidence: str | None = None,
     ):
         args = RecordOutcomeArgs(
             use_id=use_id,
@@ -282,6 +291,9 @@ def build_mcp(app, hosts):
             is_correction=is_correction,
             confirm_applied=confirm_applied,
             idempotency_key=idempotency_key,
+            achievement=achievement,
+            assessor_kind=assessor_kind,
+            assessment_evidence=assessment_evidence,
         )
         if args.confirm_applied:
             call(ctx, writes.mark_applied, args.use_id)
@@ -294,6 +306,9 @@ def build_mcp(app, hosts):
             args.rating_basis,
             args.is_correction,
             idempotency_key=args.idempotency_key,
+            achievement=args.achievement,
+            assessor_kind=args.assessor_kind,
+            assessment_evidence=args.assessment_evidence,
         )
 
     @server.tool()

@@ -95,3 +95,4 @@ section#maps-tab { grid-template-columns: minmax(0, 1fr); }
 .completion-error { color: #8b2525; }
 .completion-empty { color: var(--muted); }
 .completion-library, .completion-experience { display: grid; gap: 1rem; }
+.completion-project-row { min-width: 0; overflow-wrap: anywhere; }

@@ -52,6 +52,7 @@ import psycopg
 from pydantic import BaseModel, ConfigDict, Field
 
 from kb.access.policy import AccessDenied, Principal, authorize, transaction_identity
+from kb.catalog.retrieval_events import record_retrieval
 from kb.catalog.storage import LocalBlobStore, ObjectNotFound, StorageError, object_key_for
 from kb.catalog.upload_fetch import (
     FetchedObject,
@@ -644,17 +645,42 @@ def read_original(
             raise StorageError(
                 "the stored bytes do not match the source's content hash; refusing to serve them"
             )
-        return OriginalRead(original=original, content=content, complete=True)
+        result = OriginalRead(original=original, content=content, complete=True)
+    else:
+        begin = start or 0
+        end = stop
+        if end is None:
+            end = begin + original.byte_size
+        result = OriginalRead(
+            original=original,
+            content=store.read_range(original.object_key, begin, end),
+            complete=False,
+        )
 
-    begin = start or 0
-    end = stop
-    if end is None:
-        end = begin + original.byte_size
-    return OriginalRead(
-        original=original,
-        content=store.read_range(original.object_key, begin, end),
-        complete=False,
-    )
+    # File I/O and whole-object hashing are finished. The final authorization
+    # snapshot must still admit these exact bytes; a refusal rolls back issuance.
+    with transaction_identity(conn, principal), conn.cursor() as cur:
+        record_retrieval(cur, principal, item_kind="source", item_id=source_id)
+        cur.execute(
+            "SELECT s.library_id,s.object_key,s.content_hash,"
+            "m.backend_key,m.byte_size,m.media_type "
+            "FROM kb.source s JOIN kb.object_manifest m ON m.source_id=s.id "
+            "JOIN kb.library l ON l.id=s.library_id "
+            "WHERE s.id=%s AND l.organisation_id=%s "
+            "AND m.object_key=s.object_key AND m.content_hash=s.content_hash "
+            "AND kb.library_policy_allows(l.id,'export')",
+            (source_id, principal.account_id),
+        )
+        if cur.fetchone() != (
+            _source.library_id,
+            original.object_key,
+            original.content_hash,
+            original.backend,
+            original.byte_size,
+            original.media_type,
+        ):
+            raise AccessDenied("no such source")
+    return result
 
 
 __all__ = [

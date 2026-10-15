@@ -48,6 +48,7 @@ TOOLS = TOOLS | frozenset(
         "review_semantic_relation",
         "publish_knowledge",
         "list_jobs",
+        "list_retrievals",
         "read_library_policy",
         "get_experience_summary",
         "review_items",

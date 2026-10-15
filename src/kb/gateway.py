@@ -103,6 +103,7 @@ def create_app() -> FastAPI:
         "app.js",
         "completion.js",
         "rule-evidence.js",
+        "project-context.js",
         "style.css",
         "research.js",
         "research-result.js",

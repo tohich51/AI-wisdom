@@ -14,6 +14,7 @@ HANDLER_SCOPES = {
     "list_jobs": "kb:read",
     "get_policy": "kb:read",
     "experience_summary": "kb:read",
+    "list_retrievals": "kb:read",
     "list_research_sources": "kb:read",
     "list_research": "kb:read",
     "get_research": "kb:read",

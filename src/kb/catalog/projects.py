@@ -24,6 +24,8 @@ caller has no grant on the moment the project view is built.
 from __future__ import annotations
 
 import datetime as dt
+import hashlib
+import json
 from typing import Literal
 from uuid import UUID
 
@@ -32,7 +34,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from kb.access.policy import AccessDenied, Principal, transaction_identity
 from kb.catalog.libraries import AudienceScope, CreateLibrary
-from kb.contracts.entities import Library, Rule
+from kb.contracts.entities import Library, Locator, Provenance, Rule
 from kb.contracts.enums import LibraryKind, PublicationStatus
 from kb.contracts.mcp_tools import GetProjectContextResult
 
@@ -117,13 +119,20 @@ class PinnedRule(_Model):
     status: LinkStatus
     rule_id: UUID | None = None
     rule: Rule | None = None
+    lineage_id: UUID | None = None
+    layer: Literal["brand", "project", "general"] | None = None
+    content_hash: str | None = None
+    bound_at: dt.datetime | None = None
 
     @model_validator(mode="after")
     def _blocked_means_no_description(self) -> PinnedRule:
         if self.status == "available":
             if self.rule is None or self.rule_id is None:
                 raise ValueError("an available pin must carry the rule it resolved to")
-        elif self.rule is not None or self.rule_id is not None:
+        elif any(
+            v is not None
+            for v in (self.rule, self.rule_id, self.lineage_id, self.layer, self.content_hash)
+        ):
             raise ValueError(
                 "a blocked pin must not carry the id or text of a rule the caller may not read"
             )
@@ -145,14 +154,18 @@ class ProjectContext(_Model):
     complete: bool
     blocked_link_count: int = Field(ge=0)
     blocked_pin_count: int = Field(ge=0)
-    context_state: Literal["complete", "blocked"]
+    context_state: Literal["complete", "blocked", "conflicted"]
+    ordering: list[str] = Field(default_factory=lambda: ["brand", "project", "general"])
+    conflicts: list[dict] = Field(default_factory=list)
 
     @model_validator(mode="after")
     def _state_matches_the_counts(self) -> ProjectContext:
-        expected_complete = self.blocked_link_count + self.blocked_pin_count == 0
+        blocked = self.blocked_link_count + self.blocked_pin_count > 0
+        expected_complete = not blocked and not self.conflicts
         if self.complete is not expected_complete:
             raise ValueError("complete must agree with the blocked counts")
-        if self.context_state != ("complete" if expected_complete else "blocked"):
+        expected_state = "blocked" if blocked else "conflicted" if self.conflicts else "complete"
+        if self.context_state != expected_state:
             raise ValueError("context_state must agree with the blocked counts")
         return self
 
@@ -172,10 +185,21 @@ class ProjectContext(_Model):
             reasons.append("linked_library_access_missing")
         if any(pin.status == "blocked" and pin.is_required for pin in self.pins):
             reasons.append("pinned_rule_access_missing")
+        if self.conflicts:
+            reasons.append("pinned_version_conflict")
+        manifest = self.model_dump(mode="json", exclude_none=True)
+        # MCP reports opaque blocked counts, never an inaccessible version.
+        manifest["pins"] = [pin for pin in manifest["pins"] if pin["status"] == "available"]
         return GetProjectContextResult(
             project=self.project,
             pinned_rules=[pin.rule for pin in self.pins if pin.rule is not None],
             unresolved_dependencies=reasons,
+            manifest=manifest,
+            manifest_sha256=hashlib.sha256(
+                json.dumps(
+                    manifest, sort_keys=True, separators=(",", ":"), ensure_ascii=False
+                ).encode()
+            ).hexdigest(),
         )
 
 
@@ -431,9 +455,10 @@ def project_context(
             SELECT r.version_no, r.is_required, r.priority,
                    ru.id, ru.library_id, ru.version_no, ru.title,
                    ru.when_to_apply, ru.expected_effect, ru.verification,
-                   ru.publication
+                   ru.publication, ru.lineage_id, l.kind, r.created_at
             FROM kb.project_rule_pin r
             LEFT JOIN kb.rule ru ON ru.id = r.rule_id AND ru.version_no = r.version_no
+            LEFT JOIN kb.library l ON l.id=ru.library_id
             WHERE r.project_id = %s
             ORDER BY r.priority DESC, r.is_required DESC, r.created_at
             """,
@@ -441,10 +466,61 @@ def project_context(
         )
         pin_rows = cur.fetchall()
 
-    actions = _actions_for(conn, principal, [row[3] for row in pin_rows if row[3] is not None])
+    from kb.catalog.content import get_rule
+
     pins: list[PinnedRule] = []
     for row in pin_rows:
         resolved = row[3] is not None
+        full_rule = None
+        rule_hash = None
+        if resolved:
+            try:
+                raw = get_rule(conn, principal, row[3], row[5], _record_delivery=False)
+            except AccessDenied:
+                # A grant may have been revoked since the pin query.
+                resolved = False
+            else:
+                evidence = []
+                for item in raw["provenance"]:
+                    located = item.get("locator")
+                    locator = None
+                    if located:
+                        values = {k: v for k, v in located.items() if k in Locator.model_fields}
+                        values["kind"] = located["locator_kind"]
+                        if located.get("table_index") is not None:
+                            values["table"] = located["table_index"]
+                        if (
+                            located.get("cell_row") is not None
+                            and located.get("cell_column") is not None
+                        ):
+                            values["cell"] = (located["cell_row"], located["cell_column"])
+                        locator = Locator(**values)
+                    evidence.append(
+                        Provenance(
+                            source_id=item["source_id"],
+                            fragment_id=item["fragment_id"],
+                            locator=locator,
+                            content_hash=item["content_hash"],
+                            author=item["author"],
+                            publication=item["publication_ref"],
+                            url=item["url"],
+                            retrieved_at=item["retrieved_at"],
+                        )
+                    )
+                full_rule = Rule(
+                    **{
+                        k: v for k, v in raw.items() if k in Rule.model_fields and k != "provenance"
+                    },
+                    provenance=evidence,
+                )
+                rule_hash = hashlib.sha256(
+                    json.dumps(
+                        full_rule.model_dump(mode="json"),
+                        sort_keys=True,
+                        ensure_ascii=False,
+                        separators=(",", ":"),
+                    ).encode()
+                ).hexdigest()
         pins.append(
             PinnedRule(
                 version_no=row[0],
@@ -452,9 +528,44 @@ def project_context(
                 priority=row[2],
                 status="available" if resolved else "blocked",
                 rule_id=row[3] if resolved else None,
-                rule=_as_rule(row[3:11], actions.get(row[3], [])) if resolved else None,
+                rule=full_rule,
+                lineage_id=row[11] if resolved else None,
+                layer=(
+                    "brand"
+                    if row[12] == "brand"
+                    else "project"
+                    if row[12] == "project"
+                    else "general"
+                )
+                if resolved
+                else None,
+                content_hash=rule_hash,
+                bound_at=row[13],
             )
         )
+
+    layers = {"brand": 0, "project": 1, "general": 2, None: 3}
+    pins.sort(
+        key=lambda pin: (
+            layers[pin.layer],
+            -pin.priority,
+            not pin.is_required,
+            str(pin.rule_id or ""),
+        )
+    )
+    lineages: dict[UUID, list[PinnedRule]] = {}
+    for pin in pins:
+        if pin.lineage_id is not None:
+            lineages.setdefault(pin.lineage_id, []).append(pin)
+    conflicts = [
+        {
+            "code": "multiple_versions_pinned",
+            "lineage_id": str(lineage),
+            "rule_ids": [str(pin.rule_id) for pin in versions],
+        }
+        for lineage, versions in lineages.items()
+        if len({pin.version_no for pin in versions}) > 1
+    ]
 
     blocked_links = sum(1 for link in links if link.status == "blocked")
     blocked_pins = sum(1 for pin in pins if pin.status == "blocked")
@@ -462,8 +573,8 @@ def project_context(
     # not. An optional link the caller cannot open still means part of this
     # project is unavailable to them, and reporting a "complete" context while
     # quietly holding back a library is the failure mode A12 names.
-    complete = blocked_links + blocked_pins == 0
-    return ProjectContext(
+    complete = blocked_links + blocked_pins == 0 and not conflicts
+    result = ProjectContext(
         project=project.project,
         description=project.description,
         links=links,
@@ -471,5 +582,23 @@ def project_context(
         complete=complete,
         blocked_link_count=blocked_links,
         blocked_pin_count=blocked_pins,
-        context_state="complete" if complete else "blocked",
+        context_state="blocked"
+        if blocked_links + blocked_pins
+        else "conflicted"
+        if conflicts
+        else "complete",
+        conflicts=conflicts,
     )
+    from kb.catalog.retrieval_events import record_retrieval
+
+    with transaction_identity(conn, principal), conn.cursor() as cur:
+        for pin in pins:
+            if pin.status == "available":
+                record_retrieval(
+                    cur,
+                    principal,
+                    item_kind="rule",
+                    item_id=pin.rule_id,
+                    version_no=pin.version_no,
+                )
+    return result

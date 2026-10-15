@@ -87,6 +87,7 @@ class Provenance(Contract):
     """
 
     source_id: UUID
+    fragment_id: UUID | None = None
     locator: Locator | None = None
     author: str | None = None
     publication: str | None = None
@@ -230,6 +231,9 @@ class Outcome(Contract):
     observed_result: str | None = None
     rating: int | None = Field(default=None, ge=1, le=5)
     rating_basis: str | None = None
+    achievement: Literal["met", "partly", "not_met", "unknown"] = "unknown"
+    assessor_kind: Literal["human", "agent", "measurement", "unknown"] = "unknown"
+    assessment_evidence: str | None = Field(default=None, max_length=4000)
     reported_by: UUID | None = None  # a metric has no human author
     reported_at: dt.datetime | None = None
     is_correction: bool = False

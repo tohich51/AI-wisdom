@@ -10,7 +10,7 @@ primitive, so the schema does not have a slot to put it in.
 
 from __future__ import annotations
 
-from typing import Literal
+from typing import Any, Literal
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -92,6 +92,9 @@ class GetProjectContextResult(BaseModel):
     project: Library
     pinned_rules: list[Rule]
     unresolved_dependencies: list[str] = Field(default_factory=list)
+    # Produced from the validated ProjectContext, not caller-supplied JSON.
+    manifest: dict[str, Any] = Field(default_factory=dict)
+    manifest_sha256: str | None = None
 
 
 # 6 ---------------------------------------------------------- start use
@@ -116,6 +119,9 @@ class RecordOutcomeArgs(ToolArgs):
     observed_result: str | None = Field(default=None, max_length=4000)
     rating: int | None = Field(default=None, ge=1, le=5)
     rating_basis: str | None = Field(default=None, max_length=2000)
+    achievement: Literal["met", "partly", "not_met", "unknown"] | None = None
+    assessor_kind: Literal["human", "agent", "measurement", "unknown"] = "unknown"
+    assessment_evidence: str | None = Field(default=None, max_length=4000)
     is_correction: bool = False
     confirm_applied: bool = False
 
@@ -199,6 +205,7 @@ MCP_TOOLS: dict[str, tuple[type[BaseModel], type[BaseModel] | None]] = {
     "job_status": (JobStatusArgs, JobStatusResult),
     "export_skill": (ExportSkillArgs, ExportSkillResult),
     "list_jobs": (ListJobsArgs, None),
+    "list_retrievals": (ExperienceSummaryArgs, None),
     "read_library_policy": (ReadLibraryPolicyArgs, None),
     "get_experience_summary": (ExperienceSummaryArgs, None),
     "review_items": (ReviewItemsArgs, None),
@@ -222,6 +229,7 @@ EXPECTED_TOOLS: frozenset[str] = frozenset(
         "job_status",
         "export_skill",
         "list_jobs",
+        "list_retrievals",
         "read_library_policy",
         "get_experience_summary",
         "review_items",

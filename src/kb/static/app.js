@@ -32,6 +32,7 @@ async function api(path, options = {}) {
     }
     if (response.status === 401) throw Error('Войдите в свой аккаунт через кнопку «Войти».');
     if (response.status === 403) throw Error('Для этого действия недостаточно прав.');
+    if (response.status === 429) throw Error('Очередь обработки заполнена. Повторите позже; готовые материалы остаются доступны.');
     const data = await response.json().catch(() => ({}));
     throw Error(typeof data.detail === 'string' ? data.detail : 'Запрос не выполнен. Проверьте данные.');
   }
@@ -294,12 +295,7 @@ async function openLibrary(lib) {
       else card.append(node('p', 'Экспорт отключён политикой библиотеки.', {class: 'muted'}));
     } root.append(card);
   }
-  if (lib.kind === 'project' && curator) {
-    const form = node('form'); const select = node('select', null, {name: 'library_id', 'aria-label': 'Библиотека для проекта'});
-    for (const other of libraries.filter(v => v.id !== lib.id)) select.append(node('option', other.name, {value: other.id}));
-    form.append(select, node('button', 'Связать с проектом', {type: 'submit'}));
-    form.addEventListener('submit', safe(async () => { await post('/api/projects/' + lib.id + '/libraries', {library_id: select.value, is_required: true}); message('Связь сохранена. Права на связанную библиотеку назначаются отдельно.'); })); root.append(form);
-  }
+  if (lib.kind === 'project') await window.WisdomProjectContext.mount(root, lib, featureHost, {canCurate: curator});
   await window.WisdomCompletion.enhanceLibrary(root, lib, featureHost);
 }
 function ruleEditor(lib, rule) {
@@ -319,15 +315,22 @@ async function loadUses() {
   const records = await api('/api/uses'); if (!records.length) list.append(node('p', 'Применения пока не записаны. Просмотр и поиск не создают опыт.'));
   for (const use of records) {
     const card = node('article', null, {class: 'card'}); card.append(node('h2', use.title + ' · v' + use.rule_version_no), node('p', 'Состояние: ' + use.state), node('p', 'Ожидали: ' + (use.expected_result ?? 'не указано')), node('p', 'Где: ' + (use.where_applied ?? 'не указано')));
-    for (const result of use.outcomes) card.append(node('p', (result.is_correction ? 'Исправление: ' : 'Результат: ') + (result.observed_result ?? 'не указан') + ' · Оценка: ' + (result.rating ?? 'не задана') + ' · Основание: ' + (result.rating_basis ?? 'не указано')));
+    const achievementLabels = {met:'достигнута', partly:'достигнута частично', not_met:'не достигнута', unknown:'пока неизвестно'};
+    const assessorLabels = {human:'человек', agent:'агент', measurement:'измерение', unknown:'не указан'};
+    for (const result of use.outcomes) card.append(node('p', (result.is_correction ? 'Исправление: ' : 'Результат: ') + (result.observed_result ?? 'не указан') + ' · Полезность: ' + (result.rating ?? 'не оценена') + ' · Цель: ' + (achievementLabels[result.achievement] ?? 'пока неизвестно') + ' · Автор оценки: ' + (assessorLabels[result.assessor_kind] ?? 'не указан') + ' · Основание полезности: ' + (result.rating_basis ?? 'не указано') + ' · Основание результата: ' + (result.assessment_evidence ?? 'не указано')));
     if (use.state === 'retrieved') card.append(button('Подтвердить применение', async () => { await post('/api/uses/' + use.id + '/applied'); await loadUses(); }));
     else card.append(button(use.outcomes.length ? 'Добавить исправление' : 'Записать результат', () => {
       let pendingOutcome = null;
       return dialogForm('Результат применения', form => {
       field(form, 'Что получилось', 'observed_result', '', 'textarea'); const rating = field(form, 'Полезность от 1 до 5 (можно не указывать)', 'rating', '', 'number'); rating.min = 1; rating.max = 5;
       field(form, 'Почему такая оценка', 'rating_basis', '', 'textarea');
+      const outcomeId = 'achievement-' + crypto.randomUUID();
+      const outcomeSelect = node('select', null, {id: outcomeId, name:'achievement'});
+      for (const [value, label] of [['unknown','Пока неизвестно'],['met','Цель достигнута'],['partly','Достигнута частично'],['not_met','Цель не достигнута']]) outcomeSelect.append(node('option', label, {value}));
+      form.append(node('label', 'Достижение ожидаемого результата', {for:outcomeId}), outcomeSelect);
+      field(form, 'Наблюдение или ссылка, подтверждающие результат', 'assessment_evidence', '', 'textarea');
     }, async data => {
-      const payload = {observed_result: data.get('observed_result') || null, rating: data.get('rating') ? Number(data.get('rating')) : null, rating_basis: data.get('rating_basis') || null, is_correction: use.outcomes.length > 0};
+      const payload = {observed_result: data.get('observed_result') || null, rating: data.get('rating') ? Number(data.get('rating')) : null, rating_basis: data.get('rating_basis') || null, achievement:data.get('achievement'), assessor_kind:'human', assessment_evidence:data.get('assessment_evidence') || null, is_correction: use.outcomes.length > 0};
       if (!pendingOutcome || JSON.stringify(pendingOutcome.payload) !== JSON.stringify(payload)) pendingOutcome = {payload, key: crypto.randomUUID()};
       await post('/api/uses/' + use.id + '/outcomes', {...pendingOutcome.payload, idempotency_key: pendingOutcome.key}); await loadUses();
     });

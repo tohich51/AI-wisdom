@@ -338,10 +338,17 @@
         const selected = checks.filter(({check}) => check.checked);
         if (!selected.length) throw Error('Сначала отметьте черновики для этого действия.');
         if (selected.some(({item}) => item.item_kind !== selected[0].item.item_kind)) throw Error('Выберите знания или правила одного типа за раз.');
-        if (!window.confirm('Будут обработаны ' + selected.length + ' выбранных элементов. Продолжить?')) return;
-        await host.post('/api/libraries/' + encodeURIComponent(library.id) + '/review', {item_kind: selected[0].item.item_kind, item_ids: selected.map(({item}) => item.id), decision});
-        if (!host.currentLibrary() || host.currentLibrary().id !== library.id) return;
-        await enhanceLibrary(root, library, host);
+        review.querySelector('[data-batch-confirm]')?.remove();
+        const confirmation = el('div', null, {class:'completion-form', 'data-batch-confirm':'true'});
+        confirmation.append(el('p', (decision === 'publish' ? 'Опубликовать' : 'Отклонить') + ' выбранных элементов: ' + selected.length));
+        confirmation.append(action('Подтвердить', async () => {
+          const now = checks.filter(({check}) => check.checked).map(({item}) => item.id);
+          if (JSON.stringify(now) !== JSON.stringify(selected.map(({item}) => item.id))) throw Error('Выбор изменился. Повторите действие.');
+          await host.post('/api/libraries/' + encodeURIComponent(library.id) + '/review', {item_kind: selected[0].item.item_kind, item_ids: now, decision});
+          if (!host.currentLibrary() || host.currentLibrary().id !== library.id) return;
+          await enhanceLibrary(root, library, host);
+        }), action('Отмена', () => confirmation.remove()));
+        review.append(confirmation);
       }, decision === 'publish' ? 'primary' : 'secondary'));
       area.append(review);
     } catch (error) { fail(policyCard, error); }
@@ -358,11 +365,16 @@
       if (!result.by_rule_version.length) empty(list, 'Сводка появится после записей о собственном применении правил.');
       for (const row of result.by_rule_version) {
         const box = card(row.title + ' · версия ' + row.rule_version_no);
-        box.append(el('p', 'Найдено: ' + row.retrieved + ' · применено: ' + row.applied));
+        box.append(el('p', 'Записей использования: ' + row.retrieved + ' · применено: ' + row.applied));
         box.append(el('p', 'Результат записан: ' + row.reported + ' · исход неизвестен: ' + row.outcome_unknown));
         box.append(el('p', 'Средняя самооценка: ' + (row.average_rating ?? 'нет оценки') + ' · оценок: ' + row.rated)); list.append(box);
       }
-      area.replaceChildren(el('p', 'Сводка учитывает только ваш опыт. Просмотр и поиск не считаются применением; неизвестный исход не трактуется как неудача.', {class: 'muted'}), list);
+      area.replaceChildren(el('p', 'Сводка учитывает только ваш опыт. Просмотр и поиск не считаются применением; неизвестный исход не трактуется как неудача.', {class: 'muted'}), el('p','Выдач материалов в доступной личной истории: ' + (result.visible_issuance_count ?? 'неизвестно') + '. Выдача не доказывает чтение.'), list);
+      const journal = el('details'); journal.append(el('summary','Последние выдачи материалов'));
+      const entries = await host.api('/api/retrievals');
+      if (!entries.length) journal.append(el('p','История выдачи пока пуста.'));
+      for (const entry of entries) journal.append(el('p',(entry.title ?? 'Материал') + ' · ' + entry.item_kind + (entry.version_no ? ' · v' + entry.version_no : '') + ' · ' + entry.delivered_at));
+      area.append(journal);
     } catch (error) { fail(area, error); }
   }
 

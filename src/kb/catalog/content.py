@@ -20,6 +20,7 @@ from psycopg.rows import dict_row
 
 from kb.access.policy import AccessDenied, Principal, transaction_identity
 from kb.catalog.policies import require_export
+from kb.catalog.retrieval_events import record_retrieval
 from kb.vendor.book_to_skill.validate_skill import audit as audit_skill
 
 __all__ = [
@@ -117,10 +118,13 @@ def _load_rule_provenance(
     cursor.execute(
         """
         SELECT rp.rule_id, rp.source_id, rp.fragment_id,
+               s.content_hash, s.author, s.publication_ref, s.origin_url AS url, s.retrieved_at,
                f.id AS located_fragment_id,
                f.ordinal, f.locator_kind, f.file_page, f.printed_label,
-               f.chapter, f.paragraph, f.snapshot_url, f.snapshot_at
+               f.chapter, f.paragraph, f.snapshot_url, f.snapshot_at,
+               f.table_index, f.cell_row, f.cell_column
         FROM kb.rule_provenance AS rp
+        JOIN kb.source AS s ON s.id = rp.source_id
         LEFT JOIN kb.fragment AS f
           ON f.id = rp.fragment_id
          AND f.source_id = rp.source_id
@@ -141,11 +145,19 @@ def _load_rule_provenance(
                 "paragraph": row["paragraph"],
                 "snapshot_url": row["snapshot_url"],
                 "snapshot_at": row["snapshot_at"],
+                "table_index": row["table_index"],
+                "cell_row": row["cell_row"],
+                "cell_column": row["cell_column"],
             }
         provenance[row["rule_id"]].append(
             {
                 "source_id": row["source_id"],
                 "fragment_id": row["fragment_id"],
+                "content_hash": row["content_hash"],
+                "author": row["author"],
+                "publication_ref": row["publication_ref"],
+                "url": row["url"],
+                "retrieved_at": row["retrieved_at"],
                 "locator": locator,
             }
         )
@@ -340,11 +352,13 @@ def read_source(
             (source_id, from_fragment, limit),
         )
         fragments = [dict(row) for row in cursor.fetchall()]
+        event_id = record_retrieval(cursor, principal, item_kind="source", item_id=source_id)
 
     return {
         "source": dict(source_row),
         "fragments": fragments,
         "retrieved_only": True,
+        "retrieval_event_id": event_id,
     }
 
 
@@ -479,9 +493,17 @@ def search_knowledge(
     limit = _bounded_integer(limit, "limit", minimum=1, maximum=50)
     if semantic is not None:
         if sources is not None:
-            return semantic.search(conn, principal, query, scopes, limit, source_ids=sources)
-        return semantic.search(conn, principal, query, scopes, limit)
-    return lexical_search_knowledge(conn, principal, query, scopes, limit, source_ids=sources)
+            result = semantic.search(conn, principal, query, scopes, limit, source_ids=sources)
+        else:
+            result = semantic.search(conn, principal, query, scopes, limit)
+    else:
+        result = lexical_search_knowledge(conn, principal, query, scopes, limit, source_ids=sources)
+    with transaction_identity(conn, principal), conn.cursor(row_factory=dict_row) as cursor:
+        result["retrieval_event_ids"] = [
+            record_retrieval(cursor, principal, item_kind="knowledge", item_id=UUID(str(hit["id"])))
+            for hit in result["hits"]
+        ]
+    return result
 
 
 def list_rules(
@@ -512,6 +534,14 @@ def list_rules(
             (library_id, limit, offset),
         )
         rules = [dict(row) for row in cursor.fetchall()]
+        for rule in rules:
+            record_retrieval(
+                cursor,
+                principal,
+                item_kind="rule",
+                item_id=rule["id"],
+                version_no=rule["version_no"],
+            )
         return _decorate_rules(cursor, rules)
 
 
@@ -520,6 +550,8 @@ def get_rule(
     principal: Principal,
     rule_id: UUID,
     version_no: int | None = None,
+    *,
+    _record_delivery: bool = True,
 ) -> dict[str, Any]:
     """Read an exact rule-version UUID, optionally guarded by its version number."""
     _require_principal(principal)
@@ -546,7 +578,16 @@ def get_rule(
         row = cursor.fetchone()
         if row is None:
             raise AccessDenied("forbidden")
-        return _decorate_rules(cursor, [dict(row)])[0]
+        result = _decorate_rules(cursor, [dict(row)])[0]
+        if _record_delivery:
+            result["retrieval_event_id"] = record_retrieval(
+                cursor,
+                principal,
+                item_kind="rule",
+                item_id=rule_id,
+                version_no=result["version_no"],
+            )
+        return result
 
 
 def export_skill(
@@ -621,6 +662,18 @@ def export_skill(
         ],
     }
     manifest_json = json.dumps(manifest, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    # Validation and rendering may take time. Recheck the complete export closure
+    # immediately before delivery; do not record failed or revoked exports.
+    with transaction_identity(conn, principal), conn.cursor() as cursor:
+        require_export(cursor, [library_id, *[source["library_id"] for source in sources]])
+        for rule in rules:
+            record_retrieval(
+                cursor,
+                principal,
+                item_kind="rule",
+                item_id=rule["id"],
+                version_no=rule["version_no"],
+            )
     return {
         "filename": "SKILL.md",
         "content": markdown,

@@ -93,6 +93,8 @@ def mapped_errors():
     except AccessDenied as exc:
         raise HTTPException(status.HTTP_403_FORBIDDEN, str(exc)) from exc
     except ValueError as exc:
+        if str(exc) == "processing_queue_full":
+            raise HTTPException(status.HTTP_429_TOO_MANY_REQUESTS, "processing_queue_full") from exc
         raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from exc
     except psycopg.errors.InsufficientPrivilege as exc:
         raise HTTPException(status.HTTP_403_FORBIDDEN, "forbidden") from exc

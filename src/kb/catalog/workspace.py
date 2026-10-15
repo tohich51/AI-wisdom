@@ -102,4 +102,24 @@ def experience_summary(conn, principal):
             "GROUP BY u.rule_id,u.rule_version_no,r.title ORDER BY r.title,u.rule_version_no",
         )
         rows = [dict(row) for row in cur.fetchall()]
-        return {"basis": "own_reported_experience", "by_rule_version": rows}
+        cur.execute("SELECT count(*) AS total FROM kb.retrieval_event")
+        issued = cur.fetchone()["total"]
+        return {
+            "basis": "own_reported_experience",
+            "by_rule_version": rows,
+            "visible_issuance_count": issued,
+            "issuance_is_not_reading_or_application": True,
+        }
+
+
+def list_retrievals(conn, principal):
+    with transaction_identity(conn, principal), conn.cursor(row_factory=dict_row) as cur:
+        cur.execute(
+            "SELECT e.*,coalesce(s.title,r.title,left(k.statement,250)) AS title "
+            "FROM kb.retrieval_event e "
+            "LEFT JOIN kb.source s ON e.item_kind='source' AND s.id=e.item_id "
+            "LEFT JOIN kb.rule r ON e.item_kind='rule' AND r.id=e.item_id "
+            "LEFT JOIN kb.knowledge k ON e.item_kind='knowledge' AND k.id=e.item_id "
+            "ORDER BY delivered_at DESC,e.id LIMIT 100"
+        )
+        return [dict(row) for row in cur.fetchall()]

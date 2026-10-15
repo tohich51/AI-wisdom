@@ -12,6 +12,7 @@ from psycopg.rows import dict_row
 from psycopg.types.json import Jsonb
 
 from kb.access.policy import AccessDenied, Principal, transaction_identity
+from kb.catalog.admission import check_admission
 from kb.catalog.grounding import capture_snapshot, check_snapshot, validate_citation
 
 KINDS = frozenset(
@@ -128,11 +129,7 @@ def submit_research(
         )
         if cur.fetchone()["allowed"] is not True:
             raise AccessDenied("forbidden")
-        cur.execute(
-            "SELECT count(*) AS total FROM kb.research_run WHERE status IN ('queued','running')"
-        )
-        if cur.fetchone()["total"] >= 3:
-            raise ValueError("research_queue_full")
+        check_admission(cur, principal)
         ident = uuid4()
         cur.execute(
             """INSERT INTO kb.research_run(id,account_id,principal_id,library_id,source_ids,

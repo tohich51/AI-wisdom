@@ -323,7 +323,13 @@ def key() -> str:
 AUTH_HEADER = "X-Test-Auth-Subject"
 
 
-def build_app(pool: ConnectionPool, store: LocalBlobStore | None = None, **state):
+def build_app(
+    pool: ConnectionPool,
+    store: LocalBlobStore | None = None,
+    *,
+    account_id: UUID = ACCOUNT,
+    **state,
+):
     from fastapi import FastAPI, Request
     from fastapi.responses import JSONResponse
 
@@ -345,7 +351,7 @@ def build_app(pool: ConnectionPool, store: LocalBlobStore | None = None, **state
             except ValueError:
                 return JSONResponse({"detail": "malformed subject"}, status_code=401)
             request.state.principal = Principal(
-                principal_id=resolved, account_id=ACCOUNT, generation_watermark=1
+                principal_id=resolved, account_id=account_id, generation_watermark=1
             )
         return await call_next(request)
 
@@ -386,7 +392,7 @@ class ApiClient:
 
 
 @pytest.fixture
-def make_api(db_pool, store):
+def make_api(db_pool, store, world):
     """Build a client over the real pool and store.
 
     ``pool`` and ``store`` may be overridden, which is how
@@ -403,7 +409,12 @@ def make_api(db_pool, store):
         store_: LocalBlobStore | None = None,
         **state,
     ) -> ApiClient:
-        return ApiClient(build_app(pool or db_pool, store_ or store, **state), principal)
+        # Match the synthetic verified account to the fixture organisation,
+        # as the real signed kb_account_id does. Identity is never a body field.
+        return ApiClient(
+            build_app(pool or db_pool, store_ or store, account_id=world.organisation(), **state),
+            principal,
+        )
 
     return _make
 

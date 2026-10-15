@@ -9,6 +9,7 @@ from psycopg.types.json import Jsonb
 from pydantic import BaseModel, ConfigDict, Field
 
 from kb.access.policy import AccessDenied, transaction_identity
+from kb.catalog.retrieval_events import record_retrieval
 
 
 class RuleInput(BaseModel):
@@ -285,6 +286,9 @@ def record_outcome(
     is_correction=False,
     *,
     idempotency_key=None,
+    achievement=None,
+    assessor_kind="unknown",
+    assessment_evidence=None,
 ):
     if idempotency_key is not None and (
         not isinstance(idempotency_key, str)
@@ -292,8 +296,29 @@ def record_outcome(
         or len(idempotency_key) > 200
     ):
         raise ValueError("invalid_idempotency_key")
-    if not any(value is not None for value in (observed_result, rating, rating_basis)):
+    if achievement is not None and (
+        not isinstance(achievement, str)
+        or achievement not in {"met", "partly", "not_met", "unknown"}
+    ):
+        raise ValueError("invalid_achievement")
+    if not isinstance(assessor_kind, str) or assessor_kind not in {
+        "human",
+        "agent",
+        "measurement",
+        "unknown",
+    }:
+        raise ValueError("invalid_assessor_kind")
+    if assessment_evidence is not None and (
+        not isinstance(assessment_evidence, str) or len(assessment_evidence) > 4000
+    ):
+        raise ValueError("invalid_assessment_evidence")
+    if assessor_kind == "measurement" and (
+        assessment_evidence is None or not assessment_evidence.strip()
+    ):
+        raise ValueError("measurement_evidence_required")
+    if not any(value is not None for value in (observed_result, rating, rating_basis, achievement)):
         raise ValueError("an outcome must contain a reported value")
+    persisted_achievement = "unknown" if achievement is None else achievement
     with transaction_identity(conn, principal), conn.cursor(row_factory=dict_row) as cur:
         if idempotency_key is not None:
             cur.execute(
@@ -322,8 +347,20 @@ def record_outcome(
                     existing["observed_result"],
                     existing["rating"],
                     existing["rating_basis"],
+                    existing["achievement"],
+                    existing["assessor_kind"],
+                    existing["assessment_evidence"],
                     existing["is_correction"],
-                ) != (use_id, observed_result, rating, rating_basis, is_correction):
+                ) != (
+                    use_id,
+                    observed_result,
+                    rating,
+                    rating_basis,
+                    persisted_achievement,
+                    assessor_kind,
+                    assessment_evidence,
+                    is_correction,
+                ):
                     raise ValueError("idempotency_conflict")
                 return dict(existing)
         if use["state"] == "retrieved":
@@ -333,14 +370,21 @@ def record_outcome(
         if exists != is_correction:
             raise ValueError("a later outcome requires explicit correction")
         cur.execute(
-            """INSERT INTO kb.outcome(use_id,observed_result,rating,rating_basis,
-              reported_by,reported_at,is_correction,idempotency_key)
-              VALUES(%s,%s,%s,%s,%s,now(),%s,%s) RETURNING *""",
+            """INSERT INTO kb.outcome(
+              use_id,observed_result,rating,rating_basis,
+              achievement,assessor_kind,assessment_evidence,
+              reported_by,reported_at,is_correction,idempotency_key
+            )
+            VALUES(%s,%s,%s,%s,%s,%s,%s,%s,now(),%s,%s)
+            RETURNING *""",
             (
                 use_id,
                 observed_result,
                 rating,
                 rating_basis,
+                persisted_achievement,
+                assessor_kind,
+                assessment_evidence,
                 principal.principal_id,
                 is_correction,
                 idempotency_key,
@@ -387,7 +431,10 @@ def list_knowledge(conn, principal, library_id):
             "SELECT * FROM kb.knowledge WHERE library_id=%s ORDER BY created_at LIMIT 500",
             (library_id,),
         )
-        return [dict(r) for r in cur.fetchall()]
+        records = [dict(r) for r in cur.fetchall()]
+        for record in records:
+            record_retrieval(cur, principal, item_kind="knowledge", item_id=record["id"])
+        return records
 
 
 def update_metadata(conn, principal, source_id, values: dict[str, Any]):

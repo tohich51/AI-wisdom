@@ -330,7 +330,7 @@ def people() -> People:
 AUTH_HEADER = "X-Test-Auth-Subject"
 
 
-def build_app(pool: ConnectionPool):
+def build_app(pool: ConnectionPool, account_id: UUID = ACCOUNT):
     from fastapi import FastAPI, Request
     from fastapi.responses import JSONResponse
 
@@ -349,7 +349,7 @@ def build_app(pool: ConnectionPool):
             except ValueError:
                 return JSONResponse({"detail": "malformed subject"}, status_code=401)
             request.state.principal = Principal(
-                principal_id=resolved, account_id=ACCOUNT, generation_watermark=1
+                principal_id=resolved, account_id=account_id, generation_watermark=1
             )
         return await call_next(request)
 
@@ -361,15 +361,18 @@ def build_app(pool: ConnectionPool):
 class ApiClient:
     """A real ASGI client over a real pool. ``as_`` re-authenticates."""
 
-    def __init__(self, pool: ConnectionPool, principal: UUID | None = None) -> None:
+    def __init__(
+        self, pool: ConnectionPool, principal: UUID | None = None, account_id: UUID = ACCOUNT
+    ) -> None:
         from fastapi.testclient import TestClient
 
         self._pool = pool
         self._principal = principal
-        self._client = TestClient(build_app(pool))
+        self._account_id = account_id
+        self._client = TestClient(build_app(pool, account_id))
 
     def as_(self, principal: UUID | None) -> ApiClient:
-        return ApiClient(self._pool, principal)
+        return ApiClient(self._pool, principal, self._account_id)
 
     def _headers(self, extra: dict[str, str] | None = None) -> dict[str, str]:
         merged = dict(extra or {})
@@ -395,9 +398,11 @@ class ApiClient:
 
 
 @pytest.fixture
-def api(db_pool) -> ApiClient:
+def api(db_pool, world) -> ApiClient:
     """An unauthenticated client. Use ``api.as_(OWNER)`` to sign in as somebody."""
-    return ApiClient(db_pool)
+    # The fake verified account must match this test's organisation, as the
+    # real Keycloak kb_account_id does. It is never taken from a request body.
+    return ApiClient(db_pool, account_id=world.organisation())
 
 
 def pytest_configure(config: pytest.Config) -> None:

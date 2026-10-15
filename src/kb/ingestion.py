@@ -80,8 +80,31 @@ def _admit(conn, principal, source_id, *, extraction=False):
 
 
 def submit_processing(conn, principal, source_id, idempotency_key, *, extract=False):
+    if not isinstance(idempotency_key, str) or not 8 <= len(idempotency_key) <= 200:
+        raise ValueError("invalid_idempotency_key")
     with transaction_identity(conn, principal), conn.cursor(row_factory=dict_row) as cur:
         source = _admit(cur, principal, source_id, extraction=extract)
+        cur.execute(
+            "SELECT pg_advisory_xact_lock(hashtextextended(%s,0))",
+            (f"processing-submit:{source['library_id']}:{idempotency_key}",),
+        )
+        cur.execute(
+            "SELECT id,source_id,submitted_by,extraction_enabled FROM kb.job "
+            "WHERE library_id=%s AND idempotency_key=%s",
+            (source["library_id"], idempotency_key),
+        )
+        existing = cur.fetchone()
+        if existing is not None:
+            if (
+                existing["source_id"],
+                existing["submitted_by"],
+                existing["extraction_enabled"],
+            ) != (source_id, principal.principal_id, extract):
+                raise AccessDenied("forbidden")
+            return {"job_id": existing["id"], "duplicate_of_existing": True}
+        from kb.catalog.admission import check_admission
+
+        check_admission(cur, principal)
         cur.execute(
             """INSERT INTO kb.job(id,library_id,source_id,submitted_by,kind,
           idempotency_key,extraction_enabled) VALUES(%s,%s,%s,%s,'ingest',%s,%s)

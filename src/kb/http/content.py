@@ -1,5 +1,6 @@
 """Thin HTTP adapters sharing the catalog and SQL access policies with MCP."""
 
+from typing import Literal
 from uuid import UUID
 
 from fastapi import APIRouter, Query, Request
@@ -34,6 +35,9 @@ class OutcomeInput(Input):
     observed_result: str | None = Field(default=None, max_length=4000)
     rating: int | None = Field(default=None, ge=1, le=5)
     rating_basis: str | None = Field(default=None, max_length=2000)
+    achievement: Literal["met", "partly", "not_met", "unknown"] | None = None
+    assessor_kind: Literal["human", "agent", "measurement", "unknown"] = "unknown"
+    assessment_evidence: str | None = Field(default=None, max_length=4000)
     is_correction: bool = False
 
 
@@ -104,6 +108,12 @@ def jobs(conn: Db, me: Me, library_id: UUID | None = None):
 def experience_summary(conn: Db, me: Me):
     with mapped_errors():
         return workspace.experience_summary(conn, me)
+
+
+@router.get("/retrievals")
+def retrievals(conn: Db, me: Me):
+    with mapped_errors():
+        return workspace.list_retrievals(conn, me)
 
 
 @router.patch("/knowledge/{knowledge_id}")
