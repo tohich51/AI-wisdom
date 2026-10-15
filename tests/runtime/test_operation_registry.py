@@ -9,6 +9,8 @@ running gateway.
 
 from __future__ import annotations
 
+import base64
+
 import pytest
 from fastapi import APIRouter, FastAPI
 from fastapi.routing import APIRoute
@@ -30,6 +32,7 @@ from kb.contracts.operations import (
     operation_for,
     unclaimed_routes,
 )
+from kb.gateway import create_app
 from kb.http.router import (
     ROUTERS,
     assert_prefix_parity,
@@ -376,3 +379,59 @@ def test_the_aggregate_router_has_no_prefix_of_its_own():
     paths = {path for _method, path in served_routes(api)}
     assert "/libraries/{library_id}/sources" in paths
     assert not any(path.startswith("/api") for path in paths)
+
+
+# Synthetic configuration for the one test that builds the real application.
+# Nothing here is a secret and nothing authenticates against it: the pool is
+# created closed, the lifespan never runs and no request is served. The point is
+# to reach the wiring that only exists inside create_app.
+REAL_APP_ENV: dict[str, str] = {
+    "KB_ALLOWED_HOSTS": "gateway.example",
+    "KB_DATABASE_URL": "postgresql://nobody@127.0.0.1:1/none",
+    "KB_MCP_AUDIENCE": "mcp",
+    "KB_MCP_CLIENT_ID": "mcp-client",
+    "KB_MCP_RESOURCE_URL": "https://gateway.example/mcp",
+    "KB_OIDC_ISSUER": "https://id.example/realms/kb",
+    "KB_OIDC_AUDIENCE": "kb-web",
+    "KB_OIDC_CLIENT_ID": "kb-web-client",
+    "KB_OIDC_CLIENT_SECRET": "placeholder-not-a-secret",
+    "KB_IDENTITY_KEY": base64.urlsafe_b64encode(b"\x00" * 32).decode(),
+    "KB_OIDC_REDIRECT_URI": "https://gateway.example/auth/callback",
+    "KB_OIDC_JWKS_URL": "https://id.example/jwks",
+}
+
+
+def test_the_real_application_serves_both_prefixes(monkeypatch, tmp_path):
+    """The registry, the router and the factory have to agree in one place.
+
+    Every other test in this file assembles routers. Only this one reaches
+    create_app, which is where install_auth, mount_api and the static mount
+    meet - and where a second prefix could have been mounted wrongly.
+    """
+    for key, value in REAL_APP_ENV.items():
+        monkeypatch.setenv(key, value)
+    # A per-test directory, not a hardcoded one: nothing is written to it in
+    # this test, but the app would refuse to start without a blob root.
+    monkeypatch.setenv("KB_BLOB_ROOT", str(tmp_path))
+
+    app = create_app()
+    assert_prefix_parity(app)
+    counts = served_routes(app.router)
+
+    product_routes = inventory()
+    api_paths = {key for key in counts if key[1].startswith("/api/")}
+    assert len(api_paths) == 2 * len(product_routes)
+    assert {key for key in counts if key[1].startswith(f"{CANONICAL_PREFIX}/")} == {
+        (method, f"{CANONICAL_PREFIX}{path}") for method, path in product_routes
+    }
+    # /api/v1 starts with /api, so the alias has to be selected by exclusion.
+    alias_only = {
+        key
+        for key in counts
+        if key[1].startswith(f"{ALIAS_PREFIX}/") and not key[1].startswith(f"{CANONICAL_PREFIX}/")
+    }
+    assert alias_only == {(method, f"{ALIAS_PREFIX}{path}") for method, path in product_routes}
+    assert not [key for key, count in counts.items() if count > 1]
+    # The identity surface and the static mount are untouched by either change.
+    assert "/auth/session" in {path for _method, path in counts}
+    assert any(getattr(route, "name", "") == "static" for route in app.routes)
