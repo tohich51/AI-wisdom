@@ -108,6 +108,9 @@ def create_app() -> FastAPI:
         "research-result.js",
         "maps.js",
         "graph-canvas.js",
+        "data.js",
+        "router.js",
+        "pager.js",
         "vendor/cytoscape-3.34.3.min.js",
     ):
         digest = hashlib.sha256((static / asset).read_bytes()).hexdigest()[:16]
