@@ -29,9 +29,10 @@ button:hover { filter: brightness(0.94); }
 .status span { display: flex; align-items: flex-start; gap: 0.5rem; }
 .status span::before { width: 0.45rem; height: 0.45rem; margin-top: 0.42rem; flex: 0 0 auto; border-radius: 50%; background: #87939e; content: ""; }
 .main-nav { display: grid; gap: 0.45rem; margin-top: 1.5rem; }
-.main-nav button { width: 100%; border-color: var(--line); background: transparent; color: var(--ink); text-align: left; }
-.main-nav button:hover { background: var(--canvas); filter: none; }
-.main-nav button[aria-pressed="true"] { border-color: var(--accent); background: var(--accent-soft); color: var(--accent); }
+.main-nav a.nav-link { display: block; width: 100%; padding: 0.6rem 0.9rem; border: 1px solid var(--line); border-radius: 0.55rem; background: transparent; color: var(--ink); font-weight: 650; text-align: left; text-decoration: none; }
+.main-nav a.nav-link:hover { background: var(--canvas); }
+.main-nav a.nav-link.is-current, .main-nav a.nav-link[aria-current="page"] { border-color: var(--accent); background: var(--accent-soft); color: var(--accent); }
+.main-nav a.nav-link[aria-current="page"] { font-weight: 700; }
 main {
   grid-column: 2; grid-row: 2; width: 100%; max-width: 1240px; min-width: 0;
   padding: 2rem clamp(1.25rem, 3vw, 2.5rem);
@@ -60,6 +61,10 @@ input:focus, select:focus { border-color: var(--accent); box-shadow: 0 0 0 3px r
 #library-list > *, #uses-list > *, #search-results > * {
   padding: 1rem; border: 1px solid var(--line); border-radius: 0.7rem; background: var(--surface);
 }
+#library-list .pager-list, #uses-list .pager-list, #search-results .pager-list { padding: 0; border: 0; border-radius: 0; background: transparent; }
+#library-list .pager-list > *, #uses-list .pager-list > *, #search-results .pager-list > * {
+  padding: 1rem; border: 1px solid var(--line); border-radius: 0.7rem; background: var(--surface);
+}
 #library-detail { min-height: 14rem; }
 pre { margin: 0.75rem 0; white-space: pre-wrap; overflow-wrap: anywhere; font: inherit; }
 .record-header, .record-meta, .actions { display: flex; flex-wrap: wrap; gap: 0.5rem; }
@@ -71,7 +76,7 @@ pre { margin: 0.75rem 0; white-space: pre-wrap; overflow-wrap: anywhere; font: i
   .sidebar { grid-column: 1; grid-row: 2; padding: 1rem 1.25rem; border-right: 0; border-bottom: 1px solid var(--line); }
   .main-nav { display: flex; flex-wrap: wrap; align-items: center; margin-top: 1rem; }
   .nav-label { width: 100%; margin-bottom: 0; }
-  .main-nav button { width: auto; flex: 1 1 10rem; text-align: center; }
+  .main-nav a.nav-link { width: auto; flex: 1 1 10rem; text-align: center; }
   main { grid-column: 1; grid-row: 3; padding: 1.5rem 1.25rem; }
   .workspace-grid, .library-grid { grid-template-columns: 1fr; }
   .card { padding: 1rem; }
@@ -96,3 +101,15 @@ section#maps-tab { grid-template-columns: minmax(0, 1fr); }
 .completion-empty { color: var(--muted); }
 .completion-library, .completion-experience { display: grid; gap: 1rem; }
 .completion-project-row { min-width: 0; overflow-wrap: anywhere; }
+
+/* Маршруты разделов и постраничные списки. */
+.pager-list { display: grid; gap: 0.75rem; align-content: start; }
+.pager { display: flex; flex-wrap: wrap; gap: 0.5rem; margin: 0.75rem 0 0.25rem; }
+.pager button { background: transparent; color: var(--ink); border-color: var(--line); }
+.pager button:disabled { opacity: 0.45; cursor: default; }
+.pager-status { margin: 0.25rem 0 0; font-size: 0.875rem; }
+.pager-empty { margin: 0; }
+.search-hit { display: grid; gap: 0.4rem; overflow-wrap: anywhere; }
+.search-hit p { margin: 0; }
+.map-list .pager-list { display: grid; gap: 0.45rem; }
+.completion-grid .pager-list { display: grid; gap: 0.5rem; }

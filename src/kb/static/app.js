@@ -1,4 +1,12 @@
 'use strict';
+/*
+ * Ядро интерфейса. Все экраны сохранены: библиотеки, опыт, исследование и
+ * Studio, карта знаний, доступ, задания. Переход между ними стал маршрутом
+ * (window.WisdomRouter), чтение данных идёт через один загрузчик
+ * (window.WisdomData), длинные списки — постранично (window.WisdomList).
+ */
+const {api, post} = window.WisdomData;
+const router = window.WisdomRouter;
 const byId = id => document.getElementById(id);
 const node = (tag, text, attrs = {}) => {
   const n = document.createElement(tag);
@@ -10,35 +18,13 @@ const node = (tag, text, attrs = {}) => {
   }
   return n;
 };
-let identity, selected, libraries = [], activeJob;
+let identity, selected, libraries = [], activeJob, libraryView = 0;
 const message = text => { byId('status').textContent = text; };
+window.WisdomData.onMessage(message);
 const safe = fn => async event => {
   event?.preventDefault();
   try { await fn(event); } catch (error) { message(error.message); }
 };
-async function api(path, options = {}) {
-  const headers = new Headers(options.headers);
-  if (options.body && !(options.body instanceof FormData)) headers.set('Content-Type', 'application/json');
-  if (options.method && options.method !== 'GET') {
-    const cookie = document.cookie.split('; ').find(v => v.startsWith('kb_csrf='));
-    if (cookie) headers.set('X-KB-CSRF', decodeURIComponent(cookie.slice(8)));
-  }
-  const response = await fetch(path, {...options, headers, credentials: 'same-origin'});
-  if (!response.ok) {
-    if ([401,403].includes(response.status)) {message(response.status===401?'Войдите в свой аккаунт.':'Доступ к материалу отсутствует или отозван.');window.WisdomResearch?.invalidate();window.WisdomMap?.invalidate();document.querySelectorAll("dialog[data-wisdom-private]").forEach(d=>d.close());}
-    if (response.status === 401) {
-      const login = document.querySelector('.login'); if (login) login.hidden = false;
-      const logout = byId('logout'); if (logout) logout.hidden = true;
-    }
-    if (response.status === 401) throw Error('Войдите в свой аккаунт через кнопку «Войти».');
-    if (response.status === 403) throw Error('Для этого действия недостаточно прав.');
-    if (response.status === 429) throw Error('Очередь обработки заполнена. Повторите позже; готовые материалы остаются доступны.');
-    const data = await response.json().catch(() => ({}));
-    throw Error(typeof data.detail === 'string' ? data.detail : 'Запрос не выполнен. Проверьте данные.');
-  }
-  return response.status === 204 ? null : response.json();
-}
-const post = (path, data = {}) => api(path, {method: 'POST', body: JSON.stringify(data)});
 const button = (text, fn) => node('button', text, {type: 'button', onclick: safe(fn)});
 function field(form, title, name, value = '', type = 'text') {
   const id = 'f-' + crypto.randomUUID();
@@ -58,12 +44,40 @@ function dialogForm(title, render, submit) {
   dialog.addEventListener('close', () => dialog.remove());
   document.body.append(dialog); dialog.showModal();
 }
+const pager = options => window.WisdomList.create(featureHost, options);
+const titledList = (root, title, items, options) => {
+  root.append(node('h3', title));
+  const list = pager(options);
+  list.set(items);
+  root.append(list.element, list.navigation, list.status);
+  return list;
+};
+function downloadBlob(filename, blob) {
+  const url = URL.createObjectURL(blob), a = node('a', null, {href: url, download: filename});
+  document.body.append(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+const libraryRoute = (id, {replace = false} = {}) => {
+  const target = router.path('libraries', [id]);
+  if (location.hash === target) return;
+  router.navigate(target, {replace});
+};
 async function loadLibraries() {
   const page = await api('/api/libraries'); libraries = page.libraries;
   const list = byId('library-list'); list.replaceChildren(node('h2', 'Мои библиотеки'));
   if (!libraries.length) list.append(node('p', 'База чистая. Создайте библиотеку и загрузите материал.'));
-  for (const lib of libraries) list.append(button(lib.name + ' · ' + lib.kind, () => openLibrary(lib)));
+  const items = pager({
+    renderItem: lib => button(lib.name + ' · ' + lib.kind, () => openLibrary(lib)),
+    empty: 'База чистая. Создайте библиотеку и загрузите материал.'
+  });
+  if (!libraries.length) return;
+  items.set(libraries);
+  list.append(items.element, items.navigation, items.status);
 }
+let librariesPromise = null;
+const ensureLibraries = () => {
+  if (!librariesPromise) librariesPromise = loadLibraries().catch(error => { librariesPromise = null; throw error; });
+  return librariesPromise;
+};
 async function trackJob(id) {
   activeJob = id;
   const job = await api('/api/jobs/' + id);
@@ -84,7 +98,7 @@ async function viewSource(id) {
   d.append(node('h2', initial.source.title));
   d.append(node('p', 'Автор: ' + (initial.source.author ?? 'не указан') + ' · Издание: ' + (initial.source.edition ?? 'не указано')));
   d.append(node('a', 'Скачать оригинал', {href: '/api/sources/' + id + '/original', download: initial.source.title}));
-  const content = node('div'), pager = node('p');
+  const content = node('div'), pagerLine = node('p');
   let currentFrom = 0, currentLastOrdinal = initial.fragments.at(-1)?.ordinal, previousFrom = [], pending = false, hasNext = initial.fragments.length === 200;
   const previous = button('Предыдущая часть', async () => {
     if (pending || !previousFrom.length) return;
@@ -103,21 +117,21 @@ async function viewSource(id) {
         currentLastOrdinal = typeof lastOrdinal === 'number' ? lastOrdinal : nextFrom + page.fragments.length - 1;
         renderFragments(page.fragments);
       } else {
-        hasNext = false; pager.textContent = 'Дальше фрагментов нет.';
+        hasNext = false; pagerLine.textContent = 'Дальше фрагментов нет.';
       }
-    } catch (error) { pager.textContent = error.message; }
+    } catch (error) { pagerLine.textContent = error.message; }
     finally { pending = false; next.disabled = !hasNext; previous.disabled = previousFrom.length === 0; }
   });
   async function renderPage(from) {
-    pending = true; previous.disabled = true; next.disabled = true; pager.textContent = 'Загружаю фрагменты…';
+    pending = true; previous.disabled = true; next.disabled = true; pagerLine.textContent = 'Загружаю фрагменты…';
     try {
       const page = await api('/api/sources/' + id + '?from_fragment=' + encodeURIComponent(from) + '&limit=200');
-      if (!page.fragments.length) { pager.textContent = 'Предыдущая часть фрагментов не найдена.'; return; }
+      if (!page.fragments.length) { pagerLine.textContent = 'Предыдущая часть фрагментов не найдена.'; return; }
       previousFrom.pop(); currentFrom = from;
       const lastOrdinal = page.fragments.at(-1)?.ordinal;
       currentLastOrdinal = typeof lastOrdinal === 'number' ? lastOrdinal : from + page.fragments.length - 1;
       renderFragments(page.fragments);
-    } catch (error) { pager.textContent = error.message; }
+    } catch (error) { pagerLine.textContent = error.message; }
     finally { pending = false; previous.disabled = previousFrom.length === 0; next.disabled = !hasNext; }
   }
   function renderFragments(fragments) {
@@ -126,16 +140,21 @@ async function viewSource(id) {
     for (const part of fragments) {
       content.append(node('p', [part.chapter, part.file_page != null ? 'Страница файла ' + part.file_page : null, part.printed_label ? 'Печатная метка ' + part.printed_label : null, part.paragraph != null ? 'Абзац ' + part.paragraph : null, part.table_index ? 'Таблица ' + part.table_index + ', ячейка ' + part.cell_row + ':' + part.cell_column : null].filter(Boolean).join(' · ')), node('pre', part.text));
     }
-    pager.textContent = fragments.length ? 'Показано фрагментов: ' + fragments.length + (hasNext ? ' · возможно, есть продолжение' : '') : 'Фрагментов в источнике пока нет.';
+    pagerLine.textContent = fragments.length ? 'Показано фрагментов: ' + fragments.length + (hasNext ? ' · возможно, есть продолжение' : '') : 'Фрагментов в источнике пока нет.';
   }
-  d.append(previous, next, pager, content, button('Закрыть', () => d.close())); d.addEventListener('close', () => d.remove());
+  d.append(previous, next, pagerLine, content, button('Закрыть', () => d.close())); d.addEventListener('close', () => d.remove());
   document.body.append(d); d.showModal();
   renderFragments(initial.fragments); currentLastOrdinal = initial.fragments.at(-1)?.ordinal; previous.disabled = true; next.disabled = !hasNext;
 }
-async function openLibrary(lib) {
+async function openLibrary(lib, {guard = null} = {}) {
+  if (!lib) return;
+  libraryView++;
+  const view = libraryView;
+  const current = () => view === libraryView && selected?.id === lib.id && (!guard || guard());
+  libraryRoute(lib.id, {replace: selected?.id === lib.id});
   selected = lib; const root = byId('library-detail'); root.replaceChildren(node('h2', lib.name));
   const policy = await api('/api/libraries/' + lib.id + '/policy');
-  if (selected?.id !== lib.id) return;
+  if (!current()) return;
   const role = policy.effective_role;
   const curator = ['curator', 'manager'].includes(role);
   const contributor = curator || role === 'contributor';
@@ -223,78 +242,86 @@ async function openLibrary(lib) {
     urlForm.addEventListener('submit', safe(submitUrl)); root.append(urlForm);
     root.append(button('Создать правило вручную', () => ruleEditor(lib)));
   }
-  root.append(node('h3', 'Источники и происхождение'));
   const sources = await api('/api/libraries/' + lib.id + '/sources');
-  if (selected?.id !== lib.id) return;
-  for (const source of sources) {
-    const card = node('article', null, {class: 'card'});
-    card.append(button(source.title, () => viewSource(source.id)), node('p', 'Статус: ' + source.processing));
-    if (contributor) {
-      card.append(button('Разобрать текст', () => processSource(source.id, false)));
-      const extractAction = button('Извлечь / продолжить черновики', () => processSource(source.id, true));
-      extractAction.disabled = !extractionAllowed;
-      if (!extractionAllowed) { extractAction.title = 'Отключено политикой библиотеки'; card.append(extractAction, node('p', 'Извлечение отключено политикой библиотеки.', {class: 'muted'})); }
-      else card.append(extractAction);
-    } root.append(card);
-  }
-  root.append(node('h3', 'Знания'));
+  if (!current()) return;
+  titledList(root, 'Источники и происхождение', sources, {
+    empty: 'Источников пока нет. Загрузите материал выше.',
+    renderItem: source => {
+      const card = node('article', null, {class: 'card'});
+      card.append(button(source.title, () => viewSource(source.id)), node('p', 'Статус: ' + source.processing));
+      if (contributor) {
+        card.append(button('Разобрать текст', () => processSource(source.id, false)));
+        const extractAction = button('Извлечь / продолжить черновики', () => processSource(source.id, true));
+        extractAction.disabled = !extractionAllowed;
+        if (!extractionAllowed) { extractAction.title = 'Отключено политикой библиотеки'; card.append(extractAction, node('p', 'Извлечение отключено политикой библиотеки.', {class: 'muted'})); }
+        else card.append(extractAction);
+      }
+      return card;
+    }
+  });
   const knowledge = await api('/api/libraries/' + lib.id + '/knowledge');
-  if (selected?.id !== lib.id) return;
-  for (const item of knowledge) {
-    const card = node('article', null, {class: 'card'});
-    card.append(node('p', item.kind + ' · ' + item.publication), node('p', item.statement));
-    if (item.publication === 'withdrawn') card.append(node('p', 'Знание отозвано.'));
-    if (curator && ['draft', 'needs_review'].includes(item.publication)) {
-      const publish = button('Подтвердить знание', async () => { await post('/api/knowledge/' + item.id + '/publish'); await openLibrary(lib); });
-      const reject = button('Отклонить черновик', async event => {
-        const action = event.currentTarget; action.disabled = true;
-        try { await post('/api/knowledge/' + item.id + '/reject'); await openLibrary(lib); }
-        catch (error) { message(error.message); }
-        finally { action.disabled = false; }
-      });
-      card.append(publish, reject);
+  if (!current()) return;
+  titledList(root, 'Знания', knowledge, {
+    empty: 'Знаний пока нет.',
+    renderItem: item => {
+      const card = node('article', null, {class: 'card'});
+      card.append(node('p', item.kind + ' · ' + item.publication), node('p', item.statement));
+      if (item.publication === 'withdrawn') card.append(node('p', 'Знание отозвано.'));
+      if (curator && ['draft', 'needs_review'].includes(item.publication)) {
+        const publish = button('Подтвердить знание', async () => { await post('/api/knowledge/' + item.id + '/publish'); await openLibrary(lib); });
+        const reject = button('Отклонить черновик', async event => {
+          const action = event.currentTarget; action.disabled = true;
+          try { await post('/api/knowledge/' + item.id + '/reject'); await openLibrary(lib); }
+          catch (error) { message(error.message); }
+          finally { action.disabled = false; }
+        });
+        card.append(publish, reject);
+      }
+      return card;
     }
-    root.append(card);
-  }
-  root.append(node('h3', 'Правила и навыки'));
+  });
   const rules = await api('/api/libraries/' + lib.id + '/rules');
-  if (selected?.id !== lib.id) return;
-  for (const rule of rules) {
-    const card = node('article', null, {class: 'card'}); card.append(node('h4', rule.title + ' · v' + rule.version_no + ' · ' + rule.publication));
-    for (const [title, value] of [['Когда', rule.when_to_apply], ['Входные данные', rule.inputs?.join('\n')], ['Шаги', rule.actions?.join('\n')], ['Исключения', rule.exceptions?.join('\n')], ['Ожидаемый эффект', rule.expected_effect]]) card.append(node('strong', title), node('p', value ?? 'не указано'));
-    card.append(node('details', null)); const detail = card.lastChild; detail.append(node('summary', 'Происхождение'), node('pre', JSON.stringify(rule.provenance, null, 2)));
-    if (rule.publication === 'withdrawn') card.append(node('p', 'Правило отозвано.'));
-    if (curator && ['draft', 'needs_review'].includes(rule.publication)) {
-      const publish = button('Опубликовать', async () => { await post('/api/rules/' + rule.id + '/publish'); await openLibrary(lib); });
-      const reject = button('Отклонить черновик', async event => {
-        const action = event.currentTarget; action.disabled = true;
-        try { await post('/api/rules/' + rule.id + '/reject'); await openLibrary(lib); }
-        catch (error) { message(error.message); }
-        finally { action.disabled = false; }
-      });
-      card.append(publish, reject);
+  if (!current()) return;
+  titledList(root, 'Правила и навыки', rules, {
+    empty: 'Правил пока нет.',
+    renderItem: rule => {
+      const card = node('article', null, {class: 'card'}); card.append(node('h4', rule.title + ' · v' + rule.version_no + ' · ' + rule.publication));
+      for (const [title, value] of [['Когда', rule.when_to_apply], ['Входные данные', rule.inputs?.join('\n')], ['Шаги', rule.actions?.join('\n')], ['Исключения', rule.exceptions?.join('\n')], ['Ожидаемый эффект', rule.expected_effect]]) card.append(node('strong', title), node('p', value ?? 'не указано'));
+      card.append(node('details', null)); const detail = card.lastChild; detail.append(node('summary', 'Происхождение'), node('pre', JSON.stringify(rule.provenance, null, 2)));
+      if (rule.publication === 'withdrawn') card.append(node('p', 'Правило отозвано.'));
+      if (curator && ['draft', 'needs_review'].includes(rule.publication)) {
+        const publish = button('Опубликовать', async () => { await post('/api/rules/' + rule.id + '/publish'); await openLibrary(lib); });
+        const reject = button('Отклонить черновик', async event => {
+          const action = event.currentTarget; action.disabled = true;
+          try { await post('/api/rules/' + rule.id + '/reject'); await openLibrary(lib); }
+          catch (error) { message(error.message); }
+          finally { action.disabled = false; }
+        });
+        card.append(publish, reject);
+      }
+      if (contributor) card.append(button('Новая версия', () => ruleEditor(lib, rule)));
+      if (rule.publication === 'published') {
+        card.append(button('Я применил это правило', () => {
+          let pendingUse = null;
+          return dialogForm('Зафиксировать применение', form => {
+          field(form, 'Где применили', 'where_applied'); field(form, 'Какой результат ожидали', 'expected_result', '', 'textarea');
+        }, async data => {
+          const payload = {rule_id: rule.id, version_no: rule.version_no, where_applied: data.get('where_applied') || null, expected_result: data.get('expected_result') || null};
+          if (!pendingUse || JSON.stringify(pendingUse.payload) !== JSON.stringify(payload)) pendingUse = {payload, key: crypto.randomUUID()};
+          const use = await post('/api/uses', {...pendingUse.payload, idempotency_key: pendingUse.key});
+          await post('/api/uses/' + use.id + '/applied'); message('Применение записано. Результат добавьте в разделе «Опыт».');
+        });
+        }));
+        if (policy.export_allowed) card.append(button('Экспорт SKILL.md', async () => {
+          const result = await post('/api/libraries/' + lib.id + '/export', {rule_ids: [rule.id]});
+          const url = URL.createObjectURL(new Blob([result.content], {type: 'text/markdown;charset=utf-8'}));
+          const a = node('a', null, {href: url, download: 'SKILL.md'}); a.click(); setTimeout(() => URL.revokeObjectURL(url), 5000);
+        }));
+        else card.append(node('p', 'Экспорт отключён политикой библиотеки.', {class: 'muted'}));
+      }
+      return card;
     }
-    if (contributor) card.append(button('Новая версия', () => ruleEditor(lib, rule)));
-    if (rule.publication === 'published') {
-      card.append(button('Я применил это правило', () => {
-        let pendingUse = null;
-        return dialogForm('Зафиксировать применение', form => {
-        field(form, 'Где применили', 'where_applied'); field(form, 'Какой результат ожидали', 'expected_result', '', 'textarea');
-      }, async data => {
-        const payload = {rule_id: rule.id, version_no: rule.version_no, where_applied: data.get('where_applied') || null, expected_result: data.get('expected_result') || null};
-        if (!pendingUse || JSON.stringify(pendingUse.payload) !== JSON.stringify(payload)) pendingUse = {payload, key: crypto.randomUUID()};
-        const use = await post('/api/uses', {...pendingUse.payload, idempotency_key: pendingUse.key});
-        await post('/api/uses/' + use.id + '/applied'); message('Применение записано. Результат добавьте в разделе «Опыт».');
-      });
-      }));
-      if (policy.export_allowed) card.append(button('Экспорт SKILL.md', async () => {
-        const result = await post('/api/libraries/' + lib.id + '/export', {rule_ids: [rule.id]});
-        const url = URL.createObjectURL(new Blob([result.content], {type: 'text/markdown;charset=utf-8'}));
-        const a = node('a', null, {href: url, download: 'SKILL.md'}); a.click(); setTimeout(() => URL.revokeObjectURL(url), 5000);
-      }));
-      else card.append(node('p', 'Экспорт отключён политикой библиотеки.', {class: 'muted'}));
-    } root.append(card);
-  }
+  });
   if (lib.kind === 'project') await window.WisdomProjectContext.mount(root, lib, featureHost, {canCurate: curator});
   await window.WisdomCompletion.enhanceLibrary(root, lib, featureHost);
 }
@@ -312,31 +339,36 @@ function ruleEditor(lib, rule) {
 }
 async function loadUses() {
   const list = byId('uses-list'); list.replaceChildren();
-  const records = await api('/api/uses'); if (!records.length) list.append(node('p', 'Применения пока не записаны. Просмотр и поиск не создают опыт.'));
-  for (const use of records) {
-    const card = node('article', null, {class: 'card'}); card.append(node('h2', use.title + ' · v' + use.rule_version_no), node('p', 'Состояние: ' + use.state), node('p', 'Ожидали: ' + (use.expected_result ?? 'не указано')), node('p', 'Где: ' + (use.where_applied ?? 'не указано')));
-    const achievementLabels = {met:'достигнута', partly:'достигнута частично', not_met:'не достигнута', unknown:'пока неизвестно'};
-    const assessorLabels = {human:'человек', agent:'агент', measurement:'измерение', unknown:'не указан'};
-    for (const result of use.outcomes) card.append(node('p', (result.is_correction ? 'Исправление: ' : 'Результат: ') + (result.observed_result ?? 'не указан') + ' · Полезность: ' + (result.rating ?? 'не оценена') + ' · Цель: ' + (achievementLabels[result.achievement] ?? 'пока неизвестно') + ' · Автор оценки: ' + (assessorLabels[result.assessor_kind] ?? 'не указан') + ' · Основание полезности: ' + (result.rating_basis ?? 'не указано') + ' · Основание результата: ' + (result.assessment_evidence ?? 'не указано')));
-    if (use.state === 'retrieved') card.append(button('Подтвердить применение', async () => { await post('/api/uses/' + use.id + '/applied'); await loadUses(); }));
-    else card.append(button(use.outcomes.length ? 'Добавить исправление' : 'Записать результат', () => {
-      let pendingOutcome = null;
-      return dialogForm('Результат применения', form => {
-      field(form, 'Что получилось', 'observed_result', '', 'textarea'); const rating = field(form, 'Полезность от 1 до 5 (можно не указывать)', 'rating', '', 'number'); rating.min = 1; rating.max = 5;
-      field(form, 'Почему такая оценка', 'rating_basis', '', 'textarea');
-      const outcomeId = 'achievement-' + crypto.randomUUID();
-      const outcomeSelect = node('select', null, {id: outcomeId, name:'achievement'});
-      for (const [value, label] of [['unknown','Пока неизвестно'],['met','Цель достигнута'],['partly','Достигнута частично'],['not_met','Цель не достигнута']]) outcomeSelect.append(node('option', label, {value}));
-      form.append(node('label', 'Достижение ожидаемого результата', {for:outcomeId}), outcomeSelect);
-      field(form, 'Наблюдение или ссылка, подтверждающие результат', 'assessment_evidence', '', 'textarea');
-    }, async data => {
-      const payload = {observed_result: data.get('observed_result') || null, rating: data.get('rating') ? Number(data.get('rating')) : null, rating_basis: data.get('rating_basis') || null, achievement:data.get('achievement'), assessor_kind:'human', assessment_evidence:data.get('assessment_evidence') || null, is_correction: use.outcomes.length > 0};
-      if (!pendingOutcome || JSON.stringify(pendingOutcome.payload) !== JSON.stringify(payload)) pendingOutcome = {payload, key: crypto.randomUUID()};
-      await post('/api/uses/' + use.id + '/outcomes', {...pendingOutcome.payload, idempotency_key: pendingOutcome.key}); await loadUses();
-    });
-    }));
-    list.append(card);
-  }
+  const records = await api('/api/uses');
+  const uses = pager({
+    empty: 'Применения пока не записаны. Просмотр и поиск не создают опыт.',
+    renderItem: use => {
+      const card = node('article', null, {class: 'card'}); card.append(node('h2', use.title + ' · v' + use.rule_version_no), node('p', 'Состояние: ' + use.state), node('p', 'Ожидали: ' + (use.expected_result ?? 'не указано')), node('p', 'Где: ' + (use.where_applied ?? 'не указан')));
+      const achievementLabels = {met:'достигнута', partly:'достигнута частично', not_met:'не достигнута', unknown:'пока неизвестно'};
+      const assessorLabels = {human:'человек', agent:'агент', measurement:'измерение', unknown:'не указан'};
+      for (const result of use.outcomes) card.append(node('p', (result.is_correction ? 'Исправление: ' : 'Результат: ') + (result.observed_result ?? 'не указан') + ' · Полезность: ' + (result.rating ?? 'не оценена') + ' · Цель: ' + (achievementLabels[result.achievement] ?? 'пока неизвестно') + ' · Автор оценки: ' + (assessorLabels[result.assessor_kind] ?? 'не указан') + ' · Основание полезности: ' + (result.rating_basis ?? 'не указано') + ' · Основание результата: ' + (result.assessment_evidence ?? 'не указано')));
+      if (use.state === 'retrieved') card.append(button('Подтвердить применение', async () => { await post('/api/uses/' + use.id + '/applied'); await loadUses(); }));
+      else card.append(button(use.outcomes.length ? 'Добавить исправление' : 'Записать результат', () => {
+        let pendingOutcome = null;
+        return dialogForm('Результат применения', form => {
+        field(form, 'Что получилось', 'observed_result', '', 'textarea'); const rating = field(form, 'Полезность от 1 до 5 (можно не указывать)', 'rating', '', 'number'); rating.min = 1; rating.max = 5;
+        field(form, 'Почему такая оценка', 'rating_basis', '', 'textarea');
+        const outcomeId = 'achievement-' + crypto.randomUUID();
+        const outcomeSelect = node('select', null, {id: outcomeId, name:'achievement'});
+        for (const [value, label] of [['unknown','Пока неизвестно'],['met','Цель достигнута'],['partly','Достигнута частично'],['not_met','Цель не достигнута']]) outcomeSelect.append(node('option', label, {value}));
+        form.append(node('label', 'Достижение ожидаемого результата', {for:outcomeId}), outcomeSelect);
+        field(form, 'Наблюдение или ссылка, подтверждающие результат', 'assessment_evidence', '', 'textarea');
+      }, async data => {
+        const payload = {observed_result: data.get('observed_result') || null, rating: data.get('rating') ? Number(data.get('rating')) : null, rating_basis: data.get('rating_basis') || null, achievement:data.get('achievement'), assessor_kind:'human', assessment_evidence:data.get('assessment_evidence') || null, is_correction: use.outcomes.length > 0};
+        if (!pendingOutcome || JSON.stringify(pendingOutcome.payload) !== JSON.stringify(payload)) pendingOutcome = {payload, key: crypto.randomUUID()};
+        await post('/api/uses/' + use.id + '/outcomes', {...pendingOutcome.payload, idempotency_key: pendingOutcome.key}); await loadUses();
+      });
+      }));
+      return card;
+    }
+  });
+  uses.set(records);
+  list.append(uses.element, uses.navigation, uses.status);
   await window.WisdomCompletion.enhanceUses(list, featureHost);
   await window.WisdomSharedExperience.mount(list, featureHost, records);
 }
@@ -344,7 +376,7 @@ byId('create-library').addEventListener('submit', safe(async event => {
   const data = Object.fromEntries(new FormData(event.target)); data.organisation_id = identity.account_id;
   const project = data.kind === 'project'; if (project) delete data.kind;
   const result = await post(project ? '/api/projects' : '/api/libraries', data);
-  event.target.reset(); await loadLibraries(); await openLibrary(project ? result.project : result);
+  event.target.reset(); librariesPromise = null; await ensureLibraries(); await openLibrary(project ? result.project : result);
 }));
 byId('search').addEventListener('submit', safe(async event => {
   const query = new FormData(event.target).get('q'); const result = await api('/api/search?q=' + encodeURIComponent(query));
@@ -358,48 +390,52 @@ byId('search').addEventListener('submit', safe(async event => {
   if (result.fallback_reason === 'index_pending_or_unavailable') {
     list.append(node('p', 'Пока ищем по словам: индекс библиотеки ещё не готов или временно недоступен.'));
   }
-  for (const hit of result.hits) {
-    list.append(node('p', hit.statement));
-    const citations = Array.isArray(hit.provenance) ? hit.provenance : [];
-    if (!citations.length) list.append(node('p', 'Источник и место в тексте не указаны.'));
-    for (const provenance of citations) {
-    const source = provenance.source && typeof provenance.source === 'object' ? provenance.source : provenance;
-    const locator = provenance.locator && typeof provenance.locator === 'object' ? provenance.locator : {};
-    const label = value => typeof value === 'string' || typeof value === 'number' ? String(value) : null;
-    const citation = [
-      label(source.title),
-      label(source.author) ? 'Автор: ' + label(source.author) : null,
-      label(source.publication_ref),
-      label(locator.chapter),
-      label(locator.file_page) !== null ? 'Страница файла ' + label(locator.file_page) : null,
-      label(locator.printed_label) ? 'Печатная метка ' + label(locator.printed_label) : null,
-      label(locator.paragraph) !== null ? 'Абзац ' + label(locator.paragraph) : null
-    ].filter(Boolean);
-    const details = node('p', citation.length ? citation.join(' · ') : 'Источник и место в тексте не указаны.');
-    const sourceId = provenance.source_id;
-    if (typeof sourceId === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(sourceId)) {
-      details.append(document.createTextNode(' · '), button('Открыть источник', () => viewSource(sourceId)));
+  const hits = pager({
+    empty: 'Совпадений не найдено.',
+    size: 10,
+    renderItem: hit => {
+      const block = node('article', null, {class: 'search-hit'});
+      block.append(node('p', hit.statement));
+      const citations = Array.isArray(hit.provenance) ? hit.provenance : [];
+      if (!citations.length) block.append(node('p', 'Источник и место в тексте не указаны.'));
+      for (const provenance of citations) {
+        const source = provenance.source && typeof provenance.source === 'object' ? provenance.source : provenance;
+        const locator = provenance.locator && typeof provenance.locator === 'object' ? provenance.locator : {};
+        const label = value => typeof value === 'string' || typeof value === 'number' ? String(value) : null;
+        const citation = [
+          label(source.title),
+          label(source.author) ? 'Автор: ' + label(source.author) : null,
+          label(source.publication_ref),
+          label(locator.chapter),
+          label(locator.file_page) !== null ? 'Страница файла ' + label(locator.file_page) : null,
+          label(locator.printed_label) ? 'Печатная метка ' + label(locator.printed_label) : null,
+          label(locator.paragraph) !== null ? 'Абзац ' + label(locator.paragraph) : null
+        ].filter(Boolean);
+        const details = node('p', citation.length ? citation.join(' · ') : 'Источник и место в тексте не указаны.');
+        const sourceId = provenance.source_id;
+        if (typeof sourceId === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(sourceId)) {
+          details.append(document.createTextNode(' · '), button('Открыть источник', () => viewSource(sourceId)));
+        }
+        if (typeof source.url === 'string') {
+          try {
+            const url = new URL(source.url);
+            if (['http:', 'https:'].includes(url.protocol)) details.append(document.createTextNode(' · '), node('a', 'Ссылка', {href: url.href}));
+          } catch {}
+        }
+        block.append(details);
+      }
+      return block;
     }
-    if (typeof source.url === 'string') {
-      try {
-        const url = new URL(source.url);
-        if (['http:', 'https:'].includes(url.protocol)) details.append(document.createTextNode(' · '), node('a', 'Ссылка', {href: url.href}));
-      } catch {}
-    }
-    list.append(details);
-    }
-  }
+  });
+  hits.set(result.hits);
+  list.append(hits.element, hits.navigation, hits.status);
 }));
 byId('logout').addEventListener('click', safe(async () => { await post('/auth/logout'); location.reload(); }));
-function downloadBlob(filename,blob) {
-  const url=URL.createObjectURL(blob),a=node('a',null,{href:url,download:filename});
-  document.body.append(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(url),1000);
-}
 const featureHost={node,button,api,post,notify:message,libraries:()=>libraries,currentLibrary:()=>selected,identity:()=>identity,
   refreshLibrary:()=>selected?openLibrary(selected):Promise.resolve(),
   openSource:viewSource,download:(filename,text,type)=>downloadBlob(filename,new Blob([text],{type})),
-  downloadBlob,dialog:dialogForm,navigateResearch:()=>switchTab('research'),
-  openRuleVersion:async(id,version)=> {
+  downloadBlob,dialog:dialogForm,navigateResearch:()=>router.navigate('research'),
+  openRuleVersion:async(id,version)=>{
     const rule=await api('/api/rules/'+id);const d=node('dialog',null,{'data-wisdom-private':'true'});
     d.append(node('h2',rule.title+' · Версия '+(version||rule.version_no)),node('p',rule.when_to_apply),node('p',rule.expected_effect));
     for(const a of rule.actions||[])d.append(node('p',a.body||a));
@@ -407,22 +443,73 @@ const featureHost={node,button,api,post,notify:message,libraries:()=>libraries,c
   }
 };
 window.WisdomResearch.configure(featureHost);
-async function switchTab(name) {
-  window.WisdomResearch.invalidate();window.WisdomMap.invalidate();
-  for(const section of ['libraries','uses','research','maps','access','jobs'])byId(section+'-tab').hidden=section!==name;
-  for(const item of document.querySelectorAll('[data-tab]'))item.setAttribute('aria-pressed',String(item.dataset.tab===name));
-  if(name==='uses')await loadUses();
-  if(name==='research')await window.WisdomResearch.mount(byId('research-workspace'),featureHost);
-  if(name==='maps')await window.WisdomMap.mount(byId('maps-workspace'),featureHost);
-  if(name==='access')await window.WisdomCompletion.mountAccess(byId('access-workspace'),featureHost);
-  if(name==='jobs')await window.WisdomCompletion.mountJobs(byId('jobs-workspace'),featureHost);
-}
-for (const tab of document.querySelectorAll('[data-tab]')) tab.addEventListener('click',safe(()=>switchTab(tab.dataset.tab)));
-safe(async () => {
+
+const identityReady = (async () => {
   identity = await api('/api/me');
   const login = document.querySelector('.login'); if (login) login.hidden = true;
   const logout = byId('logout'); if (logout) logout.hidden = false;
   const readiness = await api('/readyz');
   message(readiness.semantic_search_enabled ? 'Поиск по смыслу доступен для опубликованных знаний. Извлечение создаёт черновики для проверки.' : 'Поиск по словам · извлечение создаёт черновики для проверки.');
-  await loadLibraries();
+  return identity;
 })();
+identityReady.catch(error => { message(error.message); });
+const ready = () => identityReady;
+
+router.register('libraries', {
+  title: 'AI-wisdom — Библиотеки знаний',
+  mount: async (container, context) => {
+    await ready(); if (!context.isCurrent()) return;
+    await ensureLibraries(); if (!context.isCurrent()) return;
+    const id = context.params[0];
+    if (id) {
+      const lib = libraries.find(item => item.id === id);
+      if (lib) { await openLibrary(lib, {guard: context.isCurrent}); return; }
+      message('Библиотека не найдена или доступ к ней закрыт.');
+      byId('library-detail').replaceChildren(node('h2', 'Библиотека не найдена'), node('p', 'Вернитесь к списку и выберите доступную библиотеку.'));
+    }
+  }
+});
+router.register('uses', {
+  title: 'AI-wisdom — Опыт применения',
+  mount: async (container, context) => {
+    await ready(); if (!context.isCurrent()) return;
+    await loadUses();
+  }
+});
+router.register('research', {
+  title: 'AI-wisdom — Исследование и Studio',
+  leave: () => window.WisdomResearch.invalidate(),
+  mount: async (container, context) => {
+    await ready(); if (!context.isCurrent()) return;
+    await ensureLibraries(); if (!context.isCurrent()) return;
+    await window.WisdomResearch.mount(byId('research-workspace'), featureHost, context.query.get('library') || undefined);
+  }
+});
+router.register('maps', {
+  title: 'AI-wisdom — Карта знаний',
+  leave: () => window.WisdomMap.invalidate(),
+  mount: async (container, context) => {
+    await ready(); if (!context.isCurrent()) return;
+    await ensureLibraries(); if (!context.isCurrent()) return;
+    const chosen = context.query.get('library') || undefined;
+    const chosenMode = context.query.get('mode') || undefined;
+    await window.WisdomMap.mount(byId('maps-workspace'), featureHost, chosen, chosenMode);
+  }
+});
+router.register('access', {
+  title: 'AI-wisdom — Доступ',
+  mount: async (container, context) => {
+    await ready(); if (!context.isCurrent()) return;
+    await ensureLibraries(); if (!context.isCurrent()) return;
+    await window.WisdomCompletion.mountAccess(byId('access-workspace'), featureHost);
+  }
+});
+router.register('jobs', {
+  title: 'AI-wisdom — Задания',
+  mount: async (container, context) => {
+    await ready(); if (!context.isCurrent()) return;
+    await window.WisdomCompletion.mountJobs(byId('jobs-workspace'), featureHost);
+  }
+});
+router.onChange((current, previous) => { if (previous && current && previous.name !== current.name) router.focusHeading(); });
+router.start();

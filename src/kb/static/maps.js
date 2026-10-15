@@ -2,7 +2,7 @@
 window.WisdomMap = (() => {
   let epoch=0, controller, canvas, root, host;
   const invalidate=()=> { epoch++; controller?.abort(); canvas?.destroy(); canvas=null; root?.replaceChildren(); };
-  async function mount(container, helpers, chosenId) {
+  async function mount(container, helpers, chosenId, chosenMode) {
     invalidate(); root=container; host=helpers; const generation=epoch, n=host.node;
     controller=new AbortController(); const valid=()=>generation===epoch;
     const libs=host.libraries(); if (!libs.length) { root.append(n('p','Создайте библиотеку и добавьте материалы.')); return; }
@@ -11,6 +11,7 @@ window.WisdomMap = (() => {
     library.value=chosenId || host.currentLibrary()?.id || libs[0].id;
     const mode=n('select',null,{id:'map-mode'});
     mode.append(n('option','Происхождение и опыт',{value:'provenance'}),n('option','Семантическая сеть',{value:'semantic'}));
+    mode.value=chosenMode === 'semantic' ? 'semantic' : 'provenance';
     const controls=n('div',null,{class:'map-controls'}), content=n('div',null,{class:'card'}), list=n('div',null,{class:'map-list'});
     const details=n('aside',null,{class:'card map-details','aria-live':'polite'});
     controls.append(n('label','Библиотека',{for:'map-library'}),library,n('label','Вид карты',{for:'map-mode'}),mode);
@@ -61,9 +62,15 @@ window.WisdomMap = (() => {
         surface.append(n('p',mode.value==='semantic'?'Пока нет понятий и связей. Создайте сеть в Studio или добавьте понятие вручную.':'После загрузки источников здесь появится их происхождение.'));
         if(mode.value==='semantic') surface.append(b('Открыть Studio',()=>window.WisdomResearch.question('',[],library.value)));
       } else {
+        // Граф грузится лениво: библиотека нужна только здесь и только когда есть узлы.
+        if(typeof window.WisdomGraphCanvas.ensureLibrary==='function') await window.WisdomGraphCanvas.ensureLibrary();
+        if(!valid() || serial!==readSerial) return;
         canvas=window.WisdomGraphCanvas.render(surface,data,mode.value,node=>act(()=>renderDetail(node))());
       }
-      for(const node of data.nodes) list.append(b((types[node.kind]||node.kind)+' · '+node.label,()=>renderDetail(node)));
+      const nodeList=window.WisdomList?window.WisdomList.create(host,{empty:'Узлов пока нет.',label:'Страницы списка узлов',
+        renderItem:node=>b((types[node.kind]||node.kind)+' · '+node.label,()=>renderDetail(node))}):null;
+      if(nodeList) { nodeList.set(data.nodes); list.append(nodeList.element,nodeList.navigation,nodeList.status); }
+      else for(const node of data.nodes) list.append(b((types[node.kind]||node.kind)+' · '+node.label,()=>renderDetail(node)));
       const labels=new Map(data.nodes.map(v=>[v.id,v.label]));
       for(const edge of data.edges) {
         const row=n('article',null,{class:'graph-relation'});
@@ -74,7 +81,7 @@ window.WisdomMap = (() => {
         list.append(row);
       }
     }
-    library.addEventListener('change',act(()=>mount(root,host,library.value)));
+    library.addEventListener('change',act(()=>mount(root,host,library.value,mode.value)));
     mode.addEventListener('change',act(()=> {document.querySelectorAll('dialog[data-wisdom-private]').forEach(d=>d.close());return load();}));
     controls.append(b('Обновить',load),b('Уместить граф',()=>canvas?.fit(30)),b('Приблизить',()=>canvas?.zoom(canvas.zoom()*1.2)),b('Отдалить',()=>canvas?.zoom(canvas.zoom()/1.2)),
       b('Скачать JSON',async()=> { const fresh=await host.api(endpoint(),{signal:controller.signal});if(valid())host.download('knowledge-graph.json',JSON.stringify(fresh,null,2),'application/json'); }),
