@@ -180,6 +180,7 @@
       }
       if (versions.length) feed.append(aggregateGrid);
       if (!items.length) feed.append(host.node('p', 'Опубликованных записей пока нет.', {class: 'muted'}));
+      const publishedCards = [];
       for (const item of items) {
         const snapshot = item?.snapshot || {};
         const card = host.node('article', null, {class: 'card'});
@@ -195,8 +196,13 @@
         ];
         for (const [label, value] of fields) card.append(host.node('p', label + ': ' + text(value)));
         card.append(host.node('p', 'Самоотчёт участника; не измеренное доказательство бизнес-результата.', {class: 'muted'}));
-        feed.append(card);
+        publishedCards.push(card);
       }
+      if (window.WisdomList && publishedCards.length) {
+        const published = window.WisdomList.create(host, {label: 'Страницы списка опубликованных записей', renderItem: built => built});
+        published.set(publishedCards);
+        feed.append(published.element, published.navigation, published.status);
+      } else for (const card of publishedCards) feed.append(card);
       if (data?.basis && data.basis !== 'explicit_shared_self_report_not_business_proof') feed.append(host.node('p', 'Основание данных: ' + text(data.basis), {class: 'muted'}));
     }
     async function publish() {

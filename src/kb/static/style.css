@@ -113,3 +113,5 @@ section#maps-tab { grid-template-columns: minmax(0, 1fr); }
 .search-hit p { margin: 0; }
 .map-list .pager-list { display: grid; gap: 0.45rem; }
 .completion-grid .pager-list { display: grid; gap: 0.5rem; }
+
+.completion-list-item { display: grid; gap: 0.5rem; }

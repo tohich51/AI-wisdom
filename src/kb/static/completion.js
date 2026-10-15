@@ -37,15 +37,18 @@
       const jobs = await host.api('/api/jobs');
       const list = el('div', null, {class: 'completion-grid'});
       if (!jobs.length) empty(list, 'Заданий пока нет. Они появятся после обработки источника.');
-      for (const job of jobs) {
+      const jobCard = job => {
         const box = card(job.title || 'Материал без названия');
         box.append(el('p', 'Состояние: ' + job.status));
         box.append(el('p', 'Готовые части: ' + job.chunks_done + ' из ' + (job.chunks_total ?? 'не указано')));
         if (job.error_code) box.append(el('p', 'Код ошибки: ' + job.error_code, {class: 'completion-error'}));
         if (job.created_at) box.append(el('p', 'Создано: ' + new Date(job.created_at).toLocaleString('ru-RU'), {class: 'muted'}));
         if (job.completed_at) box.append(el('p', 'Завершено: ' + new Date(job.completed_at).toLocaleString('ru-RU'), {class: 'muted'}));
-        list.append(box);
-      }
+        return box;
+      };
+      const paged = window.WisdomList && jobs.length ? window.WisdomList.create(host, {label: 'Страницы списка заданий', renderItem: jobCard}) : null;
+      if (paged) { paged.set(jobs); list.append(paged.element, paged.navigation, paged.status); }
+      else for (const job of jobs) list.append(jobCard(job));
       root.replaceChildren(action('Обновить список', () => mountJobs(root, host)), list);
     } catch (error) { fail(root, error); }
   }
@@ -79,9 +82,10 @@
       };
       const memberBox = card('Участники');
       if (!members.length) empty(memberBox, 'Участники не отображаются для текущей роли.');
-      for (const member of members) {
+      const memberItem = member => {
+        const memberLine = el('div', null, {class: 'completion-list-item'});
         const label = [member.display_name, member.email, member.status].filter(Boolean).join(' · ') || member.principal_id;
-        memberBox.append(el('p', label));
+        memberLine.append(el('p', label));
         if (member.status === 'active') {
           const deactivate = el('details'); deactivate.append(el('summary', 'Деактивировать участника'));
           const form = el('form', null, {class: 'completion-form'}), reason = field('Причина (необязательно)', 'reason');
@@ -97,9 +101,13 @@
               await mountAccess(root, host);
             } catch (error) { host.notify(error.message); } finally { submit.disabled = false; }
           });
-          deactivate.append(form); memberBox.append(deactivate);
+          deactivate.append(form); memberLine.append(deactivate);
         }
-      }
+        return memberLine;
+      };
+      const memberList = window.WisdomList && members.length ? window.WisdomList.create(host, {label: 'Страницы списка участников', renderItem: memberItem}) : null;
+      if (memberList) { memberList.set(members); memberBox.append(memberList.element, memberList.navigation, memberList.status); }
+      else for (const member of members) memberBox.append(memberItem(member));
       const inviteBox = card('Приглашения');
       if (!invitations.length) empty(inviteBox, 'Ожидающих приглашений нет.');
       for (const item of invitations) inviteBox.append(el('p', [item.email, item.subject, item.status].filter(Boolean).join(' · ') || 'Приглашение'));
@@ -121,6 +129,7 @@
       inviteBox.append(inviteForm);
       const groupBox = card('Группы');
       if (!groups.length) empty(groupBox, 'Групп пока нет.');
+      const groupCards = [];
       for (const group of groups) {
         const groupCard = card(group.name);
         const membershipForm = el('form', null, {class: 'completion-form'});
@@ -182,8 +191,11 @@
           });
           groupCard.append(grantForm);
         }
-        groupBox.append(groupCard);
+        groupCards.push(groupCard);
       }
+      const groupList = window.WisdomList && groupCards.length ? window.WisdomList.create(host, {label: 'Страницы списка групп', renderItem: built => built}) : null;
+      if (groupList) { groupList.set(groupCards); groupBox.append(groupList.element, groupList.navigation, groupList.status); }
+      else for (const groupCard of groupCards) groupBox.append(groupCard);
       const groupForm = el('form', null, {class: 'completion-form'});
       const groupName = field('Название группы (латиница, цифры, _ или -)', 'name'); groupName.input.pattern = '[a-z][a-z0-9_-]{1,63}'; groupName.input.required = true;
       const create = el('button', 'Создать группу', {type: 'submit'}); groupForm.append(groupName.wrap, create);

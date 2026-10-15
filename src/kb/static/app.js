@@ -73,11 +73,9 @@ async function loadLibraries() {
   items.set(libraries);
   list.append(items.element, items.navigation, items.status);
 }
-let librariesPromise = null;
-const ensureLibraries = () => {
-  if (!librariesPromise) librariesPromise = loadLibraries().catch(error => { librariesPromise = null; throw error; });
-  return librariesPromise;
-};
+// Каждый вход в раздел перечитывает список, как и раньше: сетевой запрос
+// делает только слой данных (кэш и объединение одинаковых чтений).
+const ensureLibraries = () => loadLibraries();
 async function trackJob(id) {
   activeJob = id;
   const job = await api('/api/jobs/' + id);
@@ -376,7 +374,7 @@ byId('create-library').addEventListener('submit', safe(async event => {
   const data = Object.fromEntries(new FormData(event.target)); data.organisation_id = identity.account_id;
   const project = data.kind === 'project'; if (project) delete data.kind;
   const result = await post(project ? '/api/projects' : '/api/libraries', data);
-  event.target.reset(); librariesPromise = null; await ensureLibraries(); await openLibrary(project ? result.project : result);
+  event.target.reset(); await ensureLibraries(); await openLibrary(project ? result.project : result);
 }));
 byId('search').addEventListener('submit', safe(async event => {
   const query = new FormData(event.target).get('q'); const result = await api('/api/search?q=' + encodeURIComponent(query));

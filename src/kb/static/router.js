@@ -113,7 +113,7 @@
   };
 
   window.WisdomRouter = {
-    register(name, route) { routes.set(name, route); },
+    register(name, route) { routes.set(name, {...route, name}); return window.WisdomRouter; },
     names: () => [...routes.keys()],
     path: build,
     navigate,
