@@ -160,9 +160,19 @@
       const items = Array.isArray(data?.items) ? data.items : [];
       const versions = Array.isArray(data?.by_rule_version) ? data.by_rule_version : [];
       const aggregateGrid = host.node('div', null, {class: 'completion-grid'});
+      const titleByRuleVersion = new Map();
+      for (const item of items) {
+        const snapshot = item?.snapshot || {};
+        const title = typeof snapshot.rule_title === 'string' ? snapshot.rule_title.trim() : '';
+        if (title) titleByRuleVersion.set(JSON.stringify([
+          item?.rule_id || snapshot.rule_id,
+          item?.rule_version_no ?? snapshot.rule_version_no
+        ]), title);
+      }
       for (const row of versions) {
         const card = host.node('article', null, {class: 'card'});
-        card.append(host.node('h4', 'Правило ' + text(row.rule_id) + ' · точная версия ' + text(row.rule_version_no)));
+        const matchingTitle = titleByRuleVersion.get(JSON.stringify([row.rule_id, row.rule_version_no]));
+        card.append(host.node('h4', text(matchingTitle || 'Сводка по правилу') + ' · v' + text(row.rule_version_no)));
         card.append(host.node('p', 'Опубликованных записей: ' + text(row.total) + ' · оценок полезности: ' + text(row.rated)));
         card.append(host.node('p', 'Средняя полезность по опубликованным оценкам: ' + text(row.average_rating)));
         card.append(host.node('p', 'Достижение: ' + renderCounts(row.achievement_counts, achievementLabels, 'Нет данных') + ' · автор оценки: ' + renderCounts(row.assessor_kind_counts, assessorLabels, 'Нет данных')));
@@ -173,7 +183,8 @@
       for (const item of items) {
         const snapshot = item?.snapshot || {};
         const card = host.node('article', null, {class: 'card'});
-        card.append(host.node('h4', text(snapshot.rule_title) + ' · правило ' + text(item.rule_id || snapshot.rule_id) + ' · v' + text(item.rule_version_no ?? snapshot.rule_version_no)));
+        const ruleTitle = typeof snapshot.rule_title === 'string' ? snapshot.rule_title.trim() : '';
+        card.append(host.node('h4', text(ruleTitle || 'Правило') + ' · v' + text(item.rule_version_no ?? snapshot.rule_version_no)));
         const fields = [
           ['Ожидаемый результат', snapshot.expected_result], ['Где применено', snapshot.where_applied],
           [snapshot.is_correction ? 'Наблюдаемый результат · исправление' : 'Наблюдаемый результат', snapshot.observed_result],

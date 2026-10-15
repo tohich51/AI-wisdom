@@ -366,10 +366,10 @@
       for (const row of result.by_rule_version) {
         const box = card(row.title + ' · версия ' + row.rule_version_no);
         box.append(el('p', 'Записей использования: ' + row.retrieved + ' · применено: ' + row.applied));
-        box.append(el('p', 'Результат записан: ' + row.reported + ' · исход неизвестен: ' + row.outcome_unknown));
+        box.append(el('p', 'Есть запись результата: ' + row.reported + ' · Результат пока не записан: ' + row.outcome_unknown));
         box.append(el('p', 'Средняя самооценка: ' + (row.average_rating ?? 'нет оценки') + ' · оценок: ' + row.rated)); list.append(box);
       }
-      area.replaceChildren(el('p', 'Сводка учитывает только ваш опыт. Просмотр и поиск не считаются применением; неизвестный исход не трактуется как неудача.', {class: 'muted'}), el('p','Выдач материалов в доступной личной истории: ' + (result.visible_issuance_count ?? 'неизвестно') + '. Выдача не доказывает чтение.'), list);
+      area.replaceChildren(el('p', 'Сводка учитывает только ваш опыт. Просмотр и поиск не считаются применением; отсутствие записи результата не означает неудачу.', {class: 'muted'}), el('p','Выдач материалов в доступной личной истории: ' + (result.visible_issuance_count ?? 'неизвестно') + '. Выдача не доказывает чтение.'), list);
       const journal = el('details'); journal.append(el('summary','Последние выдачи материалов'));
       const entries = await host.api('/api/retrievals');
       if (!entries.length) journal.append(el('p','История выдачи пока пуста.'));
