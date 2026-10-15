@@ -8,7 +8,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from kb.catalog import content, policies, shared_experience, workspace, writes
 from kb.http.libraries import Db, Me, mapped_errors
-from kb.ingestion import submit_processing
+from kb.jobs.ingestion import submit_processing
 
 router = APIRouter(tags=["knowledge"])
 

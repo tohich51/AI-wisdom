@@ -13,7 +13,7 @@ from test_runtime import runtime_db as runtime_db
 from test_runtime import world as world
 
 from kb.catalog import content, projects, upload
-from kb.ingestion import run_job, submit_processing
+from kb.jobs.ingestion import run_job, submit_processing
 
 pytestmark = pytest.mark.integration
 

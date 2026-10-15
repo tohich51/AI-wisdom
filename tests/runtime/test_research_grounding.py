@@ -14,7 +14,7 @@ from test_runtime import world as world
 from kb.access.policy import AccessDenied, transaction_identity
 from kb.catalog import libraries
 from kb.catalog.grounding import capture_snapshot, resolve_citation, validate_citation
-from kb.ingestion import run_job, submit_processing
+from kb.jobs.ingestion import run_job, submit_processing
 
 pytestmark = pytest.mark.integration
 

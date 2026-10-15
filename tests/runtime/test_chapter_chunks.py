@@ -4,7 +4,7 @@ from uuid import uuid4
 
 import pytest
 
-from kb.ingestion import _checkpoint_hash, _chunks
+from kb.jobs.ingestion import _checkpoint_hash, _chunks
 
 
 def _fragment(text, **metadata):

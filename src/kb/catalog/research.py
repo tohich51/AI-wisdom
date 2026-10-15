@@ -148,7 +148,7 @@ def submit_research(
                 request_hash,
             ),
         )
-        from kb.research_worker import register_research_task
+        from kb.jobs.research_worker import register_research_task
 
         app = procrastinate.App(connector=procrastinate.PsycopgConnector(conninfo=""))
         task = register_research_task(app, "")

@@ -17,7 +17,7 @@ from test_runtime import world as world
 
 from kb.access.policy import Principal, transaction_identity
 from kb.catalog import libraries, research
-from kb.ingestion import submit_processing
+from kb.jobs.ingestion import submit_processing
 
 pytestmark = pytest.mark.integration
 

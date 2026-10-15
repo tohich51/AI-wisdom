@@ -13,7 +13,7 @@ from psycopg.types.json import Jsonb
 from kb.access.policy import AccessDenied, Principal, transaction_identity
 from kb.catalog.grounding import check_snapshot, resolve_citation
 from kb.catalog.research import checked_run
-from kb.model_research import Draft
+from kb.research.model import Draft
 
 
 class AttemptInProgress(RuntimeError):
@@ -104,7 +104,7 @@ def run_research(dsn, run_id, principal, runner_url, worker_token):
                     {key: data[key] for key in ("title", "no_evidence", "items", "relations")}
                 )
             ).model_dump(mode="json")
-            from kb.research_validation import validate_draft
+            from kb.research.validation import validate_draft
 
             validate_draft(draft, fragments, row["kind"])
             if not draft["no_evidence"] and (

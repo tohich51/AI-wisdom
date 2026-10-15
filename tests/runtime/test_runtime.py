@@ -12,13 +12,13 @@ from psycopg import sql
 from psycopg.conninfo import make_conninfo
 
 from kb.access.policy import AccessDenied, Principal, transaction_identity
+from kb.adapters.model_runner import _parse_draft, _RunnerFailure, _text_from_provider_output
 from kb.catalog import content, libraries, upload, writes
 from kb.catalog.storage import LocalBlobStore
 from kb.document_parser import ParseRejected, parse_document
-from kb.ingestion import _chunks, run_job, submit_processing
+from kb.jobs.ingestion import _chunks, run_job, submit_processing
+from kb.jobs.queue import install_queue
 from kb.migrate import MigrationError, apply_migrations
-from kb.model_runner import _parse_draft, _RunnerFailure, _text_from_provider_output
-from kb.queue_schema import install_queue
 
 ROOT = Path(__file__).resolve().parents[2]
 pytestmark = pytest.mark.integration

@@ -25,10 +25,10 @@ def main(argv=None):
 
     sys.argv = [sys.argv[0], *remaining]
     modules = {
-        "worker": "kb.ingestion",
-        "model-runner": "kb.model_runner",
+        "worker": "kb.jobs.ingestion",
+        "model-runner": "kb.adapters.model_runner",
         "migrate": "kb.migrate",
-        "indexer": "kb.indexer",
+        "indexer": "kb.jobs.indexer",
     }
     return import_module(modules[args.service]).main()
 

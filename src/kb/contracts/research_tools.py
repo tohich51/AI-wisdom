@@ -5,7 +5,7 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from kb.model_research import Kind, Predicate
+from kb.research.model import Kind, Predicate
 
 
 class Args(BaseModel):

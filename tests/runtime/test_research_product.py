@@ -10,7 +10,7 @@ from test_runtime import world as world
 
 from kb.access.policy import AccessDenied, transaction_identity
 from kb.catalog import graphs, notes, research, research_rules, semantic, writes
-from kb.research_worker import run_research
+from kb.jobs.research_worker import run_research
 
 pytestmark = pytest.mark.integration
 
@@ -70,7 +70,7 @@ def execute(world, monkeypatch, kind="research"):
             request=httpx.Request("POST", url),
         )
 
-    monkeypatch.setattr("kb.research_worker.httpx.post", provider)
+    monkeypatch.setattr("kb.jobs.research_worker.httpx.post", provider)
     run_research(
         world["worker"], submitted["run_id"], world["principal"], "http://runner.test", "t" * 32
     )
@@ -273,7 +273,7 @@ def test_generation_revoked_during_provider_io_cannot_commit_network(world, monk
             request=httpx.Request("POST", url),
         )
 
-    monkeypatch.setattr("kb.research_worker.httpx.post", provider)
+    monkeypatch.setattr("kb.jobs.research_worker.httpx.post", provider)
     run_research(
         world["worker"], submission["run_id"], world["principal"], "http://runner.test", "t" * 32
     )

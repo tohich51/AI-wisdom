@@ -49,7 +49,7 @@ from kb.contracts.mcp_tools import (
     StartUseArgs,
     SubmitSourceArgs,
 )
-from kb.ingestion import submit_processing
+from kb.jobs.ingestion import submit_processing
 
 
 def assert_mcp_contract_registered() -> None:

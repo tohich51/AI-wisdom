@@ -79,8 +79,8 @@ class Verification(StrictModel):
 
 
 def install_research_runner(app) -> None:
-    from kb import model_runner as runner
-    from kb.research_references import materialize_references, reference_schema
+    from kb.adapters import model_runner as runner
+    from kb.research.references import materialize_references, reference_schema
 
     def call(text: str, ids: list[UUID], prompt: str, model, references=None):
         raw = runner._run_cli(
@@ -106,7 +106,7 @@ def install_research_runner(app) -> None:
         if not runner._MODEL_SLOT.acquire(blocking=False):
             raise HTTPException(status_code=503, detail="busy")
         try:
-            from kb.research_validation import validate_draft
+            from kb.research.validation import validate_draft
 
             ids = [f.id for f in payload.fragments]
             fragments = [f.model_dump(mode="json") for f in payload.fragments]

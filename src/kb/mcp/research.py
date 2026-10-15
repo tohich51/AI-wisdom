@@ -6,7 +6,7 @@ from uuid import UUID
 from mcp.server.mcpserver import Context
 
 from kb.catalog import graphs, notes, research, research_rules, semantic
-from kb.model_research import Kind, Predicate
+from kb.research.model import Kind, Predicate
 
 
 def install_tools(server, call):

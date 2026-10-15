@@ -10,8 +10,8 @@ from test_runtime import runtime_db as runtime_db
 from test_runtime import source
 from test_runtime import world as world
 
-from kb import ingestion
 from kb.access.policy import AccessDenied, transaction_identity
+from kb.jobs import ingestion
 
 pytestmark = pytest.mark.integration
 

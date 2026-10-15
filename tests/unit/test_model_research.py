@@ -7,8 +7,8 @@ from uuid import uuid4
 import pytest
 from fastapi.testclient import TestClient
 
-from kb import model_runner
-from kb.research_validation import validate_draft
+from kb.adapters import model_runner
+from kb.research.validation import validate_draft
 
 
 def payload(kind="research"):
