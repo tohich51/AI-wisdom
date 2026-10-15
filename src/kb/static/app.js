@@ -245,6 +245,15 @@ byId('create-library').addEventListener('submit', safe(async event => {
 byId('search').addEventListener('submit', safe(async event => {
   const query = new FormData(event.target).get('q'); const result = await api('/api/search?q=' + encodeURIComponent(query));
   const list = byId('search-results'); list.replaceChildren(node('p', ({semantic:'Поиск по смыслу',hybrid:'Поиск по смыслу и словам',lexical:'Поиск по словам'}[result.mode] || result.mode) + ' · ' + result.hits.length + ' совпадений'));
+  if (result.indexed_library_count != null || result.pending_library_count != null) {
+    const counts = [];
+    if (result.indexed_library_count != null) counts.push('индекс готов — ' + result.indexed_library_count);
+    if (result.pending_library_count != null) counts.push('индекс не готов — ' + result.pending_library_count);
+    list.append(node('p', 'Библиотеки: ' + counts.join(' · ') + '.'));
+  }
+  if (result.fallback_reason === 'index_pending_or_unavailable') {
+    list.append(node('p', 'Пока ищем по словам: индекс библиотеки ещё не готов или временно недоступен.'));
+  }
   for (const hit of result.hits) list.append(node('p', hit.statement), node('pre', JSON.stringify(hit.provenance, null, 2)));
 }));
 byId('logout').addEventListener('click', safe(async () => { await post('/auth/logout'); location.reload(); }));
