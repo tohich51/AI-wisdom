@@ -32,12 +32,12 @@
 </div>
 <nav class="main-nav" aria-label="Основные разделы">
 <p class="nav-label">Разделы</p>
-<a class="nav-link" href="#/libraries" data-route="libraries" aria-controls="libraries-tab">Библиотеки</a>
-<a class="nav-link" href="#/uses" data-route="uses" aria-controls="uses-tab">Опыт</a>
-<a class="nav-link" href="#/research" data-route="research" aria-controls="research-tab">Исследование и Studio</a>
-<a class="nav-link" href="#/maps" data-route="maps" aria-controls="maps-tab">Карта знаний</a>
-<a class="nav-link" href="#/access" data-route="access" aria-controls="access-tab">Доступ</a>
-<a class="nav-link" href="#/jobs" data-route="jobs" aria-controls="jobs-tab">Задания</a>
+<a class="nav-link" href="/app/libraries" data-route="libraries" aria-controls="libraries-tab">Библиотеки</a>
+<a class="nav-link" href="/app/experience" data-route="uses" aria-controls="uses-tab">Опыт</a>
+<a class="nav-link" href="/app/research" data-route="research" aria-controls="research-tab">Исследование и Studio</a>
+<a class="nav-link" href="/app/maps" data-route="maps" aria-controls="maps-tab">Карта знаний</a>
+<a class="nav-link" href="/app/settings/access" data-route="access" aria-controls="access-tab">Доступ</a>
+<a class="nav-link" href="/app/jobs" data-route="jobs" aria-controls="jobs-tab">Задания</a>
 </nav>
 </aside>
 <main id="main">
@@ -96,6 +96,11 @@
 <div class="section-heading"><h1 id="jobs-heading">Задания</h1>
 <p>Состояние обработки материалов и готовые части.</p></div>
 <div id="jobs-workspace" aria-live="polite"></div>
+</section>
+<section id="context-tab" aria-labelledby="context-heading" hidden>
+<div class="section-heading"><h1 id="context-heading">Контекст проекта</h1>
+<p>Цели, ограничения и накопленный опыт проекта по адресу /app/projects/:id/context.</p></div>
+<div id="context-workspace" aria-live="polite"></div>
 </section>
 </main>
 </div>

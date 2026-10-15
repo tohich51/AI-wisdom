@@ -56,9 +56,29 @@ function downloadBlob(filename, blob) {
   const url = URL.createObjectURL(blob), a = node('a', null, {href: url, download: filename});
   document.body.append(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
+// Список, который читается с сервера страницами limit/offset по 50 записей.
+// Элементы попадают в документ до первой загрузки, чтобы ответ страницы знал,
+// какому экрану принадлежит, и поздний ответ не перерисовал закрытый список.
+const pagedList = (root, title, path, key, options) => {
+  root.append(node('h3', title));
+  const group = node('div', null, {class: 'paged-list', 'data-paged': key});
+  const list = window.WisdomList.createServer(featureHost, {
+    ...options,
+    label: 'Страницы списка: ' + title,
+    fetchPage: ({limit, offset, signal}) => api(path + '?limit=' + limit + '&offset=' + offset, {signal})
+  });
+  group.append(list.element, list.navigation, list.status);
+  root.append(group);
+  list.load();
+  return list;
+};
+// Адрес библиотеки не должен терять подраздел: /app/libraries/<id>/sources
+// остаётся собой и после перезагрузки, и после перерисовки того же экрана.
 const libraryRoute = (id, {replace = false} = {}) => {
-  const target = router.path('libraries', [id]);
-  if (location.hash === target) return;
+  const here = String(location.pathname).match(/^\/app\/libraries\/([^/]+)\/(sources|knowledge|rules)$/);
+  const section = here && here[1] === id ? here[2] : null;
+  const target = router.path('libraries', section ? [id, section] : [id]);
+  if (location.pathname + location.search === target) return;
   router.navigate(target, {replace});
 };
 async function loadLibraries() {
@@ -240,9 +260,7 @@ async function openLibrary(lib, {guard = null} = {}) {
     urlForm.addEventListener('submit', safe(submitUrl)); root.append(urlForm);
     root.append(button('Создать правило вручную', () => ruleEditor(lib)));
   }
-  const sources = await api('/api/libraries/' + lib.id + '/sources');
-  if (!current()) return;
-  titledList(root, 'Источники и происхождение', sources, {
+  pagedList(root, 'Источники и происхождение', '/api/libraries/' + lib.id + '/sources', 'sources', {
     empty: 'Источников пока нет. Загрузите материал выше.',
     renderItem: source => {
       const card = node('article', null, {class: 'card'});
@@ -257,9 +275,7 @@ async function openLibrary(lib, {guard = null} = {}) {
       return card;
     }
   });
-  const knowledge = await api('/api/libraries/' + lib.id + '/knowledge');
-  if (!current()) return;
-  titledList(root, 'Знания', knowledge, {
+  pagedList(root, 'Знания', '/api/libraries/' + lib.id + '/knowledge', 'knowledge', {
     empty: 'Знаний пока нет.',
     renderItem: item => {
       const card = node('article', null, {class: 'card'});
@@ -278,9 +294,7 @@ async function openLibrary(lib, {guard = null} = {}) {
       return card;
     }
   });
-  const rules = await api('/api/libraries/' + lib.id + '/rules');
-  if (!current()) return;
-  titledList(root, 'Правила и навыки', rules, {
+  pagedList(root, 'Правила и навыки', '/api/libraries/' + lib.id + '/rules', 'rules', {
     empty: 'Правил пока нет.',
     renderItem: rule => {
       const card = node('article', null, {class: 'card'}); card.append(node('h4', rule.title + ' · v' + rule.version_no + ' · ' + rule.publication));
@@ -467,6 +481,30 @@ router.register('libraries', {
     }
   }
 });
+// Отдельный адрес контекста проекта: /app/projects/:id/context. Внутри библиотеки
+// контекст по-прежнему монтируется на её экране — этот адрес его не заменяет.
+router.register('context', {
+  title: 'AI-wisdom — Контекст проекта',
+  mount: async (container, context) => {
+    await ready(); if (!context.isCurrent()) return;
+    await ensureLibraries(); if (!context.isCurrent()) return;
+    const workspace = byId('context-workspace'); workspace.replaceChildren();
+    const id = context.params[0];
+    const project = libraries.find(item => item.id === id);
+    if (!project) {
+      message('Проект не найден или доступ к нему закрыт.');
+      workspace.append(node('h2', 'Проект не найден'), node('p', 'Вернитесь к списку и выберите доступный проект.'));
+      return;
+    }
+    // Контекст сам проверяет, что открыт именно он, а не другая библиотека,
+    // поэтому на этом экране выбранной библиотекой становится проект.
+    selected = project;
+    const policy = await api('/api/libraries/' + project.id + '/policy');
+    if (!context.isCurrent()) return;
+    workspace.append(node('h2', project.name), node('p', 'Тип: ' + project.kind + ' · Доступ: ' + (policy.effective_role ?? 'не указан')));
+    await window.WisdomProjectContext.mount(workspace, project, featureHost, {canCurate: ['curator', 'manager'].includes(policy.effective_role)});
+  }
+});
 router.register('uses', {
   title: 'AI-wisdom — Опыт применения',
   mount: async (container, context) => {
@@ -480,7 +518,7 @@ router.register('research', {
   mount: async (container, context) => {
     await ready(); if (!context.isCurrent()) return;
     await ensureLibraries(); if (!context.isCurrent()) return;
-    await window.WisdomResearch.mount(byId('research-workspace'), featureHost, context.query.get('library') || undefined);
+    await window.WisdomResearch.mount(byId('research-workspace'), featureHost, context.query.get('library') || undefined, context.params[0] || undefined);
   }
 });
 router.register('maps', {
@@ -490,7 +528,7 @@ router.register('maps', {
     await ready(); if (!context.isCurrent()) return;
     await ensureLibraries(); if (!context.isCurrent()) return;
     const chosen = context.query.get('library') || undefined;
-    const chosenMode = context.query.get('mode') || undefined;
+    const chosenMode = context.query.get('view') || context.query.get('mode') || undefined;
     await window.WisdomMap.mount(byId('maps-workspace'), featureHost, chosen, chosenMode);
   }
 });
