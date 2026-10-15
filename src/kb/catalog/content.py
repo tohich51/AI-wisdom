@@ -21,6 +21,7 @@ from psycopg.rows import dict_row
 from kb.access.policy import AccessDenied, Principal, transaction_identity
 from kb.catalog.policies import require_export
 from kb.catalog.retrieval_events import record_retrieval
+from kb.runtime_identity import identity_connection
 from kb.vendor.book_to_skill.validate_skill import audit as audit_skill
 
 __all__ = [
@@ -482,27 +483,84 @@ def lexical_search_knowledge(
 
 
 def search_knowledge(
-    conn, principal, query, library_ids=None, limit=10, *, semantic=None, source_ids=None
+    conn,
+    principal,
+    query,
+    library_ids=None,
+    limit=10,
+    *,
+    semantic=None,
+    source_ids=None,
+    connections=None,
+    deadline=None,
 ):
-    """Shared HTTP/MCP search; the configured service owns semantic retrieval."""
+    """Shared HTTP/MCP search; the configured service owns semantic retrieval.
+
+    One entrypoint, called identically by the HTTP route and the MCP tool.
+
+    ``conn`` is the connection the caller already holds, or ``None`` when it
+    holds none. Passing ``connections`` -- the shared factory -- is how a
+    transport says "do not keep a lease for this": the semantic service then
+    takes its own short SQL phases and holds nothing while the provider is
+    being called, and the retrieval audit below opens its own short phase
+    rather than extending a lease the transport is still holding.
+    """
     _require_principal(principal)
     if not isinstance(query, str) or not query.strip() or len(query) > 2000:
         raise ValueError("query must contain 1..2000 characters")
+    # One place decides which factory this search uses: the caller's, or the
+    # one the configured semantic service was built with. The audit phase below
+    # needs the same answer, so it is resolved once rather than twice.
+    factory = connections
+    if factory is None and semantic is not None:
+        factory = getattr(semantic, "connections", None)
+    if conn is None and factory is None:
+        raise ValueError("a connection or a connection factory is required")
     scopes = _normalise_uuids(library_ids, "library_ids", deny_none=False)
     sources = _normalise_uuids(source_ids, "source_ids", deny_none=False)
     limit = _bounded_integer(limit, "limit", minimum=1, maximum=50)
     if semantic is not None:
-        if sources is not None:
-            result = semantic.search(conn, principal, query, scopes, limit, source_ids=sources)
-        else:
-            result = semantic.search(conn, principal, query, scopes, limit)
+        result = semantic.search(
+            conn,
+            principal,
+            query,
+            scopes,
+            limit,
+            source_ids=sources,
+            connections=connections,
+            deadline=deadline,
+        )
     else:
-        result = lexical_search_knowledge(conn, principal, query, scopes, limit, source_ids=sources)
-    with transaction_identity(conn, principal), conn.cursor(row_factory=dict_row) as cursor:
-        result["retrieval_event_ids"] = [
-            record_retrieval(cursor, principal, item_kind="knowledge", item_id=UUID(str(hit["id"])))
-            for hit in result["hits"]
-        ]
+        if conn is None:
+            with identity_connection(factory, principal) as lexical_conn:
+                result = lexical_search_knowledge(
+                    lexical_conn, principal, query, scopes, limit, source_ids=sources
+                )
+        else:
+            result = lexical_search_knowledge(
+                conn, principal, query, scopes, limit, source_ids=sources
+            )
+    # The audit is the last thing that happens and it is its own short phase.
+    if conn is not None:
+        with (
+            transaction_identity(conn, principal),
+            conn.cursor(row_factory=dict_row) as cursor,
+        ):
+            result["retrieval_event_ids"] = [
+                record_retrieval(
+                    cursor, principal, item_kind="knowledge", item_id=UUID(str(hit["id"]))
+                )
+                for hit in result["hits"]
+            ]
+    else:
+        with identity_connection(factory, principal) as audit_conn:
+            with audit_conn.cursor(row_factory=dict_row) as cursor:
+                result["retrieval_event_ids"] = [
+                    record_retrieval(
+                        cursor, principal, item_kind="knowledge", item_id=UUID(str(hit["id"]))
+                    )
+                    for hit in result["hits"]
+                ]
     return result
 
 
