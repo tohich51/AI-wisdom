@@ -550,15 +550,21 @@ router.register('jobs', {
 // Ошибка загрузки раздела показывается на самом разделе и предлагает повтор.
 // Раньше router отдавал её только наблюдателям, а единственный наблюдатель
 // аргумент игнорировал: после сбоя оставался пустой или наполовину собранный
-// экран без единого сообщения. Повтор пересобирает текущий маршрут.
+// экран без единого сообщения.
+//
+// Блок добавляется В НАЧАЛО контейнера, а не заменяет его содержимое: монтирование
+// обращается к собственным элементам экрана (library-list, access-workspace и
+// подобным), и если сбой удалит их, повтор уже ничего не сможет перерисовать.
+// Так повтор пересобирает экран поверх сохранённой разметки.
 function routeFailure(target, error) {
   const host = byId(target.name + '-workspace') || byId(target.name + '-tab');
   if (!host) return;
+  host.querySelectorAll('.route-error').forEach(node => node.remove());
   const box = node('div', null, {class: 'route-error', role: 'alert'});
   box.append(node('h3', 'Не удалось загрузить раздел'));
   box.append(node('p', error && error.message ? error.message : 'Неизвестная ошибка загрузки.'));
   box.append(button('Повторить', () => { box.remove(); router.refresh(); }));
-  host.replaceChildren(box);
+  host.prepend(box);
 }
 router.onChange((current, previous, error) => {
   if (previous && current && previous.name !== current.name) router.focusHeading();
