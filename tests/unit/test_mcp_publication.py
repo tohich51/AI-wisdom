@@ -4,7 +4,9 @@ from contextlib import nullcontext
 from types import SimpleNamespace
 from uuid import uuid4
 
+import pytest
 from fastapi import HTTPException
+from mcp.server.mcpserver.exceptions import UnexpectedToolError
 
 from kb.mcp.server import build_mcp
 
@@ -53,7 +55,8 @@ async def test_publication_rechecks_transport_identity(monkeypatch):
         raise HTTPException(status_code=403)
 
     app.state.resolve_token = revoked
-    denied = await server.call_tool(
-        "publish_knowledge", {"knowledge_id": str(knowledge_id)}, context=context
-    )
-    assert denied.is_error and len(calls) == 1
+    with pytest.raises(UnexpectedToolError):
+        await server.call_tool(
+            "publish_knowledge", {"knowledge_id": str(knowledge_id)}, context=context
+        )
+    assert len(calls) == 1
