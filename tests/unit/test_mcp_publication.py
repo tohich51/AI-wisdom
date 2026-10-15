@@ -65,3 +65,52 @@ async def test_publication_rechecks_transport_identity(monkeypatch):
             "publish_knowledge", {"knowledge_id": str(knowledge_id)}, context=context
         )
     assert len(calls) == 1
+
+
+async def test_shared_copy_mutation_requires_experience_scope_not_contribute(monkeypatch):
+    from kb.access.bearer_policy import http_scope
+
+    monkeypatch.setenv("KB_MCP_RESOURCE_URL", "https://gateway.example/mcp")
+    monkeypatch.setenv("KB_OIDC_ISSUER", "https://id.example/realms/kb")
+    monkeypatch.setenv("KB_MCP_CLIENT_ID", "fixture")
+    principal_id, account_id, library_id, use_id, outcome_id = [uuid4() for _ in range(5)]
+    identity = SimpleNamespace(
+        principal_id=principal_id,
+        account_id=account_id,
+        scopes=frozenset({"kb:contribute"}),
+        client_id="fixture",
+    )
+    calls = []
+
+    def publish(conn, principal, library, use, outcome):
+        assert principal.principal_id == principal_id
+        assert (library, use, outcome) == (library_id, use_id, outcome_id)
+        calls.append(use)
+        return {"id": str(uuid4())}
+
+    app = SimpleNamespace(
+        state=SimpleNamespace(
+            resolve_token=lambda _token: identity,
+            db_pool=SimpleNamespace(connection=lambda: nullcontext(object())),
+        )
+    )
+    monkeypatch.setattr("kb.catalog.shared_experience.publish", publish)
+    server, _ = build_mcp(app, ["gateway.example"])
+    context = SimpleNamespace(
+        request_context=SimpleNamespace(
+            request=SimpleNamespace(headers={"authorization": "Bearer fixture"}),
+        )
+    )
+    args = {"library_id": str(library_id), "use_id": str(use_id), "outcome_id": str(outcome_id)}
+    with pytest.raises(UnexpectedToolError):
+        await server.call_tool("publish_experience", args, context=context)
+    assert calls == []
+    identity.scopes = frozenset({"kb:experience"})
+    assert not (await server.call_tool("publish_experience", args, context=context)).is_error
+    assert calls == [use_id]
+    identity.scopes = frozenset({"kb:read"})
+    with pytest.raises(UnexpectedToolError):
+        await server.call_tool("publish_experience", args, context=context)
+    assert calls == [use_id]
+    assert http_scope("POST", f"/api/libraries/{library_id}/experience") == "kb:experience"
+    assert http_scope("GET", f"/api/libraries/{library_id}/experience") == "kb:read"

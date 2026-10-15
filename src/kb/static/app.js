@@ -338,6 +338,7 @@ async function loadUses() {
     list.append(card);
   }
   await window.WisdomCompletion.enhanceUses(list, featureHost);
+  await window.WisdomSharedExperience.mount(list, featureHost, records);
 }
 byId('create-library').addEventListener('submit', safe(async event => {
   const data = Object.fromEntries(new FormData(event.target)); data.organisation_id = identity.account_id;

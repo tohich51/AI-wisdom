@@ -178,6 +178,15 @@ class ExperienceSummaryArgs(ToolArgs):
     pass
 
 
+class SharedExperienceArgs(ToolArgs):
+    library_id: UUID
+
+
+class PublishExperienceArgs(SharedExperienceArgs):
+    use_id: UUID
+    outcome_id: UUID
+
+
 class ReviewItemsArgs(ToolArgs):
     library_id: UUID
     item_kind: Literal["knowledge", "rule"]
@@ -206,6 +215,8 @@ MCP_TOOLS: dict[str, tuple[type[BaseModel], type[BaseModel] | None]] = {
     "export_skill": (ExportSkillArgs, ExportSkillResult),
     "list_jobs": (ListJobsArgs, None),
     "list_retrievals": (ExperienceSummaryArgs, None),
+    "publish_experience": (PublishExperienceArgs, None),
+    "list_shared_experience": (SharedExperienceArgs, None),
     "read_library_policy": (ReadLibraryPolicyArgs, None),
     "get_experience_summary": (ExperienceSummaryArgs, None),
     "review_items": (ReviewItemsArgs, None),
@@ -230,6 +241,8 @@ EXPECTED_TOOLS: frozenset[str] = frozenset(
         "export_skill",
         "list_jobs",
         "list_retrievals",
+        "publish_experience",
+        "list_shared_experience",
         "read_library_policy",
         "get_experience_summary",
         "review_items",

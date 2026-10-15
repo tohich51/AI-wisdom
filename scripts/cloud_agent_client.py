@@ -49,6 +49,8 @@ TOOLS = TOOLS | frozenset(
         "publish_knowledge",
         "list_jobs",
         "list_retrievals",
+        "publish_experience",
+        "list_shared_experience",
         "read_library_policy",
         "get_experience_summary",
         "review_items",

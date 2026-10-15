@@ -55,6 +55,25 @@ def record_retrieval(
             principal.account_id,
             principal.generation_watermark,
         )
+    elif item_kind == "experience":
+        if version_no is not None:
+            raise ValueError("experience_version_must_be_none")
+        sql = """
+            INSERT INTO kb.retrieval_event(
+              principal_id,account_id,library_id,item_kind,item_id,version_no
+            )
+            SELECT %s,l.organisation_id,l.id,'experience',e.id,NULL
+            FROM kb.shared_experience AS e
+            JOIN kb.library AS l ON l.id=e.library_id
+            WHERE e.id=%s AND l.organisation_id=%s AND %s>=1
+            RETURNING id
+        """
+        params = (
+            principal.principal_id,
+            item_id,
+            principal.account_id,
+            principal.generation_watermark,
+        )
     elif item_kind == "rule":
         if version_no is not None and (
             isinstance(version_no, bool) or not isinstance(version_no, int) or version_no <= 0

@@ -28,16 +28,37 @@ def provenance_graph(conn, principal, library_id, source_ids=None, limit=200):
                         ON s.id=p.source_id WHERE p.rule_id=r.id))),
           uses AS (SELECT u.* FROM kb.use_record u JOIN rules r ON r.id=u.rule_id
                     AND r.version_no=u.rule_version_no WHERE u.principal_id=%s),
-          nodes AS (
-           SELECT 'source' AS kind,id,title AS label,publication::text,0 AS version_no,1 AS priority
-            FROM sources
-           UNION ALL SELECT 'fragment',f.id,left(f.text,120),'original',0,7 FROM kb.fragment f
-             JOIN sources s ON s.id=f.source_id
-           UNION ALL SELECT 'knowledge',k.id,left(k.statement,160),k.publication::text,0,2
-             FROM kb.knowledge k
+          knowledge AS (
+            SELECT k.* FROM kb.knowledge k
              WHERE k.library_id=%s AND k.publication<>'withdrawn' AND (%s::uuid[] IS NULL OR
                EXISTS(SELECT 1 FROM kb.knowledge_provenance p
                  JOIN sources s ON s.id=p.source_id WHERE p.knowledge_id=k.id))
+          ),
+          proof_fragments AS (
+            SELECT DISTINCT p.fragment_id
+              FROM kb.knowledge_provenance p
+              JOIN knowledge k ON k.id=p.knowledge_id
+              JOIN sources s ON s.id=p.source_id
+              JOIN kb.fragment f ON f.id=p.fragment_id AND f.source_id=s.id
+             WHERE p.fragment_id IS NOT NULL
+            UNION
+            SELECT DISTINCT p.fragment_id
+              FROM kb.rule_provenance p
+              JOIN rules r ON r.id=p.rule_id
+              JOIN sources s ON s.id=p.source_id
+              JOIN kb.fragment f ON f.id=p.fragment_id AND f.source_id=s.id
+             WHERE p.fragment_id IS NOT NULL
+          ),
+          nodes AS (
+           SELECT 'source' AS kind,id,title AS label,publication::text,0 AS version_no,1 AS priority
+            FROM sources
+           UNION ALL SELECT 'fragment',f.id,left(f.text,120),'original',0,
+                    CASE WHEN pf.fragment_id IS NULL THEN 7 ELSE 6 END
+             FROM kb.fragment f
+             JOIN sources s ON s.id=f.source_id
+             LEFT JOIN proof_fragments pf ON pf.fragment_id=f.id
+           UNION ALL SELECT 'knowledge',k.id,left(k.statement,160),k.publication::text,0,2
+             FROM knowledge k
            UNION ALL SELECT 'rule',r.id,r.title,r.publication::text,r.version_no,3 FROM rules r
            UNION ALL SELECT 'use',u.id,u.state::text,'private',u.rule_version_no,4 FROM uses u
            UNION ALL SELECT 'outcome',o.id,COALESCE(left(o.observed_result,160),

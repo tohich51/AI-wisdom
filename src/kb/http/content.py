@@ -6,7 +6,7 @@ from uuid import UUID
 from fastapi import APIRouter, Query, Request
 from pydantic import BaseModel, ConfigDict, Field
 
-from kb.catalog import content, policies, workspace, writes
+from kb.catalog import content, policies, shared_experience, workspace, writes
 from kb.http.libraries import Db, Me, mapped_errors
 from kb.ingestion import submit_processing
 
@@ -49,6 +49,11 @@ class MetadataInput(Input):
 
 class ExportInput(Input):
     rule_ids: list[UUID] = Field(min_length=1, max_length=100)
+
+
+class PublishExperienceInput(Input):
+    use_id: UUID
+    outcome_id: UUID
 
 
 @router.get("/me")
@@ -114,6 +119,18 @@ def experience_summary(conn: Db, me: Me):
 def retrievals(conn: Db, me: Me):
     with mapped_errors():
         return workspace.list_retrievals(conn, me)
+
+
+@router.get("/libraries/{library_id}/experience")
+def list_shared_experience(library_id: UUID, conn: Db, me: Me):
+    with mapped_errors():
+        return shared_experience.list_shared(conn, me, library_id)
+
+
+@router.post("/libraries/{library_id}/experience", status_code=201)
+def publish_experience(library_id: UUID, body: PublishExperienceInput, conn: Db, me: Me):
+    with mapped_errors():
+        return shared_experience.publish(conn, me, library_id, body.use_id, body.outcome_id)
 
 
 @router.patch("/knowledge/{knowledge_id}")

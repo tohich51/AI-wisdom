@@ -19,6 +19,19 @@ from kb.model_runner import GenerateResponse
 
 MODEL = "MiniMax-M3.1-Flash-Preview"
 _LEASE_SECONDS = 480
+_CHECKPOINT_VERSION = "kb-extraction-chapter-v1"
+_CHECKPOINT_METADATA_KEYS = (
+    "chapter",
+    "locator_kind",
+    "file_page",
+    "printed_label",
+    "paragraph",
+    "table_index",
+    "cell_row",
+    "cell_column",
+    "spine",
+    "heading",
+)
 
 
 class AttemptInProgress(RuntimeError):
@@ -144,9 +157,28 @@ def submit_processing(conn, principal, source_id, idempotency_key, *, extract=Fa
         return {"job_id": created["id"], "duplicate_of_existing": False}
 
 
+def _known_section(row):
+    """Keep actual section labels local; only chapter is persisted today."""
+    return {
+        key: value
+        for key in ("chapter", "spine", "heading")
+        if isinstance(value := row.get(key), str) and value.strip()
+    }
+
+
 def _chunks(fragments):
     batch, size = [], 0
+    last_section = {}
     for row in fragments:
+        section = _known_section(row)
+        if any(
+            key in last_section and value != last_section[key] for key, value in section.items()
+        ):
+            if batch:
+                yield batch
+            batch, size = [], 0
+            last_section = {}
+        last_section.update(section)
         # Bound escaping overhead as well as text and number of cited fragments.
         for offset in range(0, len(row["text"]), 2000):
             item = {"id": str(row["id"]), "text": row["text"][offset : offset + 2000]}
@@ -158,6 +190,31 @@ def _chunks(fragments):
             size += length
     if batch:
         yield batch
+
+
+def _checkpoint_hash(chunk, fragments_by_id):
+    """Hash model-visible chunk material and local locator metadata deterministically."""
+    metadata = []
+    seen = set()
+    for item in chunk:
+        fragment_id = item["id"]
+        if fragment_id in seen:
+            continue
+        seen.add(fragment_id)
+        row = fragments_by_id[fragment_id]
+        record = {"id": fragment_id}
+        for key in _CHECKPOINT_METADATA_KEYS:
+            value = row.get(key)
+            if value is not None and not (isinstance(value, str) and not value.strip()):
+                record[key] = value
+        metadata.append(record)
+    canonical = json.dumps(
+        {"version": _CHECKPOINT_VERSION, "chunk": chunk, "metadata": metadata},
+        sort_keys=True,
+        ensure_ascii=False,
+        separators=(",", ":"),
+    )
+    return hashlib.sha256(canonical.encode()).hexdigest()
 
 
 def _save_draft(cur, source, draft):
@@ -320,15 +377,18 @@ def run_job(dsn, job_id, principal, blob_root, runner_url=None, worker_token=Non
                         ),
                     )
                 fragments = conn.execute(
-                    "SELECT id,text FROM kb.fragment WHERE source_id=%s ORDER BY ordinal",
+                    """SELECT id,text,chapter,locator_kind,file_page,printed_label,
+                      paragraph,table_index,cell_row,cell_column
+                      FROM kb.fragment WHERE source_id=%s ORDER BY ordinal""",
                     (source["id"],),
                 ).fetchall()
+            fragments_by_id = {str(fragment["id"]): fragment for fragment in fragments}
             chunks = list(_chunks(fragments)) if job["extraction_enabled"] else []
             calls, completed = 0, 0
             call_budget = int(os.environ.get("KB_MAX_MODEL_CALLS_PER_JOB", "30"))
             for number, chunk in enumerate(chunks):
                 payload = json.dumps(chunk, ensure_ascii=False)
-                digest = hashlib.sha256(payload.encode()).hexdigest()
+                digest = _checkpoint_hash(chunk, fragments_by_id)
                 with transaction_identity(conn, principal):
                     _, source = _fence_attempt(conn, job_id, principal, attempt)
                     found = conn.execute(

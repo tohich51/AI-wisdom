@@ -36,6 +36,8 @@ HANDLER_SCOPES = {
     "start_use": "kb:experience",
     "mark_applied": "kb:experience",
     "record_outcome": "kb:experience",
+    "publish_experience": "kb:experience",
+    "list_shared": "kb:read",
     "export_skill": "kb:export",
     "export_research": "kb:export",
 }
@@ -68,6 +70,10 @@ def http_scope(method: str, path: str) -> str:
         return "kb:export"
     if method in {"GET", "HEAD"}:
         return "kb:read"
-    if path == "/api/uses" or path.startswith("/api/uses/"):
+    if (
+        path == "/api/uses"
+        or path.startswith("/api/uses/")
+        or (path.startswith("/api/libraries/") and path.endswith("/experience"))
+    ):
         return "kb:experience"
     return "kb:contribute"

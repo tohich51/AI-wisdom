@@ -104,6 +104,7 @@ def create_app() -> FastAPI:
         "completion.js",
         "rule-evidence.js",
         "project-context.js",
+        "shared-experience.js",
         "style.css",
         "research.js",
         "research-result.js",

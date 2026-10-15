@@ -115,11 +115,13 @@ def experience_summary(conn, principal):
 def list_retrievals(conn, principal):
     with transaction_identity(conn, principal), conn.cursor(row_factory=dict_row) as cur:
         cur.execute(
-            "SELECT e.*,coalesce(s.title,r.title,left(k.statement,250)) AS title "
+            "SELECT e.*,coalesce(s.title,r.title,left(k.statement,250),"
+            "x.snapshot->>'rule_title') AS title "
             "FROM kb.retrieval_event e "
             "LEFT JOIN kb.source s ON e.item_kind='source' AND s.id=e.item_id "
             "LEFT JOIN kb.rule r ON e.item_kind='rule' AND r.id=e.item_id "
             "LEFT JOIN kb.knowledge k ON e.item_kind='knowledge' AND k.id=e.item_id "
+            "LEFT JOIN kb.shared_experience x ON e.item_kind='experience' AND x.id=e.item_id "
             "ORDER BY delivered_at DESC,e.id LIMIT 100"
         )
         return [dict(row) for row in cur.fetchall()]

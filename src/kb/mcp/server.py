@@ -17,7 +17,16 @@ from mcp_types import CallToolResult, TextContent
 from pydantic import AnyHttpUrl, ValidationError
 
 from kb.access.bearer_policy import HANDLER_SCOPES, bearer_principal, require_scope
-from kb.catalog import content, libraries, policies, projects, upload, workspace, writes
+from kb.catalog import (
+    content,
+    libraries,
+    policies,
+    projects,
+    shared_experience,
+    upload,
+    workspace,
+    writes,
+)
 from kb.contracts.enums import LibraryKind
 from kb.contracts.mcp_tools import (
     MCP_TOOLS,
@@ -29,12 +38,14 @@ from kb.contracts.mcp_tools import (
     JobStatusArgs,
     ListJobsArgs,
     ListLibrariesArgs,
+    PublishExperienceArgs,
     PublishKnowledgeArgs,
     ReadLibraryPolicyArgs,
     ReadSourceArgs,
     RecordOutcomeArgs,
     ReviewItemsArgs,
     SearchKnowledgeArgs,
+    SharedExperienceArgs,
     StartUseArgs,
     SubmitSourceArgs,
 )
@@ -126,6 +137,22 @@ def build_mcp(app, hosts):
         """Own bounded delivery journal; delivery is not reading or application."""
         ExperienceSummaryArgs()
         return {"events": call(ctx, workspace.list_retrievals)}
+
+    @server.tool()
+    def publish_experience(library_id: UUID, use_id: UUID, outcome_id: UUID, ctx: Context):
+        """Publish one's exact outcome copy to an authorized project/experience library."""
+        args = PublishExperienceArgs(library_id=library_id, use_id=use_id, outcome_id=outcome_id)
+
+        def publish_experience(conn, principal, *values):
+            return shared_experience.publish(conn, principal, *values)
+
+        return call(ctx, publish_experience, args.library_id, args.use_id, args.outcome_id)
+
+    @server.tool()
+    def list_shared_experience(library_id: UUID, ctx: Context):
+        """Read explicit shared snapshots within both destination and source permissions."""
+        args = SharedExperienceArgs(library_id=library_id)
+        return call(ctx, shared_experience.list_shared, args.library_id)
 
     @server.tool()
     def review_items(
