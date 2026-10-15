@@ -31,7 +31,11 @@
   const cache = new Map();
   const inflight = new Map();
   const sinks = new Set();
-  const stats = {hits: 0, misses: 0, shares: 0, invalidations: 0, requests: 0};
+  // Поколение инвалидации. GET, начатый до инвалидации, не имеет права положить
+  // свой ответ в кэш, и новый читатель не присоединяется к нему: иначе
+  // успешная запись или 403 вернут устаревшее значение ещё на 30 секунд.
+  let generation = 0;
+  const stats = {hits: 0, misses: 0, shares: 0, invalidations: 0, requests: 0, staleDrops: 0};
   const defaultSink = text => {
     const status = document.getElementById('status');
     if (status) status.textContent = text;
@@ -55,9 +59,14 @@
   };
   const invalidationHooks = new Set();
 
+  // Инвалидация двигает поколение и убирает и кэш, и ожидающие чтения. Раньше
+  // ожидающие чтения выживали: их ответы возвращали устаревшее или уже отозванное
+  // значение в кэш, а следующий читатель присоединялся к тому же запросу и
+  // получал его без нового обращения к сети.
   function invalidate(reason) {
-    if (!cache.size && !inflight.size) { stats.invalidations++; return; }
+    generation++;
     cache.clear();
+    inflight.clear();
     stats.invalidations++;
     for (const hook of invalidationHooks) { try { hook(reason); } catch (_) { /* сброс кэша не зависит от экрана */ } }
   }
@@ -74,7 +83,7 @@
     }
   }
 
-  async function fetchJson(path, options = {}) {
+  async function fetchJson(path, options = {}, startGeneration = null) {
     const headers = new Headers(options.headers);
     if (options.body && !(options.body instanceof FormData)) headers.set('Content-Type', 'application/json');
     const method = (options.method || 'GET').toUpperCase();
@@ -85,7 +94,16 @@
     stats.requests++;
     const response = await fetch(path, {...options, method, headers, credentials: 'same-origin'});
     if (!response.ok) {
-      if (response.status === 401 || response.status === 403) { invalidate('denied'); deny(response.status); }
+      if (response.status === 401 || response.status === 403) {
+        // Отказ чтения, устаревшего к моменту ответа, не должен рушить экран,
+        // который его заменил: повторная инвалидация стёрла бы свежий кэш
+        // следующего экрана, а сообщение о доступе показалось бы не там.
+        if (startGeneration === null || startGeneration === generation) {
+          invalidate('denied'); deny(response.status);
+        } else {
+          stats.staleDrops++;
+        }
+      }
       if (response.status === 401) throw Error('Войдите в свой аккаунт через кнопку «Войти».');
       if (response.status === 403) throw Error('Для этого действия недостаточно прав.');
       if (response.status === 429) throw Error('Очередь обработки заполнена. Повторите позже; готовые материалы остаются доступны.');
@@ -112,14 +130,26 @@
     if (key !== null) {
       const hit = cache.get(key);
       if (hit && Date.now() - hit.at < TTL) { stats.hits++; return withSignal(Promise.resolve(hit.value), options.signal); }
+      const started = generation;
       let shared = inflight.get(key);
+      // Присоединяться к чтению, начатому до последней инвалидации, нельзя:
+      // вызывающий получил бы значение, предшествующее записи или отказу.
+      if (shared && shared.generation !== generation) { inflight.delete(key); shared = null; stats.staleDrops++; }
       if (shared) stats.shares++;
       else {
         stats.misses++;
-        shared = fetchJson(path, {headers: options.headers})
-          .then(value => { cache.set(key, {value, at: Date.now(), scope: scopeOf(path)}); return value; })
-          .finally(() => { inflight.delete(key); });
-        inflight.set(key, shared);
+        const request = fetchJson(path, {headers: options.headers}, started)
+          .then(value => {
+            // В кэш попадает только ответ, начатый в текущем поколении.
+            if (started === generation) cache.set(key, {value, at: Date.now(), scope: scopeOf(path)});
+            return value;
+          })
+          // Удаляется только собственный запрос: замена с тем же ключом должна
+          // пережить finally предшественника.
+          .finally(() => { if (inflight.get(key) === request) inflight.delete(key); });
+        request.generation = started;
+        inflight.set(key, request);
+        shared = request;
       }
       return withSignal(shared, options.signal);
     }
@@ -137,6 +167,7 @@
     onMessage(sink) { sinks.add(sink); return () => sinks.delete(sink); },
     onInvalidate(hook) { invalidationHooks.add(hook); return () => invalidationHooks.delete(hook); },
     scopeOf,
+    generation: () => generation,
     cache: {
       size: () => cache.size,
       keys: () => [...cache.keys()],

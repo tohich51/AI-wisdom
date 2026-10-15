@@ -547,5 +547,21 @@ router.register('jobs', {
     await window.WisdomCompletion.mountJobs(byId('jobs-workspace'), featureHost);
   }
 });
-router.onChange((current, previous) => { if (previous && current && previous.name !== current.name) router.focusHeading(); });
+// Ошибка загрузки раздела показывается на самом разделе и предлагает повтор.
+// Раньше router отдавал её только наблюдателям, а единственный наблюдатель
+// аргумент игнорировал: после сбоя оставался пустой или наполовину собранный
+// экран без единого сообщения. Повтор пересобирает текущий маршрут.
+function routeFailure(target, error) {
+  const host = byId(target.name + '-workspace') || byId(target.name + '-tab');
+  if (!host) return;
+  const box = node('div', null, {class: 'route-error', role: 'alert'});
+  box.append(node('h3', 'Не удалось загрузить раздел'));
+  box.append(node('p', error && error.message ? error.message : 'Неизвестная ошибка загрузки.'));
+  box.append(button('Повторить', () => { box.remove(); router.refresh(); }));
+  host.replaceChildren(box);
+}
+router.onChange((current, previous, error) => {
+  if (previous && current && previous.name !== current.name) router.focusHeading();
+  if (current && error) routeFailure(current, error);
+});
 router.start();
