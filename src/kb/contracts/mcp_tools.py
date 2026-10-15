@@ -71,6 +71,10 @@ class GetRuleArgs(ToolArgs):
     version_no: int | None = Field(default=None, ge=1)
 
 
+class PublishKnowledgeArgs(ToolArgs):
+    knowledge_id: UUID
+
+
 class GetRuleResult(BaseModel):
     rule: Rule
 
@@ -155,6 +159,7 @@ MCP_TOOLS: dict[str, tuple[type[BaseModel], type[BaseModel] | None]] = {
     "search_knowledge": (SearchKnowledgeArgs, SearchKnowledgeResult),
     "read_source": (ReadSourceArgs, Source),
     "get_rule": (GetRuleArgs, GetRuleResult),
+    "publish_knowledge": (PublishKnowledgeArgs, None),
     "get_project_context": (GetProjectContextArgs, GetProjectContextResult),
     "start_use": (StartUseArgs, StartUseResult),
     "record_outcome": (RecordOutcomeArgs, None),
@@ -172,6 +177,7 @@ EXPECTED_TOOLS: frozenset[str] = frozenset(
         "search_knowledge",
         "read_source",
         "get_rule",
+        "publish_knowledge",
         "get_project_context",
         "start_use",
         "record_outcome",

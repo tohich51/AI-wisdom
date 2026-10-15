@@ -25,6 +25,7 @@ from kb.contracts.mcp_tools import (
     GetRuleArgs,
     JobStatusArgs,
     ListLibrariesArgs,
+    PublishKnowledgeArgs,
     ReadSourceArgs,
     RecordOutcomeArgs,
     SearchKnowledgeArgs,
@@ -142,6 +143,12 @@ def build_mcp(app, hosts):
     def get_rule(rule_id: UUID, ctx: Context, version_no: int | None = None):
         args = GetRuleArgs(rule_id=rule_id, version_no=version_no)
         return {"rule": call(ctx, content.get_rule, args.rule_id, args.version_no)}
+
+    @server.tool()
+    def publish_knowledge(knowledge_id: UUID, ctx: Context):
+        """Publish an existing knowledge draft only after reviewing its source evidence."""
+        args = PublishKnowledgeArgs(knowledge_id=knowledge_id)
+        return call(ctx, writes.publish, args.knowledge_id, knowledge=True)
 
     @server.tool()
     def get_project_context(
