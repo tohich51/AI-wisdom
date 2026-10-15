@@ -8,6 +8,10 @@ every single call. That is what the shared, bounded pool in
 :mod:`kb.adapters.vector_clients` replaced, and the two changes are the same
 change: the pool is created here, from the same arguments the gateway already
 passes, so no caller outside this lease had to be edited to get it.
+
+Calls are made through the leased handle rather than on a raw client, so the
+request's own deadline is what bounds the network wait even when the pooled
+client it borrowed was built under a much larger budget by an earlier caller.
 """
 
 import math
@@ -17,9 +21,10 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
-from openviking_sdk import SyncHTTPClient
+from openviking_sdk import AsyncHTTPClient
 
 from kb.adapters.vector_clients import (
+    CANCEL_GRACE_SECONDS,
     CLIENT_TTL_SECONDS,
     MAX_CLIENTS,
     MAX_OUTSTANDING,
@@ -52,13 +57,14 @@ class OpenVikingReader:
         self,
         url: str,
         read_root: Path,
-        client_factory: Callable[..., SyncHTTPClient] = SyncHTTPClient,
+        client_factory: Callable[..., AsyncHTTPClient] = AsyncHTTPClient,
         *,
         clients: VectorClientCache | None = None,
         network_timeout: float = NETWORK_TIMEOUT,
         max_clients: int = MAX_CLIENTS,
         ttl_seconds: float = CLIENT_TTL_SECONDS,
         max_outstanding: int = MAX_OUTSTANDING,
+        cancel_grace: float = CANCEL_GRACE_SECONDS,
     ) -> None:
         self._url = url
         self._read_root = read_root
@@ -67,6 +73,7 @@ class OpenVikingReader:
         self._max_clients = max_clients
         self._ttl_seconds = ttl_seconds
         self._max_outstanding = max_outstanding
+        self._cancel_grace = cancel_grace
         self._clients = clients
         self._pool_lock = threading.Lock()
 
@@ -91,6 +98,7 @@ class OpenVikingReader:
                         ttl_seconds=self._ttl_seconds,
                         max_outstanding=self._max_outstanding,
                         network_timeout=self._network_timeout,
+                        cancel_grace=self._cancel_grace,
                     )
         return self._clients
 
@@ -119,9 +127,11 @@ class OpenVikingReader:
             # lease() reads the credential first, so an identity that has no
             # key fails here without a client ever being built. It also bounds
             # how many calls are outstanding and closes the client when the
-            # key changes, which is what makes rotation safe.
-            with self.pool.lease(identity, deadline) as (client, _revision):
-                payload = client.find(
+            # key changes, which is what makes rotation safe. The handle it
+            # yields is the only way to reach the client, and find() on it is
+            # bounded by the request's own remaining budget.
+            with self.pool.lease(identity, deadline) as leased:
+                payload = leased.find(
                     search_text,
                     target_uri=resource_root,
                     limit=limit,
@@ -163,6 +173,12 @@ class OpenVikingReader:
             raise IndexUnavailable("index_unavailable") from None
 
     def close(self) -> None:
-        """Close the clients this reader owns. Safe to call more than once."""
+        """Close the clients this reader owns. Safe to call more than once.
+
+        Deterministic: when this returns, every pooled client is closed and
+        the event loop that drove them has been stopped and joined. This is
+        what the gateway's lifespan shutdown calls, so a search in progress
+        at the end of the process cannot leave a request on the wire.
+        """
         if self._clients is not None:
             self._clients.shutdown()

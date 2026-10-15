@@ -136,13 +136,13 @@ class SemanticSearch:
             if plan.identity is None or plan.root is None:
                 continue
             if deadline is not None and deadline.expired:
-                # The budget is gone. Nothing further is started, and what is
-                # already in flight is not cancelled and is not claimed to
-                # be: the provider is still doing whatever it was doing, and
-                # this search simply stops using the answer. The libraries it
-                # never reached are reported as pending rather than counted as
-                # searched, because "we did not look" and "nothing there" are
-                # different answers.
+                # The budget is gone, so nothing further is started. A call
+                # that had already started is not left running: the reader
+                # bounds it by this same budget and cancels it at the wire,
+                # so it is this search's own work that stops here rather than
+                # the provider's. The libraries it never reached are reported
+                # as pending rather than counted as searched, because "we did
+                # not look" and "nothing there" are different answers.
                 unavailable.update(p.library_id for p in planned[index:])
                 break
             try:
@@ -379,3 +379,14 @@ class SemanticSearch:
             "pending_library_count": len(pending),
             "fallback_reason": "index_pending_or_unavailable" if pending else None,
         }
+
+    def close(self) -> None:
+        """Close the index clients this service owns.
+
+        The gateway lifespan calls this on shutdown, so the pooled clients and
+        the event loop that drove them are closed deterministically rather than
+        at interpreter exit. Idempotent, and it never lands on a call that is
+        still in flight: the pool retires anything a live search still holds
+        and closes it when that search releases it.
+        """
+        self.reader.close()

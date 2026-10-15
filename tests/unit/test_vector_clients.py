@@ -5,21 +5,34 @@ lifecycle and thread behaviour, and none of it needs a provider or a database
 to check -- claiming otherwise would be the kind of test that passes because
 it never exercised the thing it names.
 
-Two properties are asserted over and over because they are the ones that
-would be invisible in a run: a client is never closed while a call is still
-in flight, and the credential never appears in a key, a repr or a bound.
+Three properties are asserted over and over because they are the ones that
+would be invisible in a run: a request cannot outlive its own budget on a
+client some other request built, a client is never closed while a call is
+still in flight, and the credential never appears in a key, a repr or a bound.
+
+The deadline tests do not stub the transport. A double cannot show whether a
+cancel reached httpx, and the whole point of the repair is that it does, so
+the ones that matter run against a real socket on the loopback interface that
+accepts a request and then does whatever the test told it to do.
 """
 
+import asyncio
+import base64
+import socket
 import threading
 import time
+from contextlib import contextmanager
 from uuid import uuid4
 
 import pytest
+from openviking_sdk import AsyncHTTPClient
 
 from kb.adapters.secrets import FileSecretSink
 from kb.adapters.vector_clients import (
     Deadline,
+    IndexCallStillOpen,
     VectorClientCache,
+    VectorClientPoolClosed,
     credential_revision,
 )
 
@@ -27,9 +40,17 @@ URL = "https://vector.invalid"
 OTHER_URL = "https://other.invalid"
 KEY = "synthetic-read-key"
 ROTATED = "synthetic-read-key-rotated"
+FIND_PATH = b"POST /api/v1/search/find HTTP/1.1"
 
 
 class FakeClient:
+    """A stand-in with the *shape* of the SDK client: coroutine methods.
+
+    Async is the point. The real ``AsyncHTTPClient`` builds, calls and closes
+    on an event loop, and a synchronous double would let a bug that only
+    shows up against the real coroutine methods pass here.
+    """
+
     def __init__(self, **kwargs):
         self.kwargs = kwargs
         self.initialized = False
@@ -37,16 +58,90 @@ class FakeClient:
         self.closes = 0
         self.find_calls = []
 
-    def initialize(self):
+    async def initialize(self):
         self.initialized = True
 
-    def find(self, query, **kwargs):
+    async def find(self, query, **kwargs):
         self.find_calls.append((query, kwargs))
         return {"resources": []}
 
-    def close(self):
+    async def close(self):
         self.closed = True
         self.closes += 1
+
+
+class IndexServer:
+    """A real HTTP server on loopback that follows a per-request script.
+
+    ``answer`` sends a valid ``find`` response. ``silent`` reads the request
+    and never replies, which is what a provider that has stopped responding
+    looks like from this side. Every request on a connection is counted, so a
+    test can tell which one it is looking at, and a connection that is torn
+    down sets ``broken`` -- which is how a client-side cancel is observed from
+    the peer's side rather than taken on trust.
+    """
+
+    def __init__(self, script=("answer",)):
+        self._script = list(script)
+        self._lock = threading.Lock()
+        self.requests = 0
+        self.broken = threading.Event()
+        self._sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        self._sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        self._sock.bind(("127.0.0.1", 0))
+        self._sock.listen(16)
+        self._thread = threading.Thread(target=self._accept, daemon=True)
+        self._thread.start()
+
+    @property
+    def url(self) -> str:
+        host, port = self._sock.getsockname()[:2]
+        return f"http://{host}:{port}"
+
+    def _accept(self):
+        while True:
+            try:
+                conn, _ = self._sock.accept()
+            except OSError:
+                return
+            threading.Thread(target=self._serve, args=(conn,), daemon=True).start()
+
+    def _next_mode(self) -> str:
+        with self._lock:
+            self.requests += 1
+            return self._script.pop(0) if self._script else "answer"
+
+    def _serve(self, conn):
+        body = b'{"result":{"resources":[]}}'
+        conn.settimeout(30.0)
+        buffer = b""
+        try:
+            while True:
+                chunk = conn.recv(65536)
+                if not chunk:
+                    # The peer hung up. A connection that only ever carried a
+                    # silent request was cancelled by its client.
+                    self.broken.set()
+                    return
+                buffer += chunk
+                while FIND_PATH in buffer:
+                    buffer = buffer.split(FIND_PATH, 1)[1]
+                    if self._next_mode() == "answer":
+                        conn.sendall(
+                            b"HTTP/1.1 200 OK\r\n"
+                            b"content-type: application/json\r\n"
+                            b"content-length: " + str(len(body)).encode() + b"\r\n\r\n" + body
+                        )
+        except OSError:
+            # A reset is the other face of a close: either way this connection
+            # is gone, which is the fact the cancel test is looking for.
+            self.broken.set()
+
+    def close(self):
+        try:
+            self._sock.close()
+        except OSError:  # pragma: no cover - already closed
+            pass
 
 
 @pytest.fixture
@@ -99,6 +194,12 @@ def test_one_client_is_reused_across_calls_and_closed_on_shutdown(store):
     # uses for an owned resource; both are idempotent.
     cache.close()
     assert built[0].closes == 1
+    # Deterministic, not eventual: the loop that drove every client is gone
+    # and no new one is started behind the caller's back.
+    assert not cache.io_loop_running
+    with pytest.raises(VectorClientPoolClosed):
+        with cache.lease(identity):
+            pass
 
 
 def test_key_is_endpoint_identity_profile_and_credential_revision(store):
@@ -212,11 +313,14 @@ def test_a_client_in_use_is_never_closed_under_the_caller(store):
     built = []
     cache = pool_for(read_root, built)
 
-    with cache.lease(identity) as (client, revision):
-        assert revision == credential_revision(KEY)
+    with cache.lease(identity) as leased:
+        assert leased.revision == credential_revision(KEY)
         cache.shutdown()  # the process is going away mid-call
-        assert not client.closed, "shutdown must not close under a live call"
-    assert client.closed, "the last holder releases it, and then it closes"
+        assert not built[0].closed, "shutdown must not close under a live call"
+    assert built[0].closed, "the last holder releases it, and then it closes"
+    # The loop is only stopped once the last holder is gone, so the close above
+    # had a loop to run on.
+    assert not cache.io_loop_running
 
 
 def test_eviction_skips_a_busy_client_and_does_not_grow_past_the_bound(store):
@@ -225,25 +329,25 @@ def test_eviction_skips_a_busy_client_and_does_not_grow_past_the_bound(store):
     built = []
     cache = pool_for(read_root, built, max_clients=1)
 
-    with cache.lease(first) as (busy, _):
-        with cache.lease(second) as (spare, _):
+    with cache.lease(first):
+        with cache.lease(second):
             # Both calls are live and the bound is one. The pool refuses to
             # close either of them, so it is briefly over the bound rather
             # than landing a close on a call that is still running.
             assert len(cache) == 2
-            assert not busy.closed
-            assert not spare.closed
+            assert not built[0].closed
+            assert not built[1].closed
         # The inner call released first and became the idle one, so it is the
         # entry the bound is restored with.
-        assert spare.closed
-        assert not busy.closed
+        assert built[1].closed
+        assert not built[0].closed
 
     assert len(cache) <= 1
     # The survivor is idle and still pooled: a pool of one that closed on every
     # release would be back to building a client per call.
-    assert not busy.closed
+    assert not built[0].closed
     cache.shutdown()
-    assert busy.closed
+    assert built[0].closed
 
 
 def test_expired_deadline_starts_nothing_and_says_so(store):
@@ -299,20 +403,35 @@ def test_the_budget_covers_the_queue_wait_and_the_network_ceiling(store):
     assert not holder.is_alive()
 
 
-def test_a_client_is_built_with_a_timeout_no_larger_than_the_budget(store):
+def test_a_pooled_client_timeout_is_a_fixed_ceiling_and_never_a_requests_budget(store):
+    """The defect this pool exists to answer, stated as an invariant.
+
+    A client is shared. If its socket timeout were derived from the budget of
+    whichever request happened to build it, then the next request would
+    inherit that request's budget -- a client cached under a large one would
+    make a short-budget request wait for the large one. So the timeout is a
+    property of the client and of nothing else.
+    """
     read_root, identities = store
     identity = identities[0]
     built = []
-    cache = pool_for(read_root, built, network_timeout=45.0)
     now = [100.0]
-    budget = Deadline(10.0, clock=lambda: now[0])
-    now[0] += 2.0  # two seconds already spent on the plan
+    cache = pool_for(read_root, built, network_timeout=45.0, clock=lambda: now[0])
 
-    with cache.lease(identity, budget):
+    # A caller with most of a minute left.
+    with cache.lease(identity, Deadline(50.0, clock=lambda: now[0])):
+        pass
+    # A caller whose budget is nearly gone, on a *different* identity so the
+    # second build is a genuinely new client.
+    other = identities[1]
+    nearly_gone = Deadline(1.0, clock=lambda: now[0])
+    now[0] += 0.99
+    with cache.lease(other, nearly_gone):
         pass
 
-    assert built[0].kwargs["timeout"] == pytest.approx(8.0)
-    assert built[0].kwargs["timeout"] <= 45.0
+    assert built[0].kwargs["timeout"] == 45.0
+    assert built[1].kwargs["timeout"] == 45.0, "a budget must not shape a shared client"
+    assert cache.read_key(identity)[0] == KEY
 
 
 def test_concurrent_callers_share_one_client_and_close_it_once(store):
@@ -326,8 +445,8 @@ def test_concurrent_callers_share_one_client_and_close_it_once(store):
     def worker():
         try:
             barrier.wait(5)
-            with cache.lease(identity) as (client, _):
-                client.find("q", target_uri="x", limit=1)
+            with cache.lease(identity) as leased:
+                leased.find("q", target_uri="x", limit=1)
         except Exception as exc:  # pragma: no cover - failure detail
             errors.append(exc)
 
@@ -349,7 +468,7 @@ def test_a_client_that_fails_to_close_does_not_fail_the_search(store):
     identity = identities[0]
 
     class Rude(FakeClient):
-        def close(self):
+        async def close(self):
             raise RuntimeError("close failed")
 
     def factory(**kwargs):
@@ -361,9 +480,240 @@ def test_a_client_that_fails_to_close_does_not_fail_the_search(store):
     cache.shutdown()  # must not raise
 
 
+def test_a_budget_that_is_gone_before_the_call_sends_nothing(store):
+    """No budget, no request -- and said plainly, not as a stuck teardown.
+
+    The budget can expire in the gap between taking the lease and reaching the
+    wire. Creating a task and cancelling it there would leave a coroutine that
+    never ran a line of its body, so the "did it stop?" question has no honest
+    answer to give; sending nothing does.
+    """
+    read_root, identities = store
+    identity = identities[0]
+    built = []
+    cache = pool_for(read_root, built)
+    now = [0.0]
+    budget = Deadline(5.0, clock=lambda: now[0])
+
+    with cache.lease(identity, budget) as leased:
+        now[0] = 10.0  # the earlier phases took the whole budget
+        assert budget.expired
+        with pytest.raises(TimeoutError) as raised:
+            leased.find("q", target_uri="x", limit=1)
+
+    assert str(raised.value) == "index_deadline_exceeded"
+    assert built[0].find_calls == [], "a call with no budget must not reach the client"
+    assert cache.io_loop_running
+    cache.shutdown()
+    assert not cache.io_loop_running
+
+
+def test_a_call_that_refuses_to_unwind_is_reported_rather_than_called_a_timeout(store):
+    """A cancellation we asked for and did not get is its own fact.
+
+    Dressing it up as a timeout would tell the caller the wire was clear when
+    this module cannot show that it is.
+    """
+    read_root, identities = store
+    identity = identities[0]
+
+    class Deaf(FakeClient):
+        async def find(self, query, **kwargs):
+            try:
+                await asyncio.sleep(30)
+            except asyncio.CancelledError:
+                # Refuses the cancellation for longer than the grace.
+                await asyncio.sleep(0.2)
+                raise
+            return {"resources": []}
+
+    def factory(**kwargs):
+        return Deaf(**kwargs)
+
+    cache = VectorClientCache(URL, read_root, factory, cancel_grace=0.05)
+    with cache.lease(identity, Deadline(0.3)) as leased:
+        with pytest.raises(IndexCallStillOpen):
+            leased.find("q", target_uri="x", limit=1)
+    # Not a TimeoutError: the two are different facts and the caller closes over
+    # the socket differently for each.
+    now = [0.0]
+    gone = Deadline(0.001, clock=lambda: now[0])
+    now[0] = 5.0
+    with pytest.raises(TimeoutError):
+        with cache.lease(identity, gone):
+            pass
+    time.sleep(0.3)  # let the deaf coroutine finish so the loop stops cleanly
+    cache.shutdown()
+
+
 def test_deadline_rejects_a_nonsense_budget():
     for bad in (0, -1, -0.5, True, "5", None):
         with pytest.raises(ValueError):
             Deadline(bad)
     with pytest.raises(ValueError):
         credential_revision("")
+
+
+# -- the two repairs, against the real SDK client and a real socket --------
+
+
+def test_a_cached_client_with_a_larger_timeout_does_not_outlive_a_shorter_budget(store):
+    """The frozen criterion, end to end and with nothing faked.
+
+    One client is cached by a caller with a generous budget. A second caller
+    arrives with most of its budget already spent on earlier phases, and the
+    provider stops responding. The second call must return at *its* deadline
+    rather than at the 45 second socket timeout the cached client was built
+    with, the request must actually be torn down rather than abandoned, and
+    the lease must not be left dangling.
+    """
+    read_root, identities = store
+    identity = identities[0]
+    server = IndexServer(script=("answer", "silent", "answer"))
+    built: list[dict] = []
+
+    def factory(**client_kwargs):
+        built.append(client_kwargs)
+        return AsyncHTTPClient(**client_kwargs)
+
+    # One outstanding call at a time, so the third call below is also proof
+    # that the second one's slot was handed back rather than leaked.
+    cache = VectorClientCache(
+        server.url, read_root, factory, network_timeout=45.0, max_outstanding=1
+    )
+    try:
+        with cache.lease(identity, Deadline(20.0)) as leased:
+            assert leased.find("first", target_uri="x", limit=1) == {"resources": []}
+        assert built[0]["timeout"] == 45.0, "the pooled client is the fixed ceiling"
+
+        # A second caller whose budget is nearly spent before the network call
+        # is even attempted: the queue and the earlier phases ate it.
+        budget = Deadline(2.0)
+        time.sleep(1.5)
+        remaining = budget.remaining
+        assert 0.0 < remaining < 1.0
+
+        started = time.monotonic()
+        with cache.lease(identity, budget) as leased:
+            with pytest.raises(TimeoutError) as raised:
+                leased.find("second", target_uri="x", limit=1)
+        elapsed = time.monotonic() - started
+        assert str(raised.value) == "index_deadline_exceeded"
+        # The whole point: bounded by the budget, not by the 45s socket
+        # timeout the cached client carries, and not by a fixed sleep either.
+        assert elapsed < 5.0, f"outlived the budget by {elapsed:.1f}s"
+        assert elapsed >= remaining - 0.05
+
+        # And the request was actually stopped: the peer saw the connection go
+        # away, which a caller that merely stopped waiting would not cause.
+        assert server.broken.wait(5.0), "the in-flight request was left on the wire"
+        assert server.requests == 2
+
+        # The client is still pooled and still usable, which also proves the
+        # outstanding slot came back: a leaked one would block this forever.
+        with cache.lease(identity, Deadline(20.0)) as leased:
+            assert leased.find("third", target_uri="x", limit=1) == {"resources": []}
+        assert len(cache) == 1
+        assert len(built) == 1, "the cancelled call must not have cost a rebuild"
+        assert built[0]["timeout"] == 45.0
+    finally:
+        cache.shutdown()
+        server.close()
+    assert not cache.io_loop_running
+
+
+def test_the_gateway_lifespan_closes_cached_clients_and_stops_the_io_loop(
+    store, monkeypatch, tmp_path
+):
+    """Shutdown is a fact the app reaches, not a hook that may or may not run.
+
+    The whole real ``create_app`` runs -- the real lifespan, the real
+    ``SemanticSearch``, the real pool, the real event loop. Only the database
+    and the provider client are replaced, because neither can be reached from
+    a test: the pool double satisfies the profile-dimension probe, and the
+    recording client records its own close.
+    """
+    from fastapi.testclient import TestClient
+
+    import kb.gateway
+    from kb.adapters.vector_reader import OpenVikingReader
+    from kb.retrieval.embedding_profile import SELECTED_PROFILE
+
+    read_root, identities = store
+    identity = identities[0]
+    built = []
+
+    class RecordingClient(FakeClient):
+        async def find(self, query, **kwargs):
+            self.find_calls.append((query, kwargs))
+            return {"resources": []}
+
+    class Pool:
+        def __init__(self, *args, **kwargs):
+            self.opened = False
+
+        def open(self, wait=False):
+            self.opened = True
+
+        def close(self):
+            self.opened = False
+
+    class Conn:
+        def execute(self, *args, **kwargs):
+            return self
+
+        def fetchone(self):
+            return (SELECTED_PROFILE.dimension,)
+
+    @contextmanager
+    def connections():
+        yield Conn()
+
+    class Reader(OpenVikingReader):
+        def __init__(self, url, keys_root, *args, **kwargs):
+            def factory(**client_kwargs):
+                client = RecordingClient(**client_kwargs)
+                built.append(client)
+                return client
+
+            super().__init__(url, keys_root, factory)
+
+    for key, value in {
+        "KB_ALLOWED_HOSTS": "gateway.example",
+        "KB_DATABASE_URL": "postgresql://nobody@127.0.0.1:1/none",
+        "KB_MCP_AUDIENCE": "mcp",
+        "KB_MCP_CLIENT_ID": "mcp-client",
+        "KB_MCP_RESOURCE_URL": "https://gateway.example/mcp",
+        "KB_OIDC_ISSUER": "https://id.example/realms/kb",
+        "KB_OIDC_AUDIENCE": "kb-web",
+        "KB_OIDC_CLIENT_ID": "kb-web-client",
+        "KB_OIDC_CLIENT_SECRET": "placeholder-not-a-secret",
+        "KB_IDENTITY_KEY": base64.urlsafe_b64encode(b"\x00" * 32).decode(),
+        "KB_OIDC_REDIRECT_URI": "https://gateway.example/auth/callback",
+        "KB_OIDC_JWKS_URL": "https://id.example/jwks",
+        "KB_BLOB_ROOT": str(tmp_path),
+        "KB_SEMANTIC_SEARCH_ENABLED": "1",
+        "KB_OPENVIKING_URL": "https://vector.invalid",
+        "KB_READ_KEYS_ROOT": str(read_root),
+    }.items():
+        monkeypatch.setenv(key, value)
+    monkeypatch.setattr(kb.gateway, "ConnectionPool", Pool)
+    monkeypatch.setattr(kb.gateway, "build_connection_factory", lambda pool: connections)
+    monkeypatch.setattr(kb.gateway, "OpenVikingReader", Reader)
+
+    with TestClient(kb.gateway.create_app(), base_url="http://gateway.example") as client:
+        service = client.app.state.semantic_search
+        assert service is not None
+        # A real search: the client is built on the real loop and pooled.
+        pool = service.reader.pool
+        with pool.lease(identity) as leased:
+            assert leased.find("q", target_uri="x", limit=1) == {"resources": []}
+        assert len(built) == 1
+        assert pool.io_loop_running
+        assert not built[0].closed
+
+    # Leaving the lifespan is the deterministic shutdown.
+    assert built[0].closed, "lifespan shutdown must close the cached clients"
+    assert pool.is_shutdown
+    assert not pool.io_loop_running, "the I/O loop thread must be joined, not leaked"
+    assert built[0].closes == 1
