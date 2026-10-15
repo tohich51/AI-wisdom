@@ -12,6 +12,14 @@ The contract, in the frozen words: a callable context manager returning
 ``pool.connection()``; the lease is owned by the orchestration that called it;
 an operation handed a ``conn`` never closes it; identity is established
 through the existing ``transaction_identity`` for each SQL phase.
+
+The same reasoning decides how often a request resolves a session: once. The
+session is loaded, the CSRF answer is taken from that load, and the identity is
+built from that session -- one row, one read, one answer per request. What is
+remembered afterwards lives on ``request.state`` and dies with the request.
+There is no cache of sessions or of permissions that outlives it, because a
+cached permission is a permission that survives the logout meant to take it
+away.
 """
 
 from __future__ import annotations
@@ -28,8 +36,8 @@ from fastapi import HTTPException, Request
 from kb.access.bearer_policy import bearer_principal, require_scope, scope_for_request
 from kb.access.identity import IdentityRejected, VerifiedIdentity
 from kb.access.policy import Principal, transaction_identity
-from kb.access.session import SessionIdentityIncomplete, SessionMissing
-from kb.http.auth_routes import require_principal, session_cookie_name
+from kb.access.session import CSRF_HEADER, SessionIdentityIncomplete
+from kb.http.auth_routes import require_session
 
 #: A zero-argument callable returning a context manager over one connection.
 #: Calling it checks a connection out; entering the result is what acquires it.
@@ -150,12 +158,24 @@ def create_resolver(
     settings: Any,
     bearer_verifier: Any,
 ) -> tuple[Any, Any]:
-    """Create the request resolver and standalone bearer-token resolver."""
+    """Create the request resolver and standalone bearer-token resolver.
+
+    This is the single auth owner. It is the one object that holds both the
+    connection factory and the session store, so it is also where the store is
+    told to lease from that factory -- once, here, instead of in every request.
+    The binding is duck-typed on purpose: a resolver built with something that
+    is not a session store, which the bearer path never needs, must still
+    construct.
+    """
 
     def clock() -> datetime:
         return datetime.now(UTC)
 
-    cookie_dependency = require_principal(store, settings, clock)
+    cookie_dependency = require_session(store, settings, clock)
+
+    lease_from = getattr(store, "use_shared_connections", None)
+    if callable(lease_from):
+        lease_from(connections)
 
     def admit(identity: VerifiedIdentity, principal: Principal) -> None:
         try:
@@ -235,27 +255,15 @@ def create_resolver(
             state._kb_identity_resolved = True
             return principal
 
+        # One resolve. The CSRF answer and the identity below both come out of
+        # the same load, so the row is written once instead of twice, the
+        # connection is leased once instead of twice, and no second snapshot
+        # of the session is admitted between the two answers.
         try:
-            cookie_dependency(
+            session = cookie_dependency(
                 request,
-                x_kb_csrf=request.headers.get("x-kb-csrf"),
+                x_kb_csrf=request.headers.get(CSRF_HEADER),
             )
-        except (SessionMissing, SessionIdentityIncomplete):
-            _raise_unauthorized()
-        except HTTPException:
-            raise
-        except Exception:
-            _raise_service_unavailable()
-
-        cookie_name = session_cookie_name(settings)
-        cookie = request.cookies.get(cookie_name)
-        if not isinstance(cookie, str) or not cookie:
-            _raise_unauthorized()
-
-        try:
-            session = store.load(cookie, now=clock())
-        except (SessionMissing, SessionIdentityIncomplete):
-            _raise_unauthorized()
         except HTTPException:
             raise
         except Exception:
@@ -272,7 +280,7 @@ def create_resolver(
                 issued_at=session.created_at,
                 expires_at=session.absolute_expires_at,
             )
-        except (SessionMissing, SessionIdentityIncomplete):
+        except SessionIdentityIncomplete:
             _raise_unauthorized()
         except (AttributeError, TypeError, ValueError):
             _raise_unauthorized()
