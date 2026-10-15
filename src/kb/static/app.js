@@ -83,7 +83,7 @@ async function viewSource(id) {
   const initial = await api('/api/sources/' + id + '?from_fragment=0&limit=200');
   d.append(node('h2', initial.source.title));
   d.append(node('p', 'Автор: ' + (initial.source.author ?? 'не указан') + ' · Издание: ' + (initial.source.edition ?? 'не указано')));
-  d.append(node('a', 'Скачать оригинал', {href: '/api/sources/' + id + '/original'}));
+  d.append(node('a', 'Скачать оригинал', {href: '/api/sources/' + id + '/original', download: initial.source.title}));
   const content = node('div'), pager = node('p');
   let currentFrom = 0, currentLastOrdinal = initial.fragments.at(-1)?.ordinal, previousFrom = [], pending = false, hasNext = initial.fragments.length === 200;
   const previous = button('Предыдущая часть', async () => {
