@@ -26,6 +26,10 @@ async function api(path, options = {}) {
   const response = await fetch(path, {...options, headers, credentials: 'same-origin'});
   if (!response.ok) {
     if ([401,403].includes(response.status)) {message(response.status===401?'Войдите в свой аккаунт.':'Доступ к материалу отсутствует или отозван.');window.WisdomResearch?.invalidate();window.WisdomMap?.invalidate();document.querySelectorAll("dialog[data-wisdom-private]").forEach(d=>d.close());}
+    if (response.status === 401) {
+      const login = document.querySelector('.login'); if (login) login.hidden = false;
+      const logout = byId('logout'); if (logout) logout.hidden = true;
+    }
     if (response.status === 401) throw Error('Войдите в свой аккаунт через кнопку «Войти».');
     if (response.status === 403) throw Error('Для этого действия недостаточно прав.');
     const data = await response.json().catch(() => ({}));
@@ -282,7 +286,9 @@ async function switchTab(name) {
 }
 for (const tab of document.querySelectorAll('[data-tab]')) tab.addEventListener('click',safe(()=>switchTab(tab.dataset.tab)));
 safe(async () => {
-  identity = await api('/api/me'); document.querySelector('.login').hidden = true;
+  identity = await api('/api/me');
+  const login = document.querySelector('.login'); if (login) login.hidden = true;
+  const logout = byId('logout'); if (logout) logout.hidden = false;
   const readiness = await api('/readyz');
   message(readiness.semantic_search_enabled ? 'Поиск по смыслу доступен для опубликованных знаний. Извлечение создаёт черновики для проверки.' : 'Поиск по словам · извлечение создаёт черновики для проверки.');
   await loadLibraries();
