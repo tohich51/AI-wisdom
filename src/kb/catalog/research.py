@@ -56,7 +56,11 @@ def list_research_sources(conn: Any, principal: Principal, library_id: UUID) -> 
         return {
             "sources": rows[:100],
             "truncated": len(rows) > 100,
-            "can_generate": access["admin"] is True and access["rank"] >= 20,
+            "can_generate": access["admin"] is True
+            and access["rank"] >= 20
+            and conn.execute(
+                "SELECT kb.library_policy_allows(%s,'generation')", (library_id,)
+            ).fetchone()[0],
         }
 
 

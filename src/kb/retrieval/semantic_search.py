@@ -8,6 +8,7 @@ from psycopg.rows import dict_row
 from kb.access.policy import Principal, transaction_identity
 from kb.catalog.content import attach_knowledge_provenance, lexical_search_knowledge
 from kb.retrieval.embedding_profile import SELECTED_PROFILE
+from kb.retrieval.ranking import reciprocal_rank_fusion
 from kb.retrieval.semantic_registry import sha256
 from kb.retrieval.vector_reader import IndexUnavailable, OpenVikingReader
 
@@ -28,7 +29,8 @@ def plans(conn, principal, scopes=None) -> dict[UUID, Plan]:
             "SELECT l.id,l.generation AS revision,a.read_identity,g.generation,g.resource_root,"
             "(a.state='ready' AND a.profile_hash=%s AND a.dimension=%s "
             "AND a.embedding_profile=%s AND g.profile_hash=%s AND g.verified_at IS NOT NULL "
-            "AND g.indexed_revision=l.generation) AS usable "
+            "AND g.indexed_revision=l.generation "
+            "AND kb.library_policy_allows(l.id,'external')) AS usable "
             "FROM kb.library l LEFT JOIN kb.index_account a ON a.library_id=l.id "
             "LEFT JOIN kb.index_generation g ON g.library_id=l.id AND g.state='current' "
             "WHERE l.organisation_id=%s "
@@ -63,7 +65,7 @@ class SemanticSearch:
     def __init__(self, reader: OpenVikingReader):
         self.reader = reader
 
-    def search(self, conn, principal: Principal, query, scopes=None, limit=10):
+    def search(self, conn, principal: Principal, query, scopes=None, limit=10, *, source_ids=None):
         initial = plans(conn, principal, scopes)
         candidates = {}
         attempted = {}
@@ -72,10 +74,15 @@ class SemanticSearch:
         for plan in [p for p in initial.values() if p.usable][:20]:
             if plan.identity is None or plan.root is None:
                 continue
+            if plans(conn, principal, [plan.library_id]).get(plan.library_id) != plan:
+                continue
             attempted[plan.library_id] = plan
             try:
                 candidates[plan.library_id] = self.reader.find(
-                    plan.identity, plan.root, query, min(100, limit * 3)
+                    plan.identity,
+                    plan.root,
+                    query,
+                    100 if source_ids is not None else min(100, limit * 3),
                 )
             except IndexUnavailable:
                 unavailable.add(plan.library_id)
@@ -124,7 +131,9 @@ class SemanticSearch:
                     hit["score"] = scores[hit.pop("resource_uri")]
                     hit["retrieval_mode"] = "semantic"
                     hits.append(hit)
-        lexical = lexical_search_knowledge(conn, principal, query, list(fallback), limit)
+        lexical = lexical_search_knowledge(
+            conn, principal, query, list(fresh), min(50, limit * 3), source_ids=source_ids
+        )
         for hit in lexical["hits"]:
             hit["retrieval_mode"] = "lexical"
             hits.append(hit)
@@ -192,27 +201,36 @@ class SemanticSearch:
                     accepted.append(hit)
                 hits = accepted
                 attach_knowledge_provenance(cur, hits)
-        unique = {
-            h["id"]: h
-            for h in sorted(
-                hits,
-                key=lambda h: (h["retrieval_mode"] != "semantic", -h["score"], str(h["id"])),
-                reverse=True,
-            )
-        }
-        hits = sorted(
-            unique.values(),
-            key=lambda h: (h["retrieval_mode"] != "semantic", -h["score"], str(h["id"])),
-        )[:limit]
+                if source_ids is not None:
+                    requested = set(source_ids)
+                    hits = [
+                        h for h in hits if any(p["source_id"] in requested for p in h["provenance"])
+                    ]
+        # Fuse only hydrated, finally authorized candidates. Each retrieval path
+        # contributes a rank once; semantic similarity and FTS scores are not comparable.
+        semantic_rank = sorted(
+            (h for h in hits if h["retrieval_mode"] == "semantic"),
+            key=lambda h: (-h["score"], str(h["id"])),
+        )
+        lexical_rank = sorted(
+            (h for h in hits if h["retrieval_mode"] == "lexical"),
+            key=lambda h: (-h["score"], str(h["id"])),
+        )
+        unique = {str(h["id"]): h for h in [*lexical_rank, *semantic_rank]}
+        ranked = reciprocal_rank_fusion(
+            [
+                [str(h["id"]) for h in semantic_rank],
+                [str(h["id"]) for h in lexical_rank],
+            ]
+        )
+        hits = [{**unique[ident], "score": score} for ident, score in ranked[:limit]]
         pending = {
             lib
             for lib, p in final.items()
             if not p.usable or attempted.get(lib) != p or lib in unavailable
         }
         mode = (
-            "hybrid"
-            if pending and any(h["retrieval_mode"] == "semantic" for h in hits)
-            else ("lexical" if pending else "semantic")
+            "hybrid" if semantic_rank and lexical_rank else ("lexical" if pending else "semantic")
         )
         return {
             "mode": mode,

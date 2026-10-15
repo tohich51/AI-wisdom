@@ -45,6 +45,7 @@ class ListLibrariesResult(BaseModel):
 class SearchKnowledgeArgs(ToolArgs):
     query: str = Field(min_length=1, max_length=2000)
     library_ids: list[UUID] | None = None
+    source_ids: list[UUID] | None = Field(default=None, max_length=100)
     limit: int = Field(default=10, ge=1, le=50)
     # Ordinary retrieval must work without cloud generation.
     use_generation: bool = False
@@ -95,6 +96,7 @@ class GetProjectContextResult(BaseModel):
 
 # 6 ---------------------------------------------------------- start use
 class StartUseArgs(ToolArgs):
+    idempotency_key: str | None = Field(default=None, min_length=1, max_length=200)
     rule_id: UUID
     version_no: int = Field(ge=1)
     note: str | None = Field(default=None, max_length=2000)
@@ -104,11 +106,12 @@ class StartUseArgs(ToolArgs):
 
 class StartUseResult(BaseModel):
     use_id: UUID
-    state: Literal["retrieved"] = "retrieved"
+    state: Literal["retrieved", "applied", "outcomed", "corrected"] = "retrieved"
 
 
 # 7 ------------------------------------------------------ record outcome
 class RecordOutcomeArgs(ToolArgs):
+    idempotency_key: str | None = Field(default=None, min_length=1, max_length=200)
     use_id: UUID
     observed_result: str | None = Field(default=None, max_length=4000)
     rating: int | None = Field(default=None, ge=1, le=5)
@@ -149,9 +152,38 @@ class ExportSkillArgs(ToolArgs):
 
 
 class ExportSkillResult(BaseModel):
-    archive_name: str
+    filename: str
+    content: str
+    sha256: str
     bytes: int
-    manifest_hash: str
+    manifest: dict
+    manifest_sha256: str
+
+
+class ListJobsArgs(ToolArgs):
+    library_id: UUID | None = None
+
+
+class ReadLibraryPolicyArgs(ToolArgs):
+    library_id: UUID
+
+
+class ExperienceSummaryArgs(ToolArgs):
+    pass
+
+
+class ReviewItemsArgs(ToolArgs):
+    library_id: UUID
+    item_kind: Literal["knowledge", "rule"]
+    item_ids: list[UUID] = Field(min_length=1, max_length=100)
+    decision: Literal["publish", "reject"]
+
+
+class EditKnowledgeArgs(ToolArgs):
+    knowledge_id: UUID
+    statement: str = Field(min_length=1, max_length=10000)
+    expected_statement: str = Field(min_length=1, max_length=10000)
+    kind: Literal["assertion", "definition", "recommendation", "example"]
 
 
 MCP_TOOLS: dict[str, tuple[type[BaseModel], type[BaseModel] | None]] = {
@@ -166,6 +198,11 @@ MCP_TOOLS: dict[str, tuple[type[BaseModel], type[BaseModel] | None]] = {
     "submit_source": (SubmitSourceArgs, SubmitSourceResult),
     "job_status": (JobStatusArgs, JobStatusResult),
     "export_skill": (ExportSkillArgs, ExportSkillResult),
+    "list_jobs": (ListJobsArgs, None),
+    "read_library_policy": (ReadLibraryPolicyArgs, None),
+    "get_experience_summary": (ExperienceSummaryArgs, None),
+    "review_items": (ReviewItemsArgs, None),
+    "edit_knowledge": (EditKnowledgeArgs, None),
 }
 
 
@@ -184,6 +221,11 @@ EXPECTED_TOOLS: frozenset[str] = frozenset(
         "submit_source",
         "job_status",
         "export_skill",
+        "list_jobs",
+        "read_library_policy",
+        "get_experience_summary",
+        "review_items",
+        "edit_knowledge",
     }
 )
 

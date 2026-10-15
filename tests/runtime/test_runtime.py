@@ -63,6 +63,13 @@ def world(runtime_db, tmp_path):
                 organisation_id=account, name="Books " + str(uuid4()), kind="reference"
             ),
         )
+        # Synthetic fixture owner explicitly opts this library into generation.
+        # New production libraries still default to generation disabled.
+        with transaction_identity(conn, principal):
+            conn.execute(
+                "INSERT INTO kb.generation_policy(library_id,generation_allowed) VALUES(%s,true)",
+                (lib.id,),
+            )
     return {
         "admin": runtime_db,
         "dsn": dsn,
@@ -192,7 +199,7 @@ def test_queue_upload_parse_retry_and_revocation(world):
     with psycopg.connect(world["admin"]) as conn:
         assert conn.execute(
             "SELECT status,error_code FROM kb.job WHERE id=%s", (job["job_id"],)
-        ).fetchone() == ("failed", "access_revoked")
+        ).fetchone() == ("done", None)  # Redelivery never rewrites completed history.
 
 
 def test_metadata_patch_and_export_inert_provenance(world):

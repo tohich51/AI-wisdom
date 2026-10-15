@@ -9,6 +9,7 @@
 <script src="/static/research-result.js" defer></script>
 <script src="/static/research.js" defer></script>
 <script src="/static/maps.js" defer></script>
+<script src="/static/completion.js" defer></script>
 <script src="/static/app.js" defer></script>
 </head>
 <body>
@@ -28,6 +29,8 @@
 <p class="nav-label">Разделы</p><button type="button" data-tab="libraries" aria-controls="libraries-tab" aria-pressed="true">Библиотеки</button><button type="button" data-tab="uses" aria-controls="uses-tab" aria-pressed="false">Опыт</button>
 <button type="button" data-tab="research" aria-controls="research-tab" aria-pressed="false">Исследование и Studio</button>
 <button type="button" data-tab="maps" aria-controls="maps-tab" aria-pressed="false">Карта знаний</button>
+<button type="button" data-tab="access" aria-controls="access-tab" aria-pressed="false">Доступ</button>
+<button type="button" data-tab="jobs" aria-controls="jobs-tab" aria-pressed="false">Задания</button>
 </nav>
 </aside>
 <main>
@@ -76,6 +79,16 @@
 <div class="section-heading"><h1 id="maps-heading">Карта знаний</h1>
 <p>Происхождение знаний, смысловые связи и зафиксированный опыт.</p></div>
 <div id="maps-workspace"></div>
+</section>
+<section id="access-tab" aria-labelledby="access-heading" hidden>
+<div class="section-heading"><h1 id="access-heading">Доступ</h1>
+<p>Участники организации, группы и ожидающие приглашения.</p></div>
+<div id="access-workspace" aria-live="polite"></div>
+</section>
+<section id="jobs-tab" aria-labelledby="jobs-heading" hidden>
+<div class="section-heading"><h1 id="jobs-heading">Задания</h1>
+<p>Состояние обработки материалов и готовые части.</p></div>
+<div id="jobs-workspace" aria-live="polite"></div>
 </section>
 </main>
 </div>

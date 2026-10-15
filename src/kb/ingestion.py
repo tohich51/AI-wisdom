@@ -18,6 +18,15 @@ from kb.document_parser import NeedsOCR, ParseRejected, parse_document
 from kb.model_runner import GenerateResponse
 
 MODEL = "MiniMax-M3.1-Flash-Preview"
+_LEASE_SECONDS = 480
+
+
+class AttemptInProgress(RuntimeError):
+    """Another worker still owns this job; redelivery must retry later."""
+
+
+class _StaleAttempt(Exception):
+    """A replacement worker has taken over, so this attempt must stop quietly."""
 
 
 def build_queue(dsn: str):
@@ -26,7 +35,7 @@ def build_queue(dsn: str):
     @app.task(
         name="kb.ingest_source",
         queue="ingestion",
-        retry=procrastinate.RetryStrategy(max_attempts=3, wait=20),
+        retry=procrastinate.RetryStrategy(max_attempts=6, wait=480),
     )
     def process(job_id: str, principal_id: str, account_id: str):
         run_job(
@@ -47,7 +56,8 @@ def build_queue(dsn: str):
 def _admit(conn, principal, source_id, *, extraction=False):
     row = conn.execute(
         """SELECT s.*,kb.role_rank(kb.effective_role(%s,s.library_id)) AS rank,
-      kb.is_org_admin(%s,%s) AS owner FROM kb.source s
+      kb.is_org_admin(%s,%s) AS owner,
+      kb.library_policy_allows(s.library_id,'generation') AS generation_allowed FROM kb.source s
       WHERE s.id=%s AND EXISTS(SELECT 1 FROM kb.membership m
         WHERE m.principal_id=%s AND m.organisation_id=%s AND m.status='active')""",
         (
@@ -59,7 +69,12 @@ def _admit(conn, principal, source_id, *, extraction=False):
             principal.account_id,
         ),
     ).fetchone()
-    if row is None or row["rank"] < 20 or (extraction and not row["owner"]):
+    if (
+        row is None
+        or (row["rank"] or 0) < 20
+        or row["publication"] == "withdrawn"
+        or (extraction and (not row["owner"] or not row["generation_allowed"]))
+    ):
         raise AccessDenied("forbidden")
     return dict(row)
 
@@ -83,8 +98,8 @@ def submit_processing(conn, principal, source_id, idempotency_key, *, extract=Fa
         created = cur.fetchone()
         if not created:
             cur.execute(
-                "SELECT id,source_id,submitted_by FROM kb.job WHERE library_id=%s "
-                "AND idempotency_key=%s",
+                "SELECT id,source_id,submitted_by,extraction_enabled FROM kb.job "
+                "WHERE library_id=%s AND idempotency_key=%s",
                 (source["library_id"], idempotency_key),
             )
             existing = cur.fetchone()
@@ -92,6 +107,7 @@ def submit_processing(conn, principal, source_id, idempotency_key, *, extract=Fa
                 not existing
                 or existing["source_id"] != source_id
                 or existing["submitted_by"] != principal.principal_id
+                or existing["extraction_enabled"] != extract
             ):
                 raise AccessDenied("forbidden")
             return {"job_id": existing["id"], "duplicate_of_existing": True}
@@ -172,26 +188,83 @@ def _save_draft(cur, source, draft):
             )
 
 
+def _set_processing(conn, source_id, state):
+    if not conn.execute(
+        "UPDATE kb.source SET processing=%s WHERE id=%s RETURNING id", (state, source_id)
+    ).fetchone():
+        raise AccessDenied("forbidden")
+
+
+def _claim_job(conn, job_id, principal):
+    """Called in a short transaction; no parser or provider runs while holding its lock."""
+    job = conn.execute(
+        "SELECT *,lease_until>now() AS lease_active FROM kb.job WHERE id=%s FOR UPDATE",
+        (job_id,),
+    ).fetchone()
+    if not job or job["submitted_by"] != principal.principal_id or job["status"] == "done":
+        return None
+    if job["status"] == "running" and job["lease_active"]:
+        raise AttemptInProgress("ingestion_attempt_in_progress")
+    source = _admit(conn, principal, job["source_id"], extraction=job["extraction_enabled"])
+    claimed = conn.execute(
+        "UPDATE kb.job SET status='running',error_code=NULL,started_at=now(),"
+        "completed_at=NULL,attempt_token=%s,lease_until=now()+make_interval(secs=>%s) "
+        "WHERE id=%s RETURNING *",
+        (uuid4(), _LEASE_SECONDS, job_id),
+    ).fetchone()
+    if not claimed:
+        raise AccessDenied("forbidden")
+    _set_processing(conn, source["id"], "running")
+    return dict(claimed), source
+
+
+def _fence_attempt(conn, job_id, principal, attempt):
+    """Lock and re-admit the exact current attempt before every database mutation."""
+    job = conn.execute("SELECT * FROM kb.job WHERE id=%s FOR UPDATE", (job_id,)).fetchone()
+    if not job or job["submitted_by"] != principal.principal_id:
+        # RLS can hide a revoked job: only the narrow finalizer may then change it.
+        raise AccessDenied("forbidden")
+    if job["attempt_token"] != attempt or job["status"] != "running":
+        raise _StaleAttempt
+    source = _admit(conn, principal, job["source_id"], extraction=job["extraction_enabled"])
+    if not conn.execute(
+        "UPDATE kb.job SET lease_until=now()+make_interval(secs=>%s) "
+        "WHERE id=%s AND attempt_token=%s AND status='running' RETURNING id",
+        (_LEASE_SECONDS, job_id, attempt),
+    ).fetchone():
+        raise AccessDenied("forbidden")
+    return dict(job), source
+
+
+def _set_progress(conn, job_id, attempt, completed, total):
+    if not conn.execute(
+        "UPDATE kb.job SET chunks_done=%s,chunks_total=%s "
+        "WHERE id=%s AND attempt_token=%s AND status='running' RETURNING id",
+        (completed, total, job_id, attempt),
+    ).fetchone():
+        raise AccessDenied("forbidden")
+
+
+def _finish_revoked(conn, job_id, principal, attempt):
+    with transaction_identity(conn, principal):
+        conn.execute(
+            "SELECT kb.finish_revoked_job(%s,%s,%s,%s)",
+            (job_id, principal.principal_id, principal.account_id, attempt),
+        )
+
+
 def run_job(dsn, job_id, principal, blob_root, runner_url=None, worker_token=None):
+    attempt = None
     with psycopg.connect(dsn, row_factory=dict_row) as conn:
         try:
             with transaction_identity(conn, principal):
-                job = conn.execute(
-                    "SELECT * FROM kb.job WHERE id=%s FOR UPDATE", (job_id,)
-                ).fetchone()
-                if not job or job["submitted_by"] != principal.principal_id:
-                    raise AccessDenied("forbidden")
-                source = _admit(
-                    conn, principal, job["source_id"], extraction=job["extraction_enabled"]
-                )
-                conn.execute(
-                    "UPDATE kb.job SET status='running',error_code=NULL,started_at=now() "
-                    "WHERE id=%s",
-                    (job_id,),
-                )
-                conn.execute(
-                    "UPDATE kb.source SET processing='running' WHERE id=%s", (source["id"],)
-                )
+                claim = _claim_job(conn, job_id, principal)
+            if claim is None:
+                _finish_revoked(conn, job_id, principal, None)
+                return
+            # The claim is owned only after the transaction has committed successfully.
+            job, source = claim
+            attempt = job["attempt_token"]
             store = LocalBlobStore(blob_root)
             _, original_hash = store.stat(source["object_key"])
             if original_hash != source["content_hash"]:
@@ -200,7 +273,7 @@ def run_job(dsn, job_id, principal, blob_root, runner_url=None, worker_token=Non
                 _resolve_in_root(store.root, source["object_key"]), source["media_type"]
             )
             with transaction_identity(conn, principal):
-                source = _admit(conn, principal, source["id"], extraction=job["extraction_enabled"])
+                _, source = _fence_attempt(conn, job_id, principal, attempt)
                 for part in parsed:
                     conn.execute(
                         """INSERT INTO kb.fragment(source_id,ordinal,text,locator_kind,
@@ -234,14 +307,16 @@ def run_job(dsn, job_id, principal, blob_root, runner_url=None, worker_token=Non
                 payload = json.dumps(chunk, ensure_ascii=False)
                 digest = hashlib.sha256(payload.encode()).hexdigest()
                 with transaction_identity(conn, principal):
-                    source = _admit(conn, principal, source["id"], extraction=True)
+                    _, source = _fence_attempt(conn, job_id, principal, attempt)
                     found = conn.execute(
                         "SELECT 1 FROM kb.extraction_checkpoint WHERE "
                         "source_id=%s AND chunk_no=%s AND content_hash=%s AND model=%s",
                         (source["id"], number, digest, MODEL),
                     ).fetchone()
+                    if found:
+                        completed += 1
+                    _set_progress(conn, job_id, attempt, completed, len(chunks))
                 if found:
-                    completed += 1
                     continue
                 if calls >= call_budget:
                     break
@@ -273,44 +348,46 @@ def run_job(dsn, job_id, principal, blob_root, runner_url=None, worker_token=Non
                 ):
                     raise ParseRejected("invalid_model_output")
                 with transaction_identity(conn, principal), conn.cursor() as cur:
-                    source = _admit(conn, principal, source["id"], extraction=True)
-                    _save_draft(cur, source, draft)
-                    cur.execute(
+                    _, source = _fence_attempt(conn, job_id, principal, attempt)
+                    # This unique admission and all drafts commit atomically. An existing
+                    # checkpoint belongs to a completed chunk, never a second set of drafts.
+                    inserted = cur.execute(
                         "INSERT INTO kb.extraction_checkpoint(source_id,chunk_no,content_hash,"
-                        "model) VALUES(%s,%s,%s,%s)",
+                        "model) VALUES(%s,%s,%s,%s) ON CONFLICT DO NOTHING RETURNING chunk_no",
                         (source["id"], number, digest, MODEL),
-                    )
-                completed += 1
-                with transaction_identity(conn, principal):
-                    conn.execute(
-                        "UPDATE kb.job SET chunks_done=%s,chunks_total=%s WHERE id=%s",
-                        (completed, len(chunks), job_id),
-                    )
+                    ).fetchone()
+                    if inserted:
+                        _save_draft(cur, source, draft)
+                    completed += 1
+                    _set_progress(conn, job_id, attempt, completed, len(chunks))
             state = "partial" if completed < len(chunks) else "done"
             with transaction_identity(conn, principal):
-                _admit(conn, principal, source["id"], extraction=job["extraction_enabled"])
-                conn.execute(
+                _, source = _fence_attempt(conn, job_id, principal, attempt)
+                if not conn.execute(
                     "UPDATE kb.job SET status=%s,chunks_done=%s,chunks_total=%s,"
-                    "completed_at=now(),error_code=%s WHERE id=%s",
+                    "completed_at=now(),error_code=%s,lease_until=NULL "
+                    "WHERE id=%s AND attempt_token=%s AND status='running' RETURNING id",
                     (
                         state,
                         completed,
                         len(chunks),
                         "budget_reached" if state == "partial" else None,
                         job_id,
+                        attempt,
                     ),
-                )
-                conn.execute(
-                    "UPDATE kb.source SET processing=%s WHERE id=%s", (state, source["id"])
-                )
+                ).fetchone():
+                    raise AccessDenied("forbidden")
+                _set_processing(conn, source["id"], state)
+        except AttemptInProgress:
+            raise
+        except _StaleAttempt:
+            return
+        except AccessDenied:
+            _finish_revoked(conn, job_id, principal, attempt)
+            return
         except Exception as exc:
-            if isinstance(exc, AccessDenied):
-                conn.execute(
-                    "SELECT kb.finish_revoked_job(%s,%s,%s)",
-                    (job_id, principal.principal_id, principal.account_id),
-                )
-                conn.commit()
-                return
+            if attempt is None:
+                raise RuntimeError("ingestion_not_complete") from None
             code = getattr(exc, "code", "processing_failed")
             state = (
                 "needs_ocr"
@@ -321,14 +398,22 @@ def run_job(dsn, job_id, principal, blob_root, runner_url=None, worker_token=Non
                     else "partial"
                 )
             )
-            with transaction_identity(conn, principal):
-                conn.execute(
-                    "UPDATE kb.job SET status=%s,error_code=%s WHERE id=%s", (state, code, job_id)
-                )
-                if "source" in locals():
-                    conn.execute(
-                        "UPDATE kb.source SET processing=%s WHERE id=%s", (state, source["id"])
-                    )
+            try:
+                with transaction_identity(conn, principal):
+                    _, source = _fence_attempt(conn, job_id, principal, attempt)
+                    if not conn.execute(
+                        "UPDATE kb.job SET status=%s,error_code=%s,completed_at=now(),"
+                        "lease_until=NULL WHERE id=%s AND attempt_token=%s "
+                        "AND status='running' RETURNING id",
+                        (state, code, job_id, attempt),
+                    ).fetchone():
+                        raise AccessDenied("forbidden")
+                    _set_processing(conn, source["id"], state)
+            except _StaleAttempt:
+                return
+            except AccessDenied:
+                _finish_revoked(conn, job_id, principal, attempt)
+                return
             if isinstance(exc, ParseRejected) and code != "model_unavailable":
                 return
             raise RuntimeError("ingestion_not_complete") from None

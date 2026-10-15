@@ -9,6 +9,7 @@ from uuid import UUID
 
 from fastapi import HTTPException, Request
 
+from kb.access.bearer_policy import bearer_principal, http_scope, require_scope
 from kb.access.identity import IdentityRejected, VerifiedIdentity
 from kb.access.policy import Principal, transaction_identity
 from kb.access.session import SessionIdentityIncomplete, SessionMissing
@@ -163,7 +164,10 @@ def create_resolver(
             if identity.account_id is None:
                 _raise_unauthorized()
             try:
-                principal = Principal(identity.principal_id, identity.account_id)
+                require_scope(identity, http_scope(request.method, request.url.path))
+                principal = bearer_principal(identity)
+            except PermissionError:
+                _raise_forbidden()
             except (AttributeError, TypeError, ValueError):
                 _raise_unauthorized()
 

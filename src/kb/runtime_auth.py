@@ -34,11 +34,12 @@ def install_auth(
         login_ttl_minutes=settings.login_ttl_minutes,
     )
 
-    def coordinates(audience: str, client_id: str) -> IdentitySettings:
+    def coordinates(audience: str, client_id: str, *, parties=frozenset()) -> IdentitySettings:
         return IdentitySettings(
             issuer=settings.issuer,
             audience=audience,
             client_id=client_id,
+            authorized_parties=parties,
             required_scopes=settings.required_scopes
             if client_id != settings.client_id
             else frozenset(),
@@ -49,7 +50,13 @@ def install_auth(
 
     browser = TokenVerifier(coordinates(settings.client_id, settings.client_id), http_client)
     bearer = TokenVerifier(
-        coordinates(os.environ["KB_MCP_AUDIENCE"], os.environ["KB_MCP_CLIENT_ID"]),
+        coordinates(
+            os.environ["KB_MCP_AUDIENCE"],
+            os.environ["KB_MCP_CLIENT_ID"],
+            parties=frozenset(
+                os.environ.get("KB_MCP_ALLOWED_CLIENT_IDS", os.environ["KB_MCP_CLIENT_ID"]).split()
+            ),
+        ),
         http_client,
     )
     flow = AuthorizationCodeFlow(

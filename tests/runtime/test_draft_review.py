@@ -177,12 +177,15 @@ class World:
 
     # ------------------------------------------------------------ arranging
 
-    def knowledge(self, statement: str, *, library: UUID | None = None) -> UUID:
+    def knowledge(
+        self, statement: str, *, library: UUID | None = None, created_by: UUID | None = None
+    ) -> UUID:
         with psycopg.connect(self.admin_dsn, autocommit=True) as conn:
             return conn.execute(
-                "INSERT INTO kb.knowledge(library_id,statement,kind) VALUES(%s,%s,'assertion') "
+                "INSERT INTO kb.knowledge(library_id,statement,kind,created_by) "
+                "VALUES(%s,%s,'assertion',%s) "
                 "RETURNING id",
-                (library or self.lib, statement),
+                (library or self.lib, statement, created_by),
             ).fetchone()[0]
 
     def rule(self, *, library: UUID | None = None, fragment: UUID | None = None) -> UUID:
@@ -666,7 +669,9 @@ def test_a_demotion_committed_after_the_authority_read_cannot_ride_along(
     and the order does not depend on timing. The reader then issues the bare
     write and it lands, which is the hazard, reproduced on demand.
     """
-    ident = world.knowledge("A statement that races its own curator's demotion")
+    ident = world.knowledge(
+        "A statement that races its own curator's demotion", created_by=world.curator
+    )
     caller = world.principal(world.curator)
     read_rank: list[int] = []
     bare_writes: list[int] = []
@@ -821,9 +826,9 @@ def test_rejection_keeps_the_row_its_provenance_and_its_history(world, api, runt
 
 
 def test_a_withdrawn_statement_leaves_the_search_index_but_not_the_library(world, api, runtime_dsn):
-    """Search stops serving it; the row itself stays readable and still there."""
+    """Curator search stops serving it; curation retains the row, readers see no draft."""
     ident = world.knowledge("segmentation determines budget allocation")
-    reader = world.principal(world.reader)
+    reader = world.principal(world.curator)
 
     def found() -> list[str]:
         with psycopg.connect(runtime_dsn) as conn:
@@ -836,4 +841,5 @@ def test_a_withdrawn_statement_leaves_the_search_index_but_not_the_library(world
 
     with psycopg.connect(runtime_dsn) as conn:
         listed = writes.list_knowledge(conn, reader, world.lib)
+        assert writes.list_knowledge(conn, world.principal(world.reader), world.lib) == []
     assert [(row["id"], row["publication"]) for row in listed] == [(ident, "withdrawn")]

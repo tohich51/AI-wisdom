@@ -72,6 +72,7 @@ markers = [
 line-length = 100
 target-version = "py311"
 src = ["src", "tests", "scripts"]
+extend-exclude = ["src/kb/vendor/book_to_skill/validate_skill.py"] # Unmodified pinned MIT upstream.
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B", "S", "ASYNC", "RUF"]
@@ -101,3 +102,7 @@ mypy_path = "src"
 warn_unused_ignores = true
 disallow_untyped_defs = false
 ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = "kb.vendor.book_to_skill.validate_skill"
+ignore_errors = true

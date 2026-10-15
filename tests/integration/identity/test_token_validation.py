@@ -20,6 +20,7 @@ import hashlib
 import hmac
 import json
 import time
+from dataclasses import replace
 from typing import Any
 
 import httpx
@@ -261,6 +262,28 @@ def test_a_multi_audience_token_with_the_right_authorized_party_is_accepted(veri
         extra={"aud": ["another-api", provider.client_id], "azp": provider.client_id},
     )
     assert verifier.verify(token, expected_nonce="c07-nonce").subject == SUBJECT
+
+
+@pytest.mark.parametrize("multi_audience", [False, True])
+def test_bearer_client_allowlist_is_verified_for_both_audience_shapes(
+    identity_settings, provider, multi_audience
+):
+    settings = replace(
+        identity_settings, authorized_parties=frozenset({"local-client", "cloud-client"})
+    )
+    with httpx.Client() as client:
+        verifier = TokenVerifier(settings, client)
+        audience = [provider.client_id, "account"] if multi_audience else provider.client_id
+        for client_id in ["local-client", "cloud-client"]:
+            token = provider.mint_id_token(
+                subject=SUBJECT, nonce="client-test", extra={"aud": audience, "azp": client_id}
+            )
+            assert verifier.verify(token).client_id == client_id
+        for client_id in [None, "unregistered-client"]:
+            token = provider.mint_id_token(
+                subject=SUBJECT, nonce="client-test", extra={"aud": audience, "azp": client_id}
+            )
+            assert reason(verifier, token) == "authorized_party_mismatch"
 
 
 def test_a_subject_that_is_not_a_principal_id_is_rejected(verifier, provider):

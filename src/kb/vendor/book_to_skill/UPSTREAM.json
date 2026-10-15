@@ -1,0 +1,11 @@
+{
+  "project": "book-to-skill",
+  "repository": "https://github.com/virgiliojr94/book-to-skill",
+  "commit": "a24e62f4d8caf2ee433f6e48d9073800f56f906e",
+  "version": "1.4.0",
+  "license": "MIT",
+  "source_path": "tools/validate_skill.py",
+  "sha256": "71a6c42e7c958b7d9158973ec7ee3d909a420df49248248dbd1d4b29daac0a80",
+  "purpose": "portable SKILL.md validation; canonical document parsing/provenance and ACL remain in AI-wisdom",
+  "modified": false
+}

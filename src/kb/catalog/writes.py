@@ -190,32 +190,89 @@ def reject(conn, principal, ident, *, knowledge=False):
         raise AccessDenied("forbidden")
 
 
-def start_use(conn, principal, rule_id, version_no, expected_result=None, where_applied=None):
+def start_use(
+    conn,
+    principal,
+    rule_id,
+    version_no,
+    expected_result=None,
+    where_applied=None,
+    *,
+    idempotency_key=None,
+):
+    if idempotency_key is not None and (
+        not isinstance(idempotency_key, str)
+        or not idempotency_key.strip()
+        or len(idempotency_key) > 200
+    ):
+        raise ValueError("invalid_idempotency_key")
     with transaction_identity(conn, principal), conn.cursor(row_factory=dict_row) as cur:
+        if idempotency_key is not None:
+            cur.execute(
+                "SELECT pg_advisory_xact_lock(hashtextextended(%s,0))",
+                (f"experience:start_use:{principal.principal_id}:{idempotency_key}",),
+            )
         cur.execute(
-            """INSERT INTO kb.use_record(rule_id,rule_version_no,principal_id)
-          VALUES(%s,%s,%s) RETURNING *""",
-            (rule_id, version_no, principal.principal_id),
+            "SELECT id FROM kb.rule WHERE id=%s AND version_no=%s AND publication='published'",
+            (rule_id, version_no),
+        )
+        if cur.fetchone() is None:
+            raise AccessDenied("forbidden")
+        if idempotency_key is not None:
+            cur.execute(
+                """SELECT u.*,e.expected_result,e.where_applied FROM kb.use_record u
+                  JOIN kb.experience e ON e.use_id=u.id
+                  WHERE u.principal_id=%s AND u.idempotency_key=%s""",
+                (principal.principal_id, idempotency_key),
+            )
+            existing = cur.fetchone()
+            if existing is not None:
+                use = dict(existing)
+                expected = use.pop("expected_result")
+                location = use.pop("where_applied")
+                if (use["rule_id"], use["rule_version_no"], expected, location) != (
+                    rule_id,
+                    version_no,
+                    expected_result,
+                    where_applied,
+                ):
+                    raise ValueError("idempotency_conflict")
+                return use
+        cur.execute(
+            """INSERT INTO kb.use_record(rule_id,rule_version_no,principal_id,idempotency_key)
+              VALUES(%s,%s,%s,%s) RETURNING *""",
+            (rule_id, version_no, principal.principal_id, idempotency_key),
         )
         use = dict(cur.fetchone())
         cur.execute(
             """INSERT INTO kb.experience(use_id,rule_id,rule_version_no,expected_result,
-          where_applied) VALUES(%s,%s,%s,%s,%s)""",
+              where_applied) VALUES(%s,%s,%s,%s,%s)""",
             (use["id"], rule_id, version_no, expected_result, where_applied),
         )
         return use
 
 
 def mark_applied(conn, principal, use_id):
-    with transaction_identity(conn, principal):
-        row = conn.execute(
-            """UPDATE kb.use_record SET state='applied'
-          WHERE id=%s AND state='retrieved' RETURNING id,state""",
-            (use_id,),
-        ).fetchone()
-        if not row:
+    with transaction_identity(conn, principal), conn.cursor(row_factory=dict_row) as cur:
+        cur.execute(
+            """SELECT u.id,u.state FROM kb.use_record u JOIN kb.rule r
+              ON r.id=u.rule_id AND r.version_no=u.rule_version_no
+              WHERE u.id=%s AND u.principal_id=%s AND r.publication='published'
+              FOR UPDATE OF u""",
+            (use_id, principal.principal_id),
+        )
+        use = cur.fetchone()
+        if use is None:
             raise AccessDenied("forbidden")
-        return {"id": str(row[0]), "state": row[1]}
+        if use["state"] == "retrieved":
+            cur.execute(
+                "UPDATE kb.use_record SET state='applied' WHERE id=%s RETURNING id,state",
+                (use_id,),
+            )
+            return dict(cur.fetchone())
+        if use["state"] not in ("applied", "outcomed", "corrected"):
+            raise AccessDenied("forbidden")
+        return dict(use)
 
 
 def record_outcome(
@@ -226,14 +283,49 @@ def record_outcome(
     rating=None,
     rating_basis=None,
     is_correction=False,
+    *,
+    idempotency_key=None,
 ):
+    if idempotency_key is not None and (
+        not isinstance(idempotency_key, str)
+        or not idempotency_key.strip()
+        or len(idempotency_key) > 200
+    ):
+        raise ValueError("invalid_idempotency_key")
     if not any(value is not None for value in (observed_result, rating, rating_basis)):
         raise ValueError("an outcome must contain a reported value")
     with transaction_identity(conn, principal), conn.cursor(row_factory=dict_row) as cur:
-        cur.execute("SELECT state FROM kb.use_record WHERE id=%s FOR UPDATE", (use_id,))
+        if idempotency_key is not None:
+            cur.execute(
+                "SELECT pg_advisory_xact_lock(hashtextextended(%s,0))",
+                (f"experience:outcome:{principal.principal_id}:{idempotency_key}",),
+            )
+        cur.execute(
+            """SELECT u.state FROM kb.use_record u JOIN kb.rule r
+              ON r.id=u.rule_id AND r.version_no=u.rule_version_no
+              WHERE u.id=%s AND u.principal_id=%s AND r.publication='published'
+              FOR UPDATE OF u""",
+            (use_id, principal.principal_id),
+        )
         use = cur.fetchone()
-        if not use:
+        if use is None:
             raise AccessDenied("forbidden")
+        if idempotency_key is not None:
+            cur.execute(
+                "SELECT * FROM kb.outcome WHERE reported_by=%s AND idempotency_key=%s",
+                (principal.principal_id, idempotency_key),
+            )
+            existing = cur.fetchone()
+            if existing is not None:
+                if (
+                    existing["use_id"],
+                    existing["observed_result"],
+                    existing["rating"],
+                    existing["rating_basis"],
+                    existing["is_correction"],
+                ) != (use_id, observed_result, rating, rating_basis, is_correction):
+                    raise ValueError("idempotency_conflict")
+                return dict(existing)
         if use["state"] == "retrieved":
             raise ValueError("confirm application before reporting an outcome")
         cur.execute("SELECT count(*) AS n FROM kb.outcome WHERE use_id=%s", (use_id,))
@@ -242,8 +334,17 @@ def record_outcome(
             raise ValueError("a later outcome requires explicit correction")
         cur.execute(
             """INSERT INTO kb.outcome(use_id,observed_result,rating,rating_basis,
-          reported_by,reported_at,is_correction) VALUES(%s,%s,%s,%s,%s,now(),%s) RETURNING *""",
-            (use_id, observed_result, rating, rating_basis, principal.principal_id, is_correction),
+              reported_by,reported_at,is_correction,idempotency_key)
+              VALUES(%s,%s,%s,%s,%s,now(),%s,%s) RETURNING *""",
+            (
+                use_id,
+                observed_result,
+                rating,
+                rating_basis,
+                principal.principal_id,
+                is_correction,
+                idempotency_key,
+            ),
         )
         result = dict(cur.fetchone())
         cur.execute(

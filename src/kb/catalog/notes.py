@@ -5,6 +5,7 @@ from html import escape
 from psycopg.rows import dict_row
 
 from kb.access.policy import AccessDenied, Principal, transaction_identity
+from kb.catalog.policies import require_manifest_export
 from kb.catalog.research import checked_run
 
 _MARKDOWN = re.compile(r"([\\`*_\[\]()#+\-.!|>~=])")
@@ -140,6 +141,7 @@ def export_research(conn, principal: Principal, run_id) -> dict:
     with transaction_identity(conn, principal):
         with conn.cursor(row_factory=dict_row) as cur:
             run = checked_run(cur, principal, run_id)
+            require_manifest_export(cur, run["library_id"], run["manifest"])
             if run["status"] != "done":
                 raise ValueError("research_run_not_done")
             result = run["result"]

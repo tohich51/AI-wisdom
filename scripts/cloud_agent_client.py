@@ -46,6 +46,12 @@ TOOLS = TOOLS | frozenset(
         "create_semantic_concept",
         "create_semantic_relation",
         "review_semantic_relation",
+        "publish_knowledge",
+        "list_jobs",
+        "read_library_policy",
+        "get_experience_summary",
+        "review_items",
+        "edit_knowledge",
     }
 )
 MAX_JSON = 65536
@@ -137,7 +143,7 @@ async def execute(command: str, params: dict, settings: dict) -> dict:
                 "grant_type": "client_credentials",
                 "client_id": settings["client_id"],
                 "client_secret": settings["client_secret"],
-                "scope": "openid",
+                "scope": "openid kb:read kb:contribute kb:experience kb:export",
             },
         )
         response.raise_for_status()

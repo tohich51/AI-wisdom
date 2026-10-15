@@ -104,6 +104,7 @@ class IdentitySettings:
     issuer: str
     audience: str
     client_id: str
+    authorized_parties: frozenset[str] = frozenset()
     jwks_url: str | None = None
     discovery_url: str | None = None
     required_scopes: frozenset[str] = frozenset()
@@ -142,6 +143,7 @@ class VerifiedIdentity:
     expires_at: dt.datetime
     provider_session_id: str | None = None
     email: str | None = None
+    client_id: str | None = None
 
     @property
     def principal_key(self) -> tuple[str, str]:
@@ -404,7 +406,10 @@ class TokenVerifier:
         # authorized party must be this client. A token minted for somebody
         # else, replayed here with our audience added, fails here.
         audience = claims.get("aud")
-        if isinstance(audience, list) and len(audience) > 1:
+        if self._settings.authorized_parties:
+            if claims.get("azp") not in self._settings.authorized_parties:
+                raise IdentityRejected("authorized_party_mismatch")
+        elif isinstance(audience, list) and len(audience) > 1:
             if claims.get("azp") != self._settings.client_id:
                 raise IdentityRejected("authorized_party_mismatch")
 
@@ -433,6 +438,7 @@ class TokenVerifier:
             raise IdentityRejected("expired")
 
         return VerifiedIdentity(
+            client_id=claims.get("azp") if isinstance(claims.get("azp"), str) else None,
             issuer=claims["iss"],
             subject=subject,
             principal_id=principal_id,

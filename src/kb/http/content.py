@@ -5,7 +5,7 @@ from uuid import UUID
 from fastapi import APIRouter, Query, Request
 from pydantic import BaseModel, ConfigDict, Field
 
-from kb.catalog import content, writes
+from kb.catalog import content, policies, workspace, writes
 from kb.http.libraries import Db, Me, mapped_errors
 from kb.ingestion import submit_processing
 
@@ -22,6 +22,7 @@ class ProcessInput(Input):
 
 
 class UseInput(Input):
+    idempotency_key: str | None = Field(default=None, min_length=1, max_length=200)
     rule_id: UUID
     version_no: int = Field(ge=1)
     expected_result: str | None = Field(default=None, max_length=4000)
@@ -29,6 +30,7 @@ class UseInput(Input):
 
 
 class OutcomeInput(Input):
+    idempotency_key: str | None = Field(default=None, min_length=1, max_length=200)
     observed_result: str | None = Field(default=None, max_length=4000)
     rating: int | None = Field(default=None, ge=1, le=5)
     rating_basis: str | None = Field(default=None, max_length=2000)
@@ -48,6 +50,18 @@ class ExportInput(Input):
 @router.get("/me")
 def me_route(me: Me):
     return {"principal_id": me.principal_id, "account_id": me.account_id}
+
+
+@router.get("/libraries/{library_id}/policy")
+def library_policy(library_id: UUID, conn: Db, me: Me):
+    with mapped_errors():
+        return policies.get_policy(conn, me, library_id)
+
+
+@router.put("/libraries/{library_id}/policy")
+def update_library_policy(library_id: UUID, body: policies.LibraryPolicyInput, conn: Db, me: Me):
+    with mapped_errors():
+        return policies.put_policy(conn, me, library_id, body)
 
 
 @router.get("/libraries/{library_id}/sources")
@@ -80,6 +94,30 @@ def job(job_id: UUID, conn: Db, me: Me):
         return writes.job_status(conn, me, job_id)
 
 
+@router.get("/jobs")
+def jobs(conn: Db, me: Me, library_id: UUID | None = None):
+    with mapped_errors():
+        return workspace.list_jobs(conn, me, library_id)
+
+
+@router.get("/experience-summary")
+def experience_summary(conn: Db, me: Me):
+    with mapped_errors():
+        return workspace.experience_summary(conn, me)
+
+
+@router.patch("/knowledge/{knowledge_id}")
+def edit_knowledge(knowledge_id: UUID, body: workspace.EditKnowledge, conn: Db, me: Me):
+    with mapped_errors():
+        return workspace.edit_knowledge(conn, me, knowledge_id, body)
+
+
+@router.post("/libraries/{library_id}/review")
+def review_batch(library_id: UUID, body: workspace.ReviewBatch, conn: Db, me: Me):
+    with mapped_errors():
+        return workspace.review_batch(conn, me, library_id, body)
+
+
 @router.get("/search")
 def search(
     request: Request,
@@ -88,6 +126,7 @@ def search(
     q: str = Query(min_length=1, max_length=2000),
     library_id: UUID | None = None,
     limit: int = Query(default=10, ge=1, le=50),
+    source_id: list[UUID] | None = Query(default=None, max_length=100),  # noqa: B008
 ):
     with mapped_errors():
         return content.search_knowledge(
@@ -97,6 +136,7 @@ def search(
             [library_id] if library_id else None,
             limit,
             semantic=getattr(request.app.state, "semantic_search", None),
+            source_ids=source_id,
         )
 
 

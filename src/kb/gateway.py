@@ -101,6 +101,7 @@ def create_app() -> FastAPI:
     index_html = (static / "index.html").read_text(encoding="utf-8")
     for asset in (
         "app.js",
+        "completion.js",
         "style.css",
         "research.js",
         "research-result.js",

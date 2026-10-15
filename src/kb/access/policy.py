@@ -40,6 +40,7 @@ class Principal:
     principal_id: UUID
     account_id: UUID
     generation_watermark: int = 1
+    cloud_client: bool = False
 
 
 def effective_role(grants: dict[UUID, LibraryRole], library_id: UUID) -> LibraryRole | None:
@@ -106,6 +107,10 @@ def transaction_identity(conn, principal: Principal):
                 "SELECT set_config('app.principal', %s, true)", (str(principal.principal_id),)
             )
             cur.execute("SELECT set_config('app.account', %s, true)", (str(principal.account_id),))
+            cur.execute(
+                "SELECT set_config('app.cloud_client', %s, true)",
+                ("true" if principal.cloud_client else "false",),
+            )
         yield conn
 
 
@@ -118,3 +123,4 @@ def clear_identity(conn) -> None:
     with conn.cursor() as cur:
         cur.execute("SELECT set_config('app.principal', '', false)")
         cur.execute("SELECT set_config('app.account', '', false)")
+        cur.execute("SELECT set_config('app.cloud_client', '', false)")

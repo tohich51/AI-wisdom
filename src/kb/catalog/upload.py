@@ -183,17 +183,16 @@ def _require_contributor(conn: psycopg.Connection, principal: Principal, library
     blob would be unreferenced, and an unreferenced blob per request is a way to
     fill a disk with a role that is not allowed to store anything.
 
-    It reads the caller's own grant row, which ``grant_read_own`` permits and
-    which returns nothing for anybody else, so this cannot be used to enumerate a
-    library's roster.
+    The effective role includes active group grants and membership. It returns
+    only the caller's role, never the library roster.
     """
     with transaction_identity(conn, principal), conn.cursor() as cur:
         cur.execute(
-            "SELECT role FROM kb.library_grant WHERE library_id = %s AND principal_id = %s",
-            (library_id, principal.principal_id),
+            "SELECT kb.effective_role(kb.current_principal(), %s)",
+            (library_id,),
         )
         row = cur.fetchone()
-    held = LibraryRole(row[0]) if row is not None else None
+    held = LibraryRole(row[0]) if row is not None and row[0] is not None else None
     authorize(
         principal,
         library_id,
@@ -582,6 +581,13 @@ def _replay(conn: psycopg.Connection, principal: Principal, ingest_id: UUID) -> 
 # --------------------------------------------------------------------- reading
 
 
+def _require_original_export(conn, principal, library_id):
+    from kb.catalog.policies import require_export
+
+    with transaction_identity(conn, principal), conn.cursor() as cur:
+        require_export(cur, [library_id])
+
+
 def describe_original(
     conn: psycopg.Connection, principal: Principal, source_id: UUID
 ) -> OriginalRead | None:
@@ -595,6 +601,7 @@ def describe_original(
     if described is None:
         return None
     _source, original, _url, _retrieved = described
+    _require_original_export(conn, principal, _source.library_id)
     return OriginalRead(original=original, content=b"", complete=True)
 
 
@@ -625,6 +632,7 @@ def read_original(
     if described is None:
         raise AccessDenied("no such source")
     _source, original, _url, _retrieved = described
+    _require_original_export(conn, principal, _source.library_id)
     if not store.exists(original.object_key):
         # The row and the blob have drifted apart. Refuse loudly.
         raise ObjectNotFound(f"no stored object for source {source_id}")

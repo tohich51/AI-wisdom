@@ -103,6 +103,11 @@ def test_revoked_dependency_hides_whole_result_note_and_comment(world):
         )
     second = parsed({**world, "lib": second_lib.id}, "Второй источник: назовите исходные данные.")
     with psycopg.connect(world["dsn"]) as conn:
+        with transaction_identity(conn, world["principal"]):
+            conn.execute(
+                "INSERT INTO kb.generation_policy(library_id,generation_allowed) VALUES(%s,true)",
+                (second_lib.id,),
+            )
         snapshot = capture_snapshot(conn, world["principal"], [first, second])
         run = complete_run(conn, world, snapshot, [first, second])
         with transaction_identity(conn, world["principal"]):

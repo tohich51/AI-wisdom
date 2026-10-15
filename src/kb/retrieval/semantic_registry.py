@@ -63,6 +63,7 @@ def capture(conn, principal: Principal, library_id: UUID) -> Snapshot:
         cur.execute("SELECT pg_advisory_xact_lock(hashtextextended(%s,91))", (str(library_id),))
         cur.execute(
             "SELECT generation FROM kb.library WHERE id=%s AND organisation_id=%s "
+            "AND kb.library_policy_allows(id,'external') "
             "AND kb.role_rank(kb.effective_role(kb.current_principal(),id))>=40 "
             "AND EXISTS(SELECT 1 FROM kb.membership m "
             "WHERE m.organisation_id=kb.library.organisation_id "
@@ -204,7 +205,8 @@ def pending_libraries(conn, principal: Principal) -> list[UUID]:
         rows = conn.execute(
             "SELECT l.id FROM kb.library l LEFT JOIN kb.index_account a ON a.library_id=l.id "
             "LEFT JOIN kb.index_generation g ON g.library_id=l.id AND g.state='current' "
-            "WHERE l.organisation_id=%s AND EXISTS(SELECT 1 FROM kb.membership m "
+            "WHERE l.organisation_id=%s AND kb.library_policy_allows(l.id,'external') "
+            "AND EXISTS(SELECT 1 FROM kb.membership m "
             "WHERE m.organisation_id=l.organisation_id AND m.principal_id=kb.current_principal() "
             "AND m.status='active') "
             "AND kb.role_rank(kb.effective_role(kb.current_principal(),l.id))>=40 "

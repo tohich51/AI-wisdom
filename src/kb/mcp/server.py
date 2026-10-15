@@ -9,25 +9,31 @@ from fastapi import HTTPException
 from fastapi.encoders import jsonable_encoder
 from mcp.server import MCPServer
 from mcp.server.auth.provider import AccessToken
+from mcp.server.auth.routes import create_protected_resource_routes
 from mcp.server.auth.settings import AuthSettings
 from mcp.server.mcpserver import Context
 from mcp.server.transport_security import TransportSecuritySettings
 from mcp_types import CallToolResult, TextContent
 from pydantic import AnyHttpUrl, ValidationError
 
-from kb.access.policy import Principal
-from kb.catalog import content, libraries, projects, upload, writes
+from kb.access.bearer_policy import HANDLER_SCOPES, bearer_principal, require_scope
+from kb.catalog import content, libraries, policies, projects, upload, workspace, writes
 from kb.contracts.enums import LibraryKind
 from kb.contracts.mcp_tools import (
     MCP_TOOLS,
+    EditKnowledgeArgs,
+    ExperienceSummaryArgs,
     ExportSkillArgs,
     GetProjectContextArgs,
     GetRuleArgs,
     JobStatusArgs,
+    ListJobsArgs,
     ListLibrariesArgs,
     PublishKnowledgeArgs,
+    ReadLibraryPolicyArgs,
     ReadSourceArgs,
     RecordOutcomeArgs,
+    ReviewItemsArgs,
     SearchKnowledgeArgs,
     StartUseArgs,
     SubmitSourceArgs,
@@ -44,7 +50,7 @@ def build_mcp(app, hosts):
                 identity = await anyio.to_thread.run_sync(app.state.resolve_token, token)
                 return AccessToken(
                     token=token,
-                    client_id=os.environ["KB_MCP_CLIENT_ID"],
+                    client_id=identity.client_id or os.environ["KB_MCP_CLIENT_ID"],
                     scopes=list(identity.scopes),
                     subject=identity.subject,
                     expires_at=int(identity.expires_at.timestamp()),
@@ -88,8 +94,9 @@ def build_mcp(app, hosts):
             raise ValueError("authentication_required")
         # Re-check current membership on every tool call, even an existing session.
         identity = app.state.resolve_token(header[7:])
-        principal = Principal(identity.principal_id, identity.account_id)
         try:
+            require_scope(identity, HANDLER_SCOPES.get(handler.__name__))
+            principal = bearer_principal(identity)
             with app.state.db_pool.connection() as conn:
                 return jsonable_encoder(handler(conn, principal, *args, **kwargs))
         except Exception:
@@ -98,6 +105,58 @@ def build_mcp(app, hosts):
     from kb.mcp.research import install_tools
 
     install_tools(server, call)
+
+    @server.tool()
+    def list_jobs(ctx: Context, library_id: UUID | None = None):
+        args = ListJobsArgs(library_id=library_id)
+        return call(ctx, workspace.list_jobs, args.library_id)
+
+    @server.tool()
+    def read_library_policy(library_id: UUID, ctx: Context):
+        args = ReadLibraryPolicyArgs(library_id=library_id)
+        return call(ctx, policies.get_policy, args.library_id)
+
+    @server.tool()
+    def get_experience_summary(ctx: Context):
+        ExperienceSummaryArgs()
+        return call(ctx, workspace.experience_summary)
+
+    @server.tool()
+    def review_items(
+        library_id: UUID,
+        item_kind: Literal["knowledge", "rule"],
+        item_ids: list[UUID],
+        decision: Literal["publish", "reject"],
+        ctx: Context,
+    ):
+        args = ReviewItemsArgs(
+            library_id=library_id, item_kind=item_kind, item_ids=item_ids, decision=decision
+        )
+        body = workspace.ReviewBatch(
+            item_kind=args.item_kind,
+            item_ids=[str(value) for value in args.item_ids],
+            decision=args.decision,
+        )
+        return call(ctx, workspace.review_batch, args.library_id, body)
+
+    @server.tool()
+    def edit_knowledge(
+        knowledge_id: UUID,
+        statement: str,
+        expected_statement: str,
+        kind: Literal["assertion", "definition", "recommendation", "example"],
+        ctx: Context,
+    ):
+        args = EditKnowledgeArgs(
+            knowledge_id=knowledge_id,
+            statement=statement,
+            expected_statement=expected_statement,
+            kind=kind,
+        )
+        body = workspace.EditKnowledge(
+            statement=args.statement, expected_statement=args.expected_statement, kind=args.kind
+        )
+        return call(ctx, workspace.edit_knowledge, args.knowledge_id, body)
 
     @server.tool()
     def list_libraries(
@@ -119,9 +178,14 @@ def build_mcp(app, hosts):
         library_ids: list[UUID] | None = None,
         limit: int = 10,
         use_generation: bool = False,
+        source_ids: list[UUID] | None = None,
     ):
         args = SearchKnowledgeArgs(
-            query=query, library_ids=library_ids, limit=limit, use_generation=use_generation
+            query=query,
+            library_ids=library_ids,
+            limit=limit,
+            use_generation=use_generation,
+            source_ids=source_ids,
         )
         if args.use_generation:
             raise ValueError("generation_is_not_retrieval")
@@ -132,6 +196,7 @@ def build_mcp(app, hosts):
             args.library_ids,
             args.limit,
             semantic=getattr(app.state, "semantic_search", None),
+            source_ids=args.source_ids,
         )
 
     @server.tool()
@@ -177,6 +242,7 @@ def build_mcp(app, hosts):
         note: str | None = None,
         expected_result: str | None = None,
         where_applied: str | None = None,
+        idempotency_key: str | None = None,
     ):
         args = StartUseArgs(
             rule_id=rule_id,
@@ -184,6 +250,7 @@ def build_mcp(app, hosts):
             note=note,
             expected_result=expected_result,
             where_applied=where_applied,
+            idempotency_key=idempotency_key,
         )
         result = call(
             ctx,
@@ -192,6 +259,7 @@ def build_mcp(app, hosts):
             args.version_no,
             args.expected_result,
             args.where_applied,
+            idempotency_key=args.idempotency_key,
         )
         return {"use_id": result["id"], "state": result["state"]}
 
@@ -204,6 +272,7 @@ def build_mcp(app, hosts):
         rating_basis: str | None = None,
         is_correction: bool = False,
         confirm_applied: bool = False,
+        idempotency_key: str | None = None,
     ):
         args = RecordOutcomeArgs(
             use_id=use_id,
@@ -212,6 +281,7 @@ def build_mcp(app, hosts):
             rating_basis=rating_basis,
             is_correction=is_correction,
             confirm_applied=confirm_applied,
+            idempotency_key=idempotency_key,
         )
         if args.confirm_applied:
             call(ctx, writes.mark_applied, args.use_id)
@@ -223,6 +293,7 @@ def build_mcp(app, hosts):
             args.rating,
             args.rating_basis,
             args.is_correction,
+            idempotency_key=args.idempotency_key,
         )
 
     @server.tool()
@@ -290,5 +361,20 @@ def build_mcp(app, hosts):
             allowed_hosts=hosts,
             allowed_origins=[resource.rsplit("/mcp", 1)[0]],
         ),
+    )
+    # Supported action scopes are advertised without requiring every client
+    # to hold all of them. The actual tool class is checked on each call.
+    child.routes[:0] = create_protected_resource_routes(
+        resource_url=AnyHttpUrl(resource),
+        authorization_servers=[AnyHttpUrl(os.environ["KB_OIDC_ISSUER"])],
+        scopes_supported=[
+            "openid",
+            "profile",
+            "email",
+            "kb:read",
+            "kb:contribute",
+            "kb:experience",
+            "kb:export",
+        ],
     )
     return server, child

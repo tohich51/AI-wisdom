@@ -85,3 +85,13 @@ pre { margin: 0.75rem 0; white-space: pre-wrap; overflow-wrap: anywhere; font: i
 section#maps-tab { grid-template-columns: minmax(0, 1fr); }
 #maps-workspace { min-width: 0; max-width: 100%; }
 .map-surface { min-width: 0; max-width: 100%; overflow: hidden; }
+.completion-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 18rem), 1fr)); gap: 1rem; }
+.completion-card { display: grid; align-content: start; gap: 0.5rem; }
+.completion-field { display: grid; gap: 0.35rem; }
+.completion-check { grid-template-columns: auto 1fr; align-items: center; }
+.completion-check input { width: 1.1rem; min-height: 1.1rem; }
+.completion-review-item { display: flex; align-items: flex-start; gap: 0.65rem; margin: 0.65rem 0; }
+.completion-review-item input { width: 1.1rem; min-height: 1.1rem; flex: 0 0 auto; }
+.completion-error { color: #8b2525; }
+.completion-empty { color: var(--muted); }
+.completion-library, .completion-experience { display: grid; gap: 1rem; }

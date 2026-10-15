@@ -37,15 +37,8 @@ def semantic_library(world, admin):
     )
     world.knowledge(lib, title="Unique canonical marketing statement")
     yield lib
-    # Published provenance is intentionally immutable in the existing product.
-    # Such fixtures remain only until the ephemeral pg_server tears down its DB.
-    if not admin.execute(
-        "SELECT 1 FROM kb.knowledge_provenance p JOIN kb.knowledge k "
-        "ON k.id=p.knowledge_id WHERE k.library_id=%s LIMIT 1",
-        (lib,),
-    ).fetchone():
-        with transaction_identity(admin, world.manager):
-            admin.execute("DELETE FROM kb.library WHERE id=%s", (lib,))
+    # Published knowledge and its provenance are intentionally immutable.
+    # The session-scoped ephemeral PostgreSQL destroys this whole catalogue.
 
 
 def current(provisioner, world, lib):
@@ -70,6 +63,62 @@ class ReaderDouble:
             self.items
             if self.items is not None
             else [Candidate(self.build.document_uri(self.build.snapshot.documents[0]), 0.8)]
+        )
+
+
+@pytest.mark.parametrize("semantic_enabled", [False, True])
+def test_source_filter_precedes_ranking_and_limit_and_cannot_reveal_unknown_source(
+    semantic_library, provisioner, world, admin, gateway, semantic_enabled
+):
+    sources = [uuid4(), uuid4()]
+    ids = []
+    for source_id in sources:
+        admin.execute(
+            "INSERT INTO kb.source(id,library_id,title,media_type,submitted_by,"
+            "object_key,content_hash) "
+            "VALUES(%s,%s,'Synthetic filter','text/plain',%s,%s,%s)",
+            (source_id, semantic_library, world.owner, source_id.hex, "b" * 64),
+        )
+        ident = world.knowledge(semantic_library, title="Unique filter needle", publication="draft")
+        admin.execute(
+            "INSERT INTO kb.knowledge_provenance(knowledge_id,source_id) VALUES(%s,%s)",
+            (ident, source_id),
+        )
+        admin.execute("UPDATE kb.knowledge SET publication='published' WHERE id=%s", (ident,))
+        ids.append(ident)
+    service = None
+    if semantic_enabled:
+        build = current(provisioner, world, semantic_library)
+        docs = {d.id: d for d in build.snapshot.documents}
+        reader = ReaderDouble(
+            build,
+            items=[
+                Candidate(build.document_uri(docs[i]), 0.9 - n * 0.1) for n, i in enumerate(ids)
+            ],
+        )
+        service = SemanticSearch(reader)
+    result = search_knowledge(
+        gateway,
+        world.reader,
+        "Unique filter needle",
+        [semantic_library],
+        1,
+        semantic=service,
+        source_ids=[sources[1]],
+    )
+    assert [h["id"] for h in result["hits"]] == [ids[1]]
+    for source_scope in [[], [uuid4()]]:
+        assert (
+            search_knowledge(
+                gateway,
+                world.reader,
+                "Unique filter needle",
+                [semantic_library],
+                1,
+                semantic=service,
+                source_ids=source_scope,
+            )["hits"]
+            == []
         )
 
 

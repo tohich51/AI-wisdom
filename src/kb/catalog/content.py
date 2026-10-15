@@ -9,7 +9,9 @@ from __future__ import annotations
 import datetime as dt
 import hashlib
 import json
+import tempfile
 from collections.abc import Sequence
+from pathlib import Path
 from typing import Any
 from uuid import UUID
 
@@ -17,6 +19,8 @@ import psycopg
 from psycopg.rows import dict_row
 
 from kb.access.policy import AccessDenied, Principal, transaction_identity
+from kb.catalog.policies import require_export
+from kb.vendor.book_to_skill.validate_skill import audit as audit_skill
 
 __all__ = [
     "export_skill",
@@ -401,12 +405,15 @@ def lexical_search_knowledge(
     query: str,
     library_ids: Sequence[UUID] | None = None,
     limit: int = 10,
+    *,
+    source_ids: Sequence[UUID] | None = None,
 ) -> dict[str, Any]:
     """Perform deterministic lexical retrieval over RLS-visible knowledge."""
     _require_principal(principal)
     if not isinstance(query, str) or not query.strip():
         raise ValueError("query must not be empty")
     scoped_library_ids = _normalise_uuids(library_ids, "library_ids", deny_none=False)
+    sources = _normalise_uuids(source_ids, "source_ids", deny_none=False)
     limit = _bounded_integer(limit, "limit", minimum=1, maximum=50)
 
     with transaction_identity(conn, principal), conn.cursor(row_factory=dict_row) as cursor:
@@ -432,6 +439,10 @@ def lexical_search_knowledge(
                   %s::uuid[] IS NULL
                   OR k.library_id = ANY(%s::uuid[])
               )
+              AND (%s::uuid[] IS NULL OR EXISTS (
+                  SELECT 1 FROM kb.knowledge_provenance p JOIN kb.source s ON s.id=p.source_id
+                  WHERE p.knowledge_id=k.id AND s.id=ANY(%s::uuid[])
+              ))
             ORDER BY score DESC, k.created_at DESC, k.id
             LIMIT %s
             """,
@@ -439,6 +450,8 @@ def lexical_search_knowledge(
                 query,
                 list(scoped_library_ids) if scoped_library_ids is not None else None,
                 list(scoped_library_ids) if scoped_library_ids is not None else None,
+                list(sources) if sources is not None else None,
+                list(sources) if sources is not None else None,
                 limit,
             ),
         )
@@ -454,16 +467,21 @@ def lexical_search_knowledge(
     }
 
 
-def search_knowledge(conn, principal, query, library_ids=None, limit=10, *, semantic=None):
+def search_knowledge(
+    conn, principal, query, library_ids=None, limit=10, *, semantic=None, source_ids=None
+):
     """Shared HTTP/MCP search; the configured service owns semantic retrieval."""
     _require_principal(principal)
     if not isinstance(query, str) or not query.strip() or len(query) > 2000:
         raise ValueError("query must contain 1..2000 characters")
     scopes = _normalise_uuids(library_ids, "library_ids", deny_none=False)
+    sources = _normalise_uuids(source_ids, "source_ids", deny_none=False)
     limit = _bounded_integer(limit, "limit", minimum=1, maximum=50)
     if semantic is not None:
+        if sources is not None:
+            return semantic.search(conn, principal, query, scopes, limit, source_ids=sources)
         return semantic.search(conn, principal, query, scopes, limit)
-    return lexical_search_knowledge(conn, principal, query, scopes, limit)
+    return lexical_search_knowledge(conn, principal, query, scopes, limit, source_ids=sources)
 
 
 def list_rules(
@@ -546,6 +564,7 @@ def export_skill(
     requested_ids = tuple(sorted(requested_ids, key=lambda value: value.bytes))
 
     with transaction_identity(conn, principal), conn.cursor(row_factory=dict_row) as cursor:
+        require_export(cursor, [library_id])
         cursor.execute(
             """
             SELECT r.id, r.library_id, r.lineage_id, r.version_no, r.title,
@@ -564,12 +583,49 @@ def export_skill(
         if len(rules) != len(requested_ids):
             raise AccessDenied("forbidden")
         rules = _decorate_rules(cursor, rules)
+        cursor.execute(
+            "SELECT DISTINCT s.id,s.library_id,s.content_hash,s.title,s.author,s.edition "
+            "FROM kb.rule_provenance p JOIN kb.source s ON s.id=p.source_id "
+            "WHERE p.rule_id=ANY(%s::uuid[]) ORDER BY s.id",
+            (list(requested_ids),),
+        )
+        sources = [dict(row) for row in cursor.fetchall()]
+        require_export(cursor, [source["library_id"] for source in sources])
 
     markdown = _build_skill_markdown(rules)
+    markdown = (
+        f"---\nname: ai-wisdom-{library_id}\n"
+        "description: Проверенные правила библиотеки.\n---\n\n" + markdown
+    )
+    # Reuse the pinned upstream validator; generated content alone enters the
+    # private temporary directory. No installation or agent permission is granted.
+    with tempfile.TemporaryDirectory(prefix="kb-skill-") as directory:
+        skill_path = Path(directory) / "SKILL.md"
+        skill_path.write_text(markdown, encoding="utf-8")
+        for lens in ("hermes", "opencode", "claude"):
+            errors, _warnings = audit_skill(skill_path, lens=lens)
+            if errors:
+                raise ValueError("portable_skill_validation_failed")
     encoded = markdown.encode("utf-8")
+    manifest = {
+        "schema_version": 1,
+        "library_id": str(library_id),
+        "content_sha256": hashlib.sha256(encoded).hexdigest(),
+        "rules": [
+            {"id": str(r["id"]), "lineage_id": str(r["lineage_id"]), "version_no": r["version_no"]}
+            for r in rules
+        ],
+        "sources": [
+            {key: str(value) if isinstance(value, UUID) else value for key, value in s.items()}
+            for s in sources
+        ],
+    }
+    manifest_json = json.dumps(manifest, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
     return {
         "filename": "SKILL.md",
         "content": markdown,
         "sha256": hashlib.sha256(encoded).hexdigest(),
         "bytes": len(encoded),
+        "manifest": manifest,
+        "manifest_sha256": hashlib.sha256(manifest_json.encode("utf-8")).hexdigest(),
     }

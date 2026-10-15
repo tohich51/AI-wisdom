@@ -22,7 +22,12 @@ async def test_publication_rechecks_transport_identity(monkeypatch):
     def resolve(token):
         assert token == bearer
         resolutions.append(token)
-        return SimpleNamespace(principal_id=principal_id, account_id=account_id)
+        return SimpleNamespace(
+            principal_id=principal_id,
+            account_id=account_id,
+            scopes=frozenset({"kb:contribute"}),
+            client_id="fixture",
+        )
 
     def publish(db, principal, ident, *, knowledge=False):
         assert db is conn
