@@ -553,21 +553,33 @@ router.register('jobs', {
 // экран без единого сообщения.
 //
 // Блок добавляется В НАЧАЛО контейнера, а не заменяет его содержимое: монтирование
-// обращается к собственным элементам экрана (library-list, access-workspace и
-// подобным), и если сбой удалит их, повтор уже ничего не сможет перерисовать.
-// Так повтор пересобирает экран поверх сохранённой разметки.
+// обращается к постоянным элементам экрана (library-list, library-detail,
+// create-library, search для библиотек; uses-list для опыта), и если сбой удалит их,
+// повтор уже ничего не сможет перерисовать. Так повтор пересобирает экран поверх
+// сохранённого каркаса.
+function routeErrorHost(target) {
+  return byId(target.name + '-workspace') || byId(target.name + '-tab');
+}
 function routeFailure(target, error) {
-  const host = byId(target.name + '-workspace') || byId(target.name + '-tab');
+  const host = routeErrorHost(target);
   if (!host) return;
-  host.querySelectorAll('.route-error').forEach(node => node.remove());
+  clearRouteFailure(target);
   const box = node('div', null, {class: 'route-error', role: 'alert'});
   box.append(node('h3', 'Не удалось загрузить раздел'));
   box.append(node('p', error && error.message ? error.message : 'Неизвестная ошибка загрузки.'));
-  box.append(button('Повторить', () => { box.remove(); router.refresh(); }));
+  box.append(button('Повторить', () => { clearRouteFailure(target); router.refresh(); }));
   host.prepend(box);
+}
+// Успешный переход тоже чистит блок: он живёт в постоянном каркасе раздела, и без
+// этого он остался бы висеть на следующем успешном посещении того же адреса.
+function clearRouteFailure(target) {
+  const host = routeErrorHost(target);
+  if (host) host.querySelectorAll('.route-error').forEach(node => node.remove());
 }
 router.onChange((current, previous, error) => {
   if (previous && current && previous.name !== current.name) router.focusHeading();
-  if (current && error) routeFailure(current, error);
+  if (!current) return;
+  if (error) routeFailure(current, error);
+  else clearRouteFailure(current);
 });
 router.start();
