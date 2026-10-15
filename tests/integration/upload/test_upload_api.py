@@ -60,7 +60,12 @@ def test_a_contributor_upload_creates_a_source_a_manifest_and_an_attempt(
     assert body["source"]["submitted_by"] == str(people.owner)
     assert body["original"]["byte_size"] == len(BOOK)
     assert body["original"]["backend"] == "local"
-    assert response.headers["Location"] == f"/sources/{body['source']['id']}/original"
+    assert response.headers["Location"] == f"/api/v1/sources/{body['source']['id']}/original"
+    # The canonical prefix, whatever the app served the POST under. Both
+    # prefixes answer this one operation, so the emitted value cannot depend on
+    # which one the client used; the composed both-prefix behaviour, and the
+    # fact that the emitted path is really servable, are proved in
+    # test_original_delivery.py.
 
     # one row of each, all by the migration role so RLS is not in the way
     assert len(world.sources_in(library)) == 1

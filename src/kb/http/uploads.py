@@ -31,14 +31,26 @@ request maps to ``app.state``.
 a slice; the access check happens on every call and there is no signed URL,
 because a signed URL would keep working after the grant is revoked
 (SCALING.md §5).
+
+**A read holds no database connection while it streams.** The other two routes
+take the shared ``Db`` dependency, which is right for them: a generator
+dependency is torn down when the response is done, and their response is done
+when the handler returns. For a stream that ordering would keep a pooled
+connection checked out for the length of a download, and the gateway's pool is
+five. So ``read_original`` takes the same shared factory as its own lease and
+releases it before the response exists — see :func:`_db_lease`.
 """
 
 from __future__ import annotations
 
+import contextlib
 import re
+from collections.abc import AsyncIterator
 from typing import Annotated
 from uuid import UUID
 
+import anyio
+import psycopg
 from fastapi import (
     APIRouter,
     File,
@@ -50,9 +62,10 @@ from fastapi import (
     UploadFile,
     status,
 )
+from fastapi.responses import StreamingResponse
 
 from kb.access.policy import AccessDenied
-from kb.adapters.originals import LocalBlobStore, ObjectNotFound, StorageError
+from kb.adapters.originals import LocalBlobStore, StorageError
 from kb.catalog import upload as catalog
 from kb.catalog.upload_fetch import UrlRefused
 from kb.contracts.operations import CANONICAL_PREFIX
@@ -73,6 +86,71 @@ MAX_UPLOAD_BYTES = catalog.DEFAULT_MAX_UPLOAD_BYTES
 # fixed by RFC 9110, so it is written out rather than aliased to a name that
 # moved.
 HTTP_416 = 416
+
+# Media types a browser parses *and runs* in this origin: HTML and XHTML, SVG
+# (a document with a <script> element), XML (which can carry an XSLT
+# stylesheet), and JavaScript. A submitted original is user content, so serving
+# any of these inline would be serving somebody else's page under the
+# application's own origin.
+#
+# PDF is deliberately not in this set, and the decision is worth its own line.
+# It is a plugin document, but every browser honours the declared type for it,
+# it is not executed in this origin, and this product's originals are mostly
+# books — an unconditional ``attachment`` would mean no source ever opens in the
+# reader. The polyglot case that ``attachment`` would also have covered — a file
+# that is a PDF and a page at once — is covered by ``nosniff`` on every
+# original, which is the directive that actually forbids re-interpretation.
+_ACTIVE_MEDIA_TYPES = frozenset(
+    {
+        "application/javascript",
+        "application/xhtml+xml",
+        "application/xml",
+        "image/svg+xml",
+        "text/html",
+        "text/javascript",
+        "text/xml",
+    }
+)
+
+# Enough to neutralise an active document on its own, and small enough to read:
+# a unique opaque origin, no plugins, no framing, no base URI to rewrite
+# relative links into. It is a second line — ``attachment`` and ``nosniff`` are
+# the first two — not a replacement for them.
+_ACTIVE_CONTENT_SECURITY_POLICY = (
+    "sandbox; default-src 'none'; frame-ancestors 'none'; base-uri 'none'"
+)
+
+
+def is_active_media(media_type: str) -> bool:
+    """Whether a media type may execute or embed itself in the app's origin."""
+    base = media_type.split(";", 1)[0].strip().lower()
+    return base in _ACTIVE_MEDIA_TYPES
+
+
+def _db_lease(request: Request) -> contextlib.AbstractContextManager[psycopg.Connection]:
+    """A pooled connection this route owns, instead of one a dependency owns.
+
+    ``kb.http.libraries.db_connection`` is a generator dependency, and FastAPI
+    runs its teardown *after* the response body is sent. For a JSON route that
+    is exactly the right order. For a streamed original it means the lease is
+    held for the length of the download, and the gateway's pool has five
+    connections: five concurrent readers would be the whole pool, and the fifth
+    request for anything at all would wait for a book to finish.
+
+    So this takes the same shared factory that the dependency takes — the
+    factory is still the only way to a connection, and ``app.state`` still never
+    publishes a pool — and releases the lease itself, before the response
+    object exists. The resolver is called first for the same reason the
+    dependency calls it: identity is established before a connection is checked
+    out, not after.
+    """
+    resolver = getattr(request.app.state, "resolve_principal", None)
+    if resolver is not None:
+        resolver(request)
+    factory = getattr(request.app.state, "db_connection", None)
+    if factory is None:
+        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, "database pool is not configured")
+    return factory()
 
 
 def blob_store(request: Request) -> LocalBlobStore:
@@ -104,7 +182,6 @@ def _upload_errors():
     ``StorageError`` is the volume's problem, not the caller's, so 503: telling a
     caller "bad request" for a full disk teaches operators to ignore 400s.
     """
-    import contextlib
 
     @contextlib.contextmanager
     def _ctx():
@@ -266,10 +343,60 @@ def submit_from_url(
 # ---------------------------------------------------------------------- read
 
 
+async def _original_body(delivery: catalog.OriginalDelivery) -> AsyncIterator[bytes]:
+    """The delivery as bounded chunks, with a close that survives cancellation.
+
+    Why this is an *async* generator and not a sync one handed to
+    ``StreamingResponse``: Starlette runs a sync iterator in a worker thread and
+    takes the next item in a threadpool hop, so a cancelled request cancels the
+    hop and not the generator — the descriptor would then be released only when
+    the generator happened to be collected. Here the read is awaited, so the
+    cancellation lands *inside* this frame and the ``finally`` below runs on
+    every way out: a client that disconnects halfway through a book, an
+    exception in the middle of the body, and the ordinary end of the stream all
+    release the same descriptor, exactly once.
+
+    Each chunk is read in a worker thread, so a slow volume does not block the
+    event loop that is also serving every other request.
+    """
+    reader = delivery.reader
+    try:
+        while True:
+            chunk = await anyio.to_thread.run_sync(reader.read_chunk)
+            if not chunk:
+                return
+            yield chunk
+    finally:
+        delivery.close()
+
+
+def _original_headers(original: catalog.Original) -> dict[str, str]:
+    """The response headers for one original, active media type or not.
+
+    ``nosniff`` is on every original: without it a browser may ignore the
+    declared type and render an unlabelled body as HTML, which turns any upload
+    into stored cross-site scripting on the application's own origin. For an
+    active type the answer is stronger still — the bytes are an attachment, so
+    there is no document to script at all, and a sandbox CSP behind it in case a
+    client ignores the disposition.
+    """
+    headers = {
+        "Accept-Ranges": "bytes",
+        "ETag": f'"{original.content_hash}"',
+        # The bytes are addressed by content, so a cache may hold them as long
+        # as it likes; a new grant never makes a wrong body correct.
+        "Cache-Control": "private, max-age=3600",
+        "X-Content-Type-Options": "nosniff",
+    }
+    if is_active_media(original.media_type):
+        headers["Content-Disposition"] = "attachment"
+        headers["Content-Security-Policy"] = _ACTIVE_CONTENT_SECURITY_POLICY
+    return headers
+
+
 @router.get("/sources/{source_id}/original")
 def read_original(
     source_id: UUID,
-    conn: Db,
     me: Me,
     request: Request,
     range_header: Annotated[str | None, Header(alias="Range")] = None,
@@ -279,55 +406,67 @@ def read_original(
     404 for a source the caller may not open and for one that does not exist —
     the same answer, because the difference is a directory of invisible objects.
     A revoked grant closes this immediately: no URL keeps working.
+
+    The body is streamed from an already-verified descriptor in bounded chunks,
+    and the database lease is closed before the response exists, so the cost of
+    a download is one file descriptor and one buffer rather than the object and
+    a pooled connection. A whole object is proved against its content address on
+    the way out; a Range is not re-proved from the beginning, which is what
+    makes a reader's dozen range requests cheap instead of a dozen full reads.
     """
     store = blob_store(request)
-    described = catalog.describe_original(conn, me, source_id)
-    if described is None:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "no such source")
-    size = described.original.byte_size
-    bounds = _range_bounds(range_header, size)
-    try:
-        result = catalog.read_original(
-            conn,
-            me,
-            store,
-            source_id,
-            start=bounds[0] if bounds else None,
-            stop=bounds[1] if bounds else None,
-        )
-    except AccessDenied as exc:  # pragma: no cover - the check above already ran
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "no such source") from exc
-    except ObjectNotFound as exc:
-        # The row and the blob have drifted apart. Refuse; do not serve a
-        # substitute.
-        raise HTTPException(
-            status.HTTP_503_SERVICE_UNAVAILABLE, "the original is unavailable"
-        ) from exc
-    except StorageError as exc:
-        raise HTTPException(
-            status.HTTP_503_SERVICE_UNAVAILABLE, "the original is unavailable"
-        ) from exc
+    with _db_lease(request) as conn:
+        described = catalog.describe_original(conn, me, source_id)
+        if described is None:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "no such source")
+        size = described.original.byte_size
+        # Validated against the real size before any data moves, so a bad range
+        # is a 416 and not a truncated download.
+        bounds = _range_bounds(range_header, size)
+        try:
+            delivery = catalog.open_original(
+                conn,
+                me,
+                store,
+                source_id,
+                start=bounds[0] if bounds else None,
+                stop=bounds[1] if bounds else None,
+            )
+        except AccessDenied as exc:  # pragma: no cover - the check above already ran
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "no such source") from exc
+        except StorageError as exc:
+            # The row and the blob have drifted apart, or the bytes are not the
+            # bytes the key names. Refuse; do not serve a substitute.
+            raise HTTPException(
+                status.HTTP_503_SERVICE_UNAVAILABLE, "the original is unavailable"
+            ) from exc
 
-    headers = {
-        "Accept-Ranges": "bytes",
-        "ETag": f'"{result.original.content_hash}"',
-        # The bytes are addressed by content, so a cache may hold them as long as
-        # it likes; a new grant never makes a wrong body correct.
-        "Cache-Control": "private, max-age=3600",
-    }
-    if result.complete:
-        return Response(
-            content=result.content, media_type=result.original.media_type, headers=headers
+    # The lease is closed here. Everything below is file I/O on a descriptor
+    # that is already open and already proved: no SQL, no transaction, no
+    # pooled connection held for the length of the download.
+    headers = _original_headers(delivery.original)
+    headers["Content-Length"] = str(delivery.length)
+    if delivery.complete:
+        return StreamingResponse(
+            _original_body(delivery),
+            media_type=delivery.original.media_type,
+            headers=headers,
+            status_code=status.HTTP_200_OK,
         )
-    start = bounds[0] if bounds else 0
-    end = start + max(len(result.content) - 1, 0)
+    start = delivery.start
+    end = start + max(delivery.length - 1, 0)
     headers["Content-Range"] = f"bytes {start}-{end}/{size}"
-    return Response(
-        content=result.content,
-        media_type=result.original.media_type,
+    return StreamingResponse(
+        _original_body(delivery),
+        media_type=delivery.original.media_type,
         headers=headers,
         status_code=status.HTTP_206_PARTIAL_CONTENT,
     )
 
 
-__all__ = ["MAX_UPLOAD_BYTES", "blob_store", "router"]
+__all__ = [
+    "MAX_UPLOAD_BYTES",
+    "blob_store",
+    "is_active_media",
+    "router",
+]
