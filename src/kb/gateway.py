@@ -102,6 +102,7 @@ def create_app() -> FastAPI:
     for asset in (
         "app.js",
         "completion.js",
+        "rule-evidence.js",
         "style.css",
         "research.js",
         "research-result.js",

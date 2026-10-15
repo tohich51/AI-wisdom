@@ -303,12 +303,14 @@ async function openLibrary(lib) {
   await window.WisdomCompletion.enhanceLibrary(root, lib, featureHost);
 }
 function ruleEditor(lib, rule) {
+  let evidence;
   dialogForm(rule ? 'Новая версия правила' : 'Новое правило', form => {
     for (const [title, key, type] of [['Название', 'title', 'text'], ['Когда применять', 'when_to_apply', 'textarea'], ['Входные данные — по одному на строку', 'inputs', 'textarea'], ['Условия', 'preconditions', 'textarea'], ['Шаги — по одному на строку', 'actions', 'textarea'], ['Исключения', 'exceptions', 'textarea'], ['Ожидаемый эффект', 'expected_effect', 'textarea'], ['Как проверить', 'verification', 'textarea']]) field(form, title, key, Array.isArray(rule?.[key]) ? rule[key].join('\n') : rule?.[key], type);
+    evidence = window.WisdomRuleEvidence.mount(form, {api, libraryId: lib.id, initialIds: (rule?.provenance ?? []).map(p => p.fragment_id).filter(Boolean)});
   }, async data => {
     const body = Object.fromEntries(data); for (const key of ['inputs', 'preconditions', 'actions', 'exceptions']) body[key] = body[key].split('\n').filter(v => v.trim());
     for (const key of ['when_to_apply', 'expected_effect', 'verification']) body[key] ||= null;
-    body.fragment_ids = (rule?.provenance ?? []).map(p => p.fragment_id).filter(Boolean);
+    body.fragment_ids = evidence.selectedIds();
     await post('/api/libraries/' + lib.id + '/rules' + (rule ? '?replaces=' + rule.id : ''), body); await openLibrary(lib);
   });
 }
