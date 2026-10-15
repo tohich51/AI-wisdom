@@ -6,7 +6,7 @@ from uuid import uuid4
 import pytest
 from pydantic import ValidationError
 
-from kb.research.model import Draft
+from kb.research.generation import Draft
 from kb.research.references import materialize_references, reference_schema
 from kb.research.validation import validate_draft
 

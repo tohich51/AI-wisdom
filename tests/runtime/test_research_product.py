@@ -9,8 +9,9 @@ from test_runtime import runtime_db as runtime_db
 from test_runtime import world as world
 
 from kb.access.policy import AccessDenied, transaction_identity
-from kb.catalog import graphs, notes, research, research_rules, semantic, writes
-from kb.jobs.research_worker import run_research
+from kb.catalog import graphs, writes
+from kb.jobs.research import run_research
+from kb.research import notes, rule_handoff, runs, semantic
 
 pytestmark = pytest.mark.integration
 
@@ -18,7 +19,7 @@ pytestmark = pytest.mark.integration
 def execute(world, monkeypatch, kind="research"):
     source_id = parsed(world, "Измерьте результат эксперимента. Сегмент определяет аудиторию.")
     with psycopg.connect(world["dsn"]) as conn:
-        submitted = research.submit_research(
+        submitted = runs.submit_research(
             conn,
             world["principal"],
             world["lib"],
@@ -70,7 +71,7 @@ def execute(world, monkeypatch, kind="research"):
             request=httpx.Request("POST", url),
         )
 
-    monkeypatch.setattr("kb.jobs.research_worker.httpx.post", provider)
+    monkeypatch.setattr("kb.jobs.research.httpx.post", provider)
     run_research(
         world["worker"], submitted["run_id"], world["principal"], "http://runner.test", "t" * 32
     )
@@ -80,7 +81,7 @@ def execute(world, monkeypatch, kind="research"):
 def test_worker_notes_export_revision_draft_and_private_reads(world, monkeypatch):
     run_id, _ = execute(world, monkeypatch)
     with psycopg.connect(world["dsn"]) as conn:
-        result = research.get_research(conn, world["principal"], run_id)
+        result = runs.get_research(conn, world["principal"], run_id)
         assert result["status"] == "done", result
         assert result["result"]["citations"][0]["quote"] == "Измерьте результат эксперимента."
         note = notes.save_note(
@@ -99,7 +100,7 @@ def test_worker_notes_export_revision_draft_and_private_reads(world, monkeypatch
         assert "Измерьте результат" in md["markdown"]
         assert "file_page:" not in md["markdown"]
         assert len(md["sha256"]) == 64
-        rule = research_rules.draft_rule_from_research(
+        rule = rule_handoff.draft_rule_from_research(
             conn, world["principal"], run_id, "Проверить", "До запуска", "Измерение"
         )
         assert rule["publication"] == "draft"
@@ -107,7 +108,7 @@ def test_worker_notes_export_revision_draft_and_private_reads(world, monkeypatch
         with pytest.raises(AccessDenied):
             notes.get_note(conn, world["other"], note["id"])
         with pytest.raises(AccessDenied):
-            research.get_research(conn, world["other"], run_id)
+            runs.get_research(conn, world["other"], run_id)
         with transaction_identity(conn, world["principal"]):
             conn.execute(
                 "DELETE FROM kb.library_grant WHERE library_id=%s AND principal_id=%s",
@@ -120,7 +121,7 @@ def test_worker_notes_export_revision_draft_and_private_reads(world, monkeypatch
 def test_semantic_persist_review_version_and_endpoint_visibility(world, monkeypatch):
     run_id, _ = execute(world, monkeypatch, "network")
     with psycopg.connect(world["dsn"]) as conn:
-        assert research.get_research(conn, world["principal"], run_id)["status"] == "done"
+        assert runs.get_research(conn, world["principal"], run_id)["status"] == "done"
         graph = semantic.semantic_network(conn, world["principal"], world["lib"])
         assert len(graph["nodes"]) == 2 and len(graph["edges"]) == 1
         assert graph["edges"][0]["hypothesis"] is True
@@ -181,7 +182,7 @@ def test_semantic_persist_review_version_and_endpoint_visibility(world, monkeypa
 def test_provenance_exact_version_and_no_fake_usage(world, monkeypatch):
     run_id, source_id = execute(world, monkeypatch)
     with psycopg.connect(world["dsn"]) as conn:
-        draft = research_rules.draft_rule_from_research(
+        draft = rule_handoff.draft_rule_from_research(
             conn, world["principal"], run_id, "Правило", "До", "После"
         )
         writes.publish(conn, world["principal"], draft["id"])
@@ -207,15 +208,15 @@ def test_idempotency_and_reader_cannot_generate(world):
     source_id = parsed(world, "Текст для исследования.")
     key = str(uuid4())
     with psycopg.connect(world["dsn"]) as conn:
-        one = research.submit_research(
+        one = runs.submit_research(
             conn, world["principal"], world["lib"], [source_id], "research", "Вопрос", key
         )
-        two = research.submit_research(
+        two = runs.submit_research(
             conn, world["principal"], world["lib"], [source_id], "research", "Вопрос", key
         )
         assert one["run_id"] == two["run_id"] and two["duplicate_of_existing"]
         with pytest.raises(ValueError, match="idempotency_conflict"):
-            research.submit_research(
+            runs.submit_research(
                 conn, world["principal"], world["lib"], [source_id], "summary", "", key
             )
         with transaction_identity(conn, world["principal"]):
@@ -224,11 +225,10 @@ def test_idempotency_and_reader_cannot_generate(world):
                 (world["lib"], world["other"].principal_id),
             )
         assert (
-            research.list_research_sources(conn, world["other"], world["lib"])["can_generate"]
-            is False
+            runs.list_research_sources(conn, world["other"], world["lib"])["can_generate"] is False
         )
         with pytest.raises(AccessDenied):
-            research.submit_research(
+            runs.submit_research(
                 conn, world["other"], world["lib"], [source_id], "research", "Вопрос", str(uuid4())
             )
 
@@ -238,7 +238,7 @@ def test_generation_revoked_during_provider_io_cannot_commit_network(world, monk
 
     source_id = parsed(world, "Измерьте результат эксперимента.")
     with psycopg.connect(world["dsn"]) as conn:
-        submission = research.submit_research(
+        submission = runs.submit_research(
             conn, world["principal"], world["lib"], [source_id], "network", "", str(uuid4())
         )
 
@@ -273,12 +273,12 @@ def test_generation_revoked_during_provider_io_cannot_commit_network(world, monk
             request=httpx.Request("POST", url),
         )
 
-    monkeypatch.setattr("kb.jobs.research_worker.httpx.post", provider)
+    monkeypatch.setattr("kb.jobs.research.httpx.post", provider)
     run_research(
         world["worker"], submission["run_id"], world["principal"], "http://runner.test", "t" * 32
     )
     with psycopg.connect(world["dsn"]) as conn:
-        result = research.get_research(conn, world["principal"], submission["run_id"])
+        result = runs.get_research(conn, world["principal"], submission["run_id"])
         assert result["status"] == "failed" and result["error_code"] == "access_revoked"
         assert semantic.semantic_network(conn, world["principal"], world["lib"])["nodes"] == []
 

@@ -79,7 +79,7 @@ class Verification(StrictModel):
 
 
 def install_research_runner(app) -> None:
-    from kb.adapters import model_runner as runner
+    from kb.jobs import model_runner as runner
     from kb.research.references import materialize_references, reference_schema
 
     def call(text: str, ids: list[UUID], prompt: str, model, references=None):

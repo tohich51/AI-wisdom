@@ -34,6 +34,7 @@ from psycopg.conninfo import make_conninfo
 from psycopg_pool import ConnectionPool
 
 from kb.access.policy import Principal
+from kb.runtime_identity import build_connection_factory
 
 # this file is tests/integration/libraries/conftest.py, so parents[3] is ROOT
 ROOT = pathlib.Path(__file__).resolve().parents[3]
@@ -338,7 +339,9 @@ def build_app(pool: ConnectionPool, account_id: UUID = ACCOUNT):
     from kb.http import projects as projects_http
 
     app = FastAPI(title="c09-catalog-under-test")
-    app.state.db_pool = pool
+    # The factory, never the pool: the app must not be able to reach a
+    # connection except through the one shared construction path.
+    app.state.db_connection = build_connection_factory(pool)
 
     @app.middleware("http")
     async def stand_in_for_keycloak(request: Request, call_next):

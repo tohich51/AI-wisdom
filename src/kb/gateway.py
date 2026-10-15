@@ -13,14 +13,15 @@ from fastapi.staticfiles import StaticFiles
 from psycopg_pool import ConnectionPool
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
-from kb.catalog.storage import LocalBlobStore
+from kb.adapters.originals import LocalBlobStore
+from kb.adapters.vector_reader import OpenVikingReader
 from kb.http.auth_config import AuthSettings
 from kb.http.router import mount_api
 from kb.mcp.server import build_mcp
 from kb.retrieval.embedding_profile import SELECTED_PROFILE
 from kb.retrieval.semantic_search import SemanticSearch
-from kb.retrieval.vector_reader import OpenVikingReader
 from kb.runtime_auth import install_auth
+from kb.runtime_identity import build_connection_factory
 
 _TRUE_VALUES = frozenset({"1", "true", "yes", "on"})
 
@@ -53,6 +54,7 @@ def create_app() -> FastAPI:
 
     settings = AuthSettings.from_env()
     pool = ConnectionPool(os.environ["KB_DATABASE_URL"], min_size=1, max_size=5, open=False)
+    connections = build_connection_factory(pool)
     http_client = httpx.Client(timeout=10.0, follow_redirects=False)
 
     @asynccontextmanager
@@ -63,11 +65,11 @@ def create_app() -> FastAPI:
                 Path(os.environ["KB_BLOB_ROOT"]),
             )
             pool.open(wait=True)
-            app.state.db_pool = pool
+            app.state.db_connection = connections
             app.state.blob_store = blob_store
             app.state.semantic_search = None
             if _semantic_enabled():
-                with pool.connection() as conn:
+                with connections() as conn:
                     row = conn.execute(
                         "SELECT dimension FROM kb.embedding_profile WHERE profile_hash=%s",
                         (SELECTED_PROFILE.profile_hash,),
@@ -86,7 +88,7 @@ def create_app() -> FastAPI:
             pool.close()
 
     app = FastAPI(lifespan=lifespan)
-    install_auth(app, pool, http_client, settings)
+    install_auth(app, connections, http_client, settings)
     app.add_middleware(TrustedHostMiddleware, allowed_hosts=allowed_hosts)
 
     # /api/v1 is canonical; /api stays as a byte-compatible alias over the
@@ -115,6 +117,28 @@ def create_app() -> FastAPI:
     def index():
         return HTMLResponse(index_html, headers={"Cache-Control": "no-cache"})
 
+    # The SPA shell, served for the screen addresses the contract names:
+    # /app/libraries/:id/{sources,knowledge,rules}, /app/projects/:id/context,
+    # /app/research/:runId, /app/maps, /app/experience, /app/settings/access.
+    # A client-side router owns those paths, so a deep link or a reload arrives
+    # here as a GET that matches no API route and must still return the shell.
+    #
+    # Scoped to a literal /app prefix on purpose. A root-wide catch-all would
+    # also answer /api, /mcp, /auth, /static, /healthz and every typo, and the
+    # contract asks for the fallback under /app/* and nowhere else. Registered
+    # before the root MCP mount below, because a mount at "/" matches every
+    # path and would otherwise swallow these first.
+    #
+    # no-cache on both: a Reload has to pick up a new shell, and the asset
+    # digests in the body are what make the assets cacheable.
+    @app.get("/app", include_in_schema=False)
+    def app_entry() -> HTMLResponse:
+        return HTMLResponse(index_html, headers={"Cache-Control": "no-cache"})
+
+    @app.get("/app/{screen_path:path}", include_in_schema=False)
+    def app_screen(screen_path: str) -> HTMLResponse:
+        return HTMLResponse(index_html, headers={"Cache-Control": "no-cache"})
+
     @app.get("/healthz")
     def healthz() -> dict[str, str]:
         return {"status": "ok"}
@@ -122,8 +146,8 @@ def create_app() -> FastAPI:
     @app.get("/readyz")
     def readyz(request: Request) -> JSONResponse:
         try:
-            pool: ConnectionPool = request.app.state.db_pool
-            with pool.connection() as connection:
+            factory = request.app.state.db_connection
+            with factory() as connection:
                 connection.execute("SELECT 1").fetchone()
                 role = connection.execute(
                     "SELECT rolsuper, rolbypassrls FROM pg_roles WHERE rolname = current_user"

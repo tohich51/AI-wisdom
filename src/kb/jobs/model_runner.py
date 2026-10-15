@@ -409,7 +409,7 @@ def create_app() -> FastAPI:
         finally:
             _MODEL_SLOT.release()
 
-    from kb.research.model import install_research_runner
+    from kb.research.generation import install_research_runner
 
     install_research_runner(app)
     return app

@@ -13,9 +13,9 @@ from psycopg.rows import dict_row
 from psycopg.types.json import Jsonb
 
 from kb.access.policy import AccessDenied, Principal, transaction_identity
-from kb.adapters.model_runner import GenerateResponse
-from kb.catalog.storage import LocalBlobStore, _resolve_in_root
+from kb.adapters.originals import LocalBlobStore, _resolve_in_root
 from kb.document_parser import NeedsOCR, ParseRejected, parse_document
+from kb.jobs.model_runner import GenerateResponse
 
 MODEL = "MiniMax-M3.1-Flash-Preview"
 _LEASE_SECONDS = 480
@@ -60,7 +60,7 @@ def build_queue(dsn: str):
             os.environ.get("KB_WORKER_TOKEN"),
         )
 
-    from kb.jobs.research_worker import register_research_task
+    from kb.jobs.research import register_research_task
 
     register_research_task(app, dsn)
     return app, process

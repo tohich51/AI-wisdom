@@ -10,6 +10,7 @@ import httpx
 from openviking_sdk import SyncHTTPClient
 from openviking_sdk.errors import AlreadyExistsError
 
+from kb.adapters.secrets import _reject_symlinks
 from kb.retrieval.embedding_profile import SELECTED_PROFILE
 from kb.retrieval.provisioning import (
     IssuedKey,
@@ -18,7 +19,6 @@ from kb.retrieval.provisioning import (
     RemoteAccount,
     build_account_spec,
 )
-from kb.retrieval.secret_store import _reject_symlinks
 
 
 def safe_operation(method):

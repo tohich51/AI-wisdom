@@ -8,8 +8,8 @@ from pathlib import Path
 
 from openviking_sdk import SyncHTTPClient
 
+from kb.adapters.secrets import read_credentials
 from kb.retrieval.embedding_profile import SELECTED_PROFILE
-from kb.retrieval.secret_store import read_credentials
 
 
 @dataclass(frozen=True)

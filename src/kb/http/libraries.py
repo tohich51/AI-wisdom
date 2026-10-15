@@ -24,7 +24,6 @@ from uuid import UUID
 
 import psycopg
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
-from psycopg_pool import ConnectionPool
 
 from kb.access.policy import AccessDenied, Principal
 from kb.catalog import libraries as catalog
@@ -39,17 +38,22 @@ router = APIRouter(tags=["libraries"])
 def db_connection(request: Request) -> Iterator[psycopg.Connection]:
     """A pooled connection, checked out for the length of one request.
 
-    The pool lives on ``app.state`` because building and warming it is the
-    gateway's job, not a route's. A router that opened its own connection per
-    request would also make it easy to forget the transaction-local identity.
+    It comes from the shared connection factory, which the gateway published on
+    ``app.state``. The pool itself is not published: building, warming and
+    closing it is the gateway's job, not a route's, and a route that held the
+    pool could open a connection without the transaction-local identity.
+
+    This dependency is the *lease* for one request. It yields the connection
+    and closes it when the response is done; the handlers it feeds take a
+    ``conn`` and never close it, which is the other half of the contract.
     """
     resolver = getattr(request.app.state, "resolve_principal", None)
     if resolver is not None:
         resolver(request)  # authenticate before checking out the endpoint connection
-    pool: ConnectionPool | None = getattr(request.app.state, "db_pool", None)
-    if pool is None:
+    factory = getattr(request.app.state, "db_connection", None)
+    if factory is None:
         raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, "database pool is not configured")
-    with pool.connection() as conn:
+    with factory() as conn:
         yield conn
 
 

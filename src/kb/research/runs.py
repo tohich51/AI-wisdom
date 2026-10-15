@@ -13,7 +13,7 @@ from psycopg.types.json import Jsonb
 
 from kb.access.policy import AccessDenied, Principal, transaction_identity
 from kb.catalog.admission import check_admission
-from kb.catalog.grounding import capture_snapshot, check_snapshot, validate_citation
+from kb.research.grounding import capture_snapshot, check_snapshot, validate_citation
 
 KINDS = frozenset(
     {"research", "summary", "faq", "comparison", "checklist", "flashcards", "topic", "network"}
@@ -148,7 +148,7 @@ def submit_research(
                 request_hash,
             ),
         )
-        from kb.jobs.research_worker import register_research_task
+        from kb.jobs.research import register_research_task
 
         app = procrastinate.App(connector=procrastinate.PsycopgConnector(conninfo=""))
         task = register_research_task(app, "")

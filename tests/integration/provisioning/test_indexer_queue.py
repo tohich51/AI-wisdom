@@ -8,7 +8,7 @@ from psycopg import sql
 from psycopg.conninfo import make_conninfo
 
 from kb.jobs.indexer import build_queue
-from kb.jobs.queue import install_queue
+from kb.jobs.schema import install_queue
 
 pytestmark = pytest.mark.integration
 

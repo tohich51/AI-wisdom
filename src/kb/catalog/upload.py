@@ -52,8 +52,8 @@ import psycopg
 from pydantic import BaseModel, ConfigDict, Field
 
 from kb.access.policy import AccessDenied, Principal, authorize, transaction_identity
+from kb.adapters.originals import LocalBlobStore, ObjectNotFound, StorageError, object_key_for
 from kb.catalog.retrieval_events import record_retrieval
-from kb.catalog.storage import LocalBlobStore, ObjectNotFound, StorageError, object_key_for
 from kb.catalog.upload_fetch import (
     FetchedObject,
     FetchPolicy,
@@ -72,7 +72,7 @@ DEFAULT_MAX_UPLOAD_BYTES = 512 * 1024 * 1024
 
 # The routing key. 'local' is seeded by migrations/0004_uploads.sql. It is a
 # business identifier: the directory the bytes live in is not derived from it and
-# never leaves kb.catalog.storage.
+# never leaves kb.adapters.originals.
 DEFAULT_BACKEND_KEY = "local"
 
 # How many leading bytes are enough to identify a format. Every signature in

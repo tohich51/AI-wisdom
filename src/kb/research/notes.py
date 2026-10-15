@@ -6,7 +6,7 @@ from psycopg.rows import dict_row
 
 from kb.access.policy import AccessDenied, Principal, transaction_identity
 from kb.catalog.policies import require_manifest_export
-from kb.catalog.research import checked_run
+from kb.research.runs import checked_run
 
 _MARKDOWN = re.compile(r"([\\`*_\[\]()#+\-.!|>~=])")
 _IDENTIFIER = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*")

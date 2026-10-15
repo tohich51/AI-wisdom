@@ -8,7 +8,6 @@ import socket
 
 import httpx
 from fastapi import FastAPI, Request
-from psycopg_pool import ConnectionPool
 
 from kb.access.identity import IdentitySettings, TokenVerifier, VerifiedIdentity
 from kb.access.logout import LogoutVerifier
@@ -19,11 +18,14 @@ from kb.http.auth_config import AuthSettings
 from kb.http.auth_flow import AuthorizationCodeFlow
 from kb.http.auth_routes import create_auth_router
 from kb.http.backchannel import create_backchannel_router
-from kb.runtime_identity import create_resolver
+from kb.runtime_identity import ConnectionFactory, create_resolver
 
 
 def install_auth(
-    app: FastAPI, pool: ConnectionPool, http_client: httpx.Client, settings: AuthSettings
+    app: FastAPI,
+    connections: ConnectionFactory,
+    http_client: httpx.Client,
+    settings: AuthSettings,
 ) -> None:
     store = SessionStore(
         os.environ["KB_DATABASE_URL"],
@@ -74,7 +76,7 @@ def install_auth(
             clock=lambda: dt.datetime.now(dt.UTC),
         )
     )
-    resolve, resolve_token = create_resolver(pool, store, settings, bearer)
+    resolve, resolve_token = create_resolver(connections, store, settings, bearer)
     app.state.resolve_principal = resolve
     app.state.resolve_token = resolve_token
     app.state.session_store = store

@@ -2,9 +2,9 @@ from uuid import uuid4
 
 import pytest
 
+from kb.adapters.secrets import FileSecretSink
+from kb.adapters.vector_reader import IndexUnavailable, OpenVikingReader
 from kb.retrieval.embedding_profile import SELECTED_PROFILE
-from kb.retrieval.secret_store import FileSecretSink
-from kb.retrieval.vector_reader import IndexUnavailable, OpenVikingReader
 
 URL = "https://vector.invalid"
 KEY = "synthetic-read-key"

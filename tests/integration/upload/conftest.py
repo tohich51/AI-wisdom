@@ -38,7 +38,8 @@ from psycopg.conninfo import make_conninfo
 from psycopg_pool import ConnectionPool
 
 from kb.access.policy import Principal
-from kb.catalog.storage import LocalBlobStore
+from kb.adapters.originals import LocalBlobStore
+from kb.runtime_identity import build_connection_factory
 
 # this file is tests/integration/upload/conftest.py, so parents[3] is ROOT
 ROOT = pathlib.Path(__file__).resolve().parents[3]
@@ -337,7 +338,9 @@ def build_app(
     from kb.http import uploads as uploads_http
 
     app = FastAPI(title="c10-uploads-under-test")
-    app.state.db_pool = pool
+    # The factory, never the pool: the app must not be able to reach a
+    # connection except through the one shared construction path.
+    app.state.db_connection = build_connection_factory(pool)
     app.state.blob_store = store
     for key_name, value in state.items():
         setattr(app.state, key_name, value)

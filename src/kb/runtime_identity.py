@@ -1,19 +1,78 @@
-"""Resolve request identity from a verified bearer token or browser session."""
+"""The shared connection lease, and request identity from a verified token.
+
+Two things live here because they are the same guarantee seen from two ends.
+A pooled connection is only useful with the caller's identity already set on
+it, and that identity is transaction-local, so it has to be re-established for
+every SQL phase rather than inherited from whatever ran before on that
+connection. The factory is therefore defined next to the identity helper, and
+the pair is the contract the HTTP router, the MCP transport and the readiness
+probe all lease from.
+
+The contract, in the frozen words: a callable context manager returning
+``pool.connection()``; the lease is owned by the orchestration that called it;
+an operation handed a ``conn`` never closes it; identity is established
+through the existing ``transaction_identity`` for each SQL phase.
+"""
 
 from __future__ import annotations
 
 import re
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from datetime import UTC, datetime
 from typing import Any, NoReturn
 from uuid import UUID
 
 from fastapi import HTTPException, Request
 
-from kb.access.bearer_policy import bearer_principal, http_scope, require_scope
+from kb.access.bearer_policy import bearer_principal, require_scope, scope_for_request
 from kb.access.identity import IdentityRejected, VerifiedIdentity
 from kb.access.policy import Principal, transaction_identity
 from kb.access.session import SessionIdentityIncomplete, SessionMissing
 from kb.http.auth_routes import require_principal, session_cookie_name
+
+#: A zero-argument callable returning a context manager over one connection.
+#: Calling it checks a connection out; entering the result is what acquires it.
+ConnectionFactory = Callable[[], Any]
+
+
+def build_connection_factory(pool: Any) -> ConnectionFactory:
+    """The single construction path for a pooled connection.
+
+    Everything else in the application takes the returned callable, not the
+    pool. The pool is built, opened and closed in one place -- the gateway --
+    and is never stored on ``app.state``, so there is nothing for a route or a
+    tool to reach past the factory with. That is the difference between a
+    factory that exists and a factory that is the only way in: a second
+    ``pool.connection()`` anywhere else would be a connection with no
+    established identity and no shared lease, which is exactly what this
+    contract exists to prevent.
+
+    The returned object is a plain context manager, not a connection, so a
+    caller cannot forget to release the lease by forgetting a method call.
+    """
+
+    def connection() -> Any:
+        return pool.connection()
+
+    return connection
+
+
+@contextmanager
+def identity_connection(factory: ConnectionFactory, principal: Principal) -> Iterator[Any]:
+    """One SQL phase: a connection with ``principal``'s identity established.
+
+    A short plan, an external call, then a second plan that must see current
+    ACLs and generation state is not one long transaction. Each phase opens its
+    own lease, so the external I/O happens with no connection held, and each
+    phase re-establishes identity rather than trusting the previous one. The
+    operation that receives the connection still does not close it: the lease
+    belongs to this block.
+    """
+    with factory() as conn:
+        with transaction_identity(conn, principal):
+            yield conn
+
 
 _MEMBERSHIP_SQL = (
     "SELECT 1 FROM kb.membership "
@@ -86,7 +145,7 @@ def _is_pending_browser_invitation_accept(request: Any, account_id: UUID) -> boo
 
 
 def create_resolver(
-    pool: Any,
+    connections: ConnectionFactory,
     store: Any,
     settings: Any,
     bearer_verifier: Any,
@@ -100,7 +159,7 @@ def create_resolver(
 
     def admit(identity: VerifiedIdentity, principal: Principal) -> None:
         try:
-            with pool.connection() as connection:
+            with connections() as connection:
                 with transaction_identity(connection, principal):
                     with connection.cursor() as cursor:
                         cursor.execute(
@@ -164,7 +223,7 @@ def create_resolver(
             if identity.account_id is None:
                 _raise_unauthorized()
             try:
-                require_scope(identity, http_scope(request.method, request.url.path))
+                require_scope(identity, scope_for_request(request.method, request.url.path))
                 principal = bearer_principal(identity)
             except PermissionError:
                 _raise_forbidden()

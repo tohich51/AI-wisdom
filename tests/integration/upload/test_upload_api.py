@@ -421,7 +421,7 @@ def test_the_original_survives_a_restart_of_the_gateway(
 
     from psycopg_pool import ConnectionPool
 
-    from kb.catalog.storage import LocalBlobStore
+    from kb.adapters.originals import LocalBlobStore
 
     fresh_store = LocalBlobStore(store.root)
     fresh_pool = ConnectionPool(

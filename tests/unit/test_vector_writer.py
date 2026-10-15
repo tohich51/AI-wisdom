@@ -2,8 +2,8 @@ from uuid import uuid4
 
 import pytest
 
+from kb.adapters.vector_writer import OpenVikingWriter
 from kb.retrieval.embedding_profile import SELECTED_PROFILE
-from kb.retrieval.vector_writer import OpenVikingWriter
 
 ROOT = f"viking://resources/index/p-{SELECTED_PROFILE.profile_hash}/g-1"
 
@@ -49,7 +49,7 @@ class FakeClient:
 
 
 def make_writer(monkeypatch):
-    monkeypatch.setattr("kb.retrieval.vector_writer.SyncHTTPClient", FakeClient)
+    monkeypatch.setattr("kb.adapters.vector_writer.SyncHTTPClient", FakeClient)
     return OpenVikingWriter("http://synthetic.invalid", "")
 
 

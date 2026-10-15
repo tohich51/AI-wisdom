@@ -15,7 +15,7 @@ import pytest
 from fastapi import APIRouter, FastAPI
 from fastapi.routing import APIRoute
 
-from kb.access.bearer_policy import HANDLER_SCOPES, http_scope
+from kb.access.bearer_policy import HANDLER_SCOPES, http_scope, scope_for_request
 from kb.contracts.mcp_tools import EXPECTED_TOOLS, assert_no_identity_injection
 from kb.contracts.operations import (
     ALIAS_PREFIX,
@@ -184,13 +184,43 @@ def test_every_registered_operation_exists_on_a_real_route():
     assert missing == []
 
 
-def test_unregistered_product_routes_are_visible_to_a_reviewer():
+def test_no_served_route_is_left_unclaimed():
+    """Every served route under the API prefixes declares its scope.
+
+    This used to print its result rather than assert it, and it was also
+    comparing full canonical paths against prefix-free keys, so it reported
+    every served route as unclaimed and could not notice a new one. The
+    registry now covers the whole protected surface, so the residual is empty
+    and an empty residual is a property worth failing on.
+    """
     residual = unclaimed_routes({(m, f"{CANONICAL_PREFIX}{p}") for m, p in inventory()})
-    # Members, orgs and uploads are served by the same app on purpose. The list
-    # is printed, not asserted empty, so a new unclaimed route is visible in the
-    # test output instead of being invisible.
-    assert all(path.startswith(f"{CANONICAL_PREFIX}/") for _method, path in residual)
-    print("unclaimed product routes:", residual)
+    assert residual == []
+
+
+def test_scope_comes_from_the_registered_operation():
+    """Dispatch-time scope is the registry's, and it agrees with the frozen table.
+
+    The registry is the single declaration; ``http_scope`` is the legacy
+    pattern table that predates it. Asserting they agree for all 83 served
+    routes is what turns "the registry is the source" into a checked claim
+    rather than an assertion in a comment.
+    """
+    disagreements = [
+        f"{method} {path}: registry={scope_for_request(method, path)!r} "
+        f"pattern={http_scope(method, path)!r}"
+        for method, path in sorted(inventory())
+        if scope_for_request(method, path) != http_scope(method, path)
+    ]
+    assert disagreements == []
+
+
+def test_an_unclaimed_protected_path_is_closed():
+    """A protected path no operation claims is denied, not pattern-matched."""
+    assert scope_for_request("GET", "/api/v1/libraries/x/not-a-real-route") is None
+    assert scope_for_request("GET", "/api/libraries/x/not-a-real-route") is None
+    # Outside the API prefixes nothing is governed by the table, so the frozen
+    # pattern answer is kept and the auth and static routes behave as before.
+    assert scope_for_request("GET", "/auth/session") == "kb:read"
 
 
 def test_read_and_write_effects_agree_with_the_method():
@@ -265,7 +295,10 @@ def test_canonical_api_path_collapses_both_prefixes():
     assert canonical_api_path("/api/libraries") == f"{CANONICAL_PREFIX}/libraries"
     assert canonical_api_path("/api/v1/libraries") == f"{CANONICAL_PREFIX}/libraries"
     assert canonical_api_path("/auth/session") is None
-    assert canonical_api_path(f"{ALIAS_PREFIX}") == ALIAS_PREFIX
+    # A bare prefix is returned canonical, not passed through. The old
+    # assertion pinned the pass-through, which handed callers a string shorter
+    # than the prefix they then sliced off (F-M3).
+    assert canonical_api_path(f"{ALIAS_PREFIX}") == CANONICAL_PREFIX
     assert canonical_api_path(f"{CANONICAL_PREFIX}") == CANONICAL_PREFIX
 
 

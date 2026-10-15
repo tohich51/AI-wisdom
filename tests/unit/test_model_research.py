@@ -7,7 +7,7 @@ from uuid import uuid4
 import pytest
 from fastapi.testclient import TestClient
 
-from kb.adapters import model_runner
+from kb.jobs import model_runner
 from kb.research.validation import validate_draft
 
 

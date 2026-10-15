@@ -27,8 +27,8 @@ from uuid import UUID
 import pytest
 
 from kb.access.policy import Principal
+from kb.adapters.originals import StorageError
 from kb.catalog import upload as catalog
-from kb.catalog.storage import StorageError
 
 pytestmark = pytest.mark.integration
 

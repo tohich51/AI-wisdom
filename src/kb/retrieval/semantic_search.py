@@ -6,11 +6,11 @@ from uuid import UUID
 from psycopg.rows import dict_row
 
 from kb.access.policy import Principal, transaction_identity
+from kb.adapters.vector_reader import IndexUnavailable, OpenVikingReader
 from kb.catalog.content import attach_knowledge_provenance, lexical_search_knowledge
 from kb.retrieval.embedding_profile import SELECTED_PROFILE
 from kb.retrieval.ranking import reciprocal_rank_fusion
 from kb.retrieval.semantic_registry import sha256
-from kb.retrieval.vector_reader import IndexUnavailable, OpenVikingReader
 
 
 @dataclass(frozen=True)

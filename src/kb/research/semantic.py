@@ -7,8 +7,8 @@ from psycopg.rows import dict_row
 from psycopg.types.json import Jsonb
 
 from kb.access.policy import AccessDenied, transaction_identity
-from kb.catalog.grounding import check_snapshot, validate_citation
-from kb.catalog.research import _library
+from kb.research.grounding import check_snapshot, validate_citation
+from kb.research.runs import _library
 
 
 def import_network(cur, principal, library_id, run_id, manifest, result):

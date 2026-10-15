@@ -10,12 +10,12 @@ import psycopg
 from procrastinate.exceptions import AlreadyEnqueued
 
 from kb.access.policy import Principal, transaction_identity
+from kb.adapters.secrets import FileSecretSink, _reject_symlinks
+from kb.adapters.vector_writer import OpenVikingWriter
 from kb.retrieval import semantic_registry as registry
 from kb.retrieval.embedding_profile import SELECTED_PROFILE
 from kb.retrieval.openviking_admin import OpenVikingAdmin
 from kb.retrieval.provisioning import load_account, request_provisioning, run_provisioning
-from kb.retrieval.secret_store import FileSecretSink, _reject_symlinks
-from kb.retrieval.vector_writer import OpenVikingWriter
 
 
 def _checkpoint(conn, principal, build, document):

@@ -42,6 +42,7 @@ from psycopg_pool import ConnectionPool
 from kb.access.identity import VerifiedIdentity
 from kb.access.membership_deactivation import RevocationOutcome
 from kb.access.policy import Principal
+from kb.runtime_identity import build_connection_factory
 
 # this file is tests/integration/members/conftest.py, so parents[3] is ROOT
 ROOT = pathlib.Path(__file__).resolve().parents[3]
@@ -373,7 +374,9 @@ def build_app(pool: ConnectionPool, *, revoker: Any = None):
     from kb.http import members as members_http
 
     app = FastAPI(title="c08-members-under-test")
-    app.state.db_pool = pool
+    # The factory, never the pool: the app must not be able to reach a
+    # connection except through the one shared construction path.
+    app.state.db_connection = build_connection_factory(pool)
     app.state.session_revoker = revoker
 
     @app.middleware("http")

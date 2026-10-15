@@ -52,9 +52,10 @@ from fastapi import (
 )
 
 from kb.access.policy import AccessDenied
+from kb.adapters.originals import LocalBlobStore, ObjectNotFound, StorageError
 from kb.catalog import upload as catalog
-from kb.catalog.storage import LocalBlobStore, ObjectNotFound, StorageError
 from kb.catalog.upload_fetch import UrlRefused
+from kb.contracts.operations import CANONICAL_PREFIX
 from kb.http.libraries import Db, Me, mapped_errors
 
 router = APIRouter(tags=["sources"])
@@ -143,8 +144,14 @@ def _range_bounds(header: str | None, size: int) -> tuple[int, int] | None:
 
 
 def _location(source_id: UUID) -> str:
-    """The read route for one original. A path, never a signed URL."""
-    return f"/sources/{source_id}/original"
+    """The canonical read route for one original. A path, never a signed URL.
+
+    The emitted value is a real, servable path. A prefix-free one looks right
+    next to the router's templates and resolves to 404 for every client that
+    follows the Location header, because the application serves neither
+    ``/sources/...`` nor any other unprefixed API path.
+    """
+    return f"{CANONICAL_PREFIX}/sources/{source_id}/original"
 
 
 def _created_response(response: Response, result: catalog.SubmittedSource) -> None:

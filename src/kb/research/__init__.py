@@ -2,7 +2,7 @@
 
 A run reads sources, drafts material, cites it and has the result validated
 before anything is published. That reasoning lives here and nowhere else, so
-the durable worker in :mod:`kb.jobs.research_worker` stays a queue consumer and
+the durable worker in :mod:`kb.jobs.research` stays a queue consumer and
 the catalog stays a store.
 
 Like :mod:`kb.jobs`, the package root exports nothing. These modules import the

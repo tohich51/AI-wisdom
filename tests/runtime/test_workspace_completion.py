@@ -14,8 +14,9 @@ from test_runtime import runtime_db as runtime_db
 from test_runtime import world as world
 
 from kb.access.policy import AccessDenied, transaction_identity
-from kb.catalog import content, libraries, notes, policies, upload, workspace, writes
+from kb.catalog import content, libraries, policies, upload, workspace, writes
 from kb.jobs.ingestion import submit_processing
+from kb.research import notes
 
 pytestmark = [pytest.mark.integration, pytest.mark.acceptance]
 

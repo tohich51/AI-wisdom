@@ -3,7 +3,12 @@
 import os
 
 from kb.access.policy import AccessDenied, Principal
-from kb.contracts.operations import ALIAS_PREFIX, CANONICAL_PREFIX, canonical_api_path
+from kb.contracts.operations import (
+    ALIAS_PREFIX,
+    CANONICAL_PREFIX,
+    canonical_api_path,
+    operation_for,
+)
 
 HANDLER_SCOPES = {
     "list_libraries": "kb:read",
@@ -95,3 +100,30 @@ def http_scope(method: str, path: str) -> str:
     ):
         return "kb:experience"
     return "kb:contribute"
+
+
+def scope_for_request(method: str, path: str) -> str | None:
+    """The scope a request must carry, taken from its registered operation.
+
+    The registry is the single declaration of what an operation is and what it
+    needs. Dispatch reads it here, so the two API prefixes, the router and the
+    MCP surface cannot drift apart: there is one answer per (method, path), not
+    one per surface plus a cross-check that a test has to remember to run.
+
+    ``None`` means closed. A request that lands on a path under the protected
+    API prefixes which no operation claims gets ``None``, and
+    :func:`require_scope` denies it. That is the default the contract asks for,
+    and it is what makes a newly added, undeclared route fail closed instead of
+    inheriting a scope from a pattern match on its URL.
+
+    A path outside the API prefixes is not a product operation, so it keeps the
+    historical pattern answer: ``/auth/*``, ``/mcp``, ``/healthz`` and
+    ``/static`` are not governed by the operations table, and
+    :func:`http_scope` is the only rule that ever applied to them.
+    """
+    if canonical_api_path(path) is None:
+        return http_scope(method, path)
+    operation = operation_for(method, path)
+    if operation is None:
+        return None
+    return operation.scope

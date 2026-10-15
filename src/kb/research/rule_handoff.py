@@ -5,8 +5,8 @@ from uuid import UUID
 from psycopg.rows import dict_row
 
 from kb.access.policy import transaction_identity
-from kb.catalog.research import checked_run
 from kb.catalog.writes import RuleInput, create_rule
+from kb.research.runs import checked_run
 
 
 def draft_rule_from_research(conn, principal, run_id, title, when_to_apply, expected_effect):

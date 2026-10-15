@@ -46,6 +46,7 @@ from psycopg_pool import ConnectionPool
 from kb.access.policy import Principal
 from kb.catalog import content, writes
 from kb.migrate import apply_migrations
+from kb.runtime_identity import build_connection_factory
 
 ROOT = pathlib.Path(__file__).resolve().parents[2]
 pytestmark = pytest.mark.integration
@@ -339,7 +340,9 @@ def _build_app(pool: ConnectionPool, principal_for: Callable[[UUID], Principal])
     from kb.http import content as content_http
 
     app = FastAPI(title="m01-draft-review-under-test")
-    app.state.db_pool = pool
+    # The factory, never the pool: the app must not be able to reach a
+    # connection except through the one shared construction path.
+    app.state.db_connection = build_connection_factory(pool)
 
     @app.middleware("http")
     async def stand_in_for_keycloak(request: Request, call_next):

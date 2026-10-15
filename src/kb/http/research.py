@@ -5,7 +5,7 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, Query, Response
 
-from kb.catalog import graphs, notes, research, research_rules, semantic
+from kb.catalog import graphs
 from kb.contracts.research_tools import (
     ConceptArgs,
     DraftRuleArgs,
@@ -16,6 +16,7 @@ from kb.contracts.research_tools import (
     UpdateNoteArgs,
 )
 from kb.http.libraries import Db, Me, mapped_errors
+from kb.research import notes, rule_handoff, runs, semantic
 
 
 def no_store(response: Response):
@@ -28,25 +29,25 @@ router = APIRouter(tags=["research"], dependencies=[Depends(no_store)])
 @router.get("/research/sources")
 def sources(library_id: UUID, conn: Db, me: Me):
     with mapped_errors():
-        return research.list_research_sources(conn, me, library_id)
+        return runs.list_research_sources(conn, me, library_id)
 
 
 @router.get("/research")
 def history(library_id: UUID, conn: Db, me: Me):
     with mapped_errors():
-        return research.list_research(conn, me, library_id)
+        return runs.list_research(conn, me, library_id)
 
 
 @router.post("/research", status_code=202)
 def start(body: ResearchArgs, conn: Db, me: Me):
     with mapped_errors():
-        return research.submit_research(conn, me, **body.model_dump())
+        return runs.submit_research(conn, me, **body.model_dump())
 
 
 @router.get("/research/{run_id}")
 def status(run_id: UUID, conn: Db, me: Me):
     with mapped_errors():
-        return research.get_research(conn, me, run_id)
+        return runs.get_research(conn, me, run_id)
 
 
 @router.get("/research/{run_id}/markdown")
@@ -62,7 +63,7 @@ def draft(run_id: UUID, body: DraftRuleArgs, conn: Db, me: Me):
 
         raise HTTPException(400, "run_id_mismatch")
     with mapped_errors():
-        return research_rules.draft_rule_from_research(conn, me, **body.model_dump())
+        return rule_handoff.draft_rule_from_research(conn, me, **body.model_dump())
 
 
 @router.get("/notes")

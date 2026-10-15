@@ -600,6 +600,276 @@ OPERATIONS: Final[tuple[Operation, ...]] = (
         "Review a semantic relation.",
         mcp_tool="review_semantic_relation",
     ),
+    # ------------------------------------- served but previously undeclared
+    # These 33 routes are served by the same application under the same
+    # prefixes. They were not declared, which meant a registry-first scope
+    # lookup would have closed every one of them. Each scope below is the
+    # value the frozen pattern table already returned, so declaring them
+    # changes where the answer comes from and not what it is.
+    _op(
+        "libraries.list_grants",
+        "GET",
+        "/libraries/{library_id}/grants",
+        _READ,
+        "kb:read",
+        "List the principals a library has been granted to.",
+    ),
+    _op(
+        "libraries.set_grant",
+        "PUT",
+        "/libraries/{library_id}/grants",
+        _WRITE,
+        "kb:admin",
+        "Replace the grant set of one library.",
+    ),
+    _op(
+        "libraries.revoke_grant",
+        "DELETE",
+        "/libraries/{library_id}/grants/{principal_id}",
+        _WRITE,
+        "kb:admin",
+        "Revoke one principal's grant on a library.",
+    ),
+    _op(
+        "library_types.list",
+        "GET",
+        "/library-types",
+        _READ,
+        "kb:read",
+        "List the library kinds this deployment offers.",
+    ),
+    _op(
+        "library_types.create",
+        "POST",
+        "/library-types",
+        _WRITE,
+        "kb:contribute",
+        "Create a library kind.",
+    ),
+    _op(
+        "session.read_me",
+        "GET",
+        "/me",
+        _READ,
+        "kb:read",
+        "Read the caller's own principal and memberships.",
+    ),
+    _op(
+        "projects.create",
+        "POST",
+        "/projects",
+        _WRITE,
+        "kb:contribute",
+        "Create a project.",
+    ),
+    _op(
+        "projects.read",
+        "GET",
+        "/projects/{project_id}",
+        _READ,
+        "kb:read",
+        "Read one project.",
+    ),
+    _op(
+        "projects.attach_library",
+        "POST",
+        "/projects/{project_id}/libraries",
+        _WRITE,
+        "kb:contribute",
+        "Attach a library to a project.",
+    ),
+    _op(
+        "projects.detach_library",
+        "DELETE",
+        "/projects/{project_id}/libraries/{library_id}",
+        _WRITE,
+        "kb:contribute",
+        "Detach a library from a project.",
+    ),
+    _op(
+        "projects.create_rule",
+        "POST",
+        "/projects/{project_id}/rules",
+        _WRITE,
+        "kb:contribute",
+        "Create a rule inside a project.",
+    ),
+    _op(
+        "projects.delete_rule",
+        "DELETE",
+        "/projects/{project_id}/rules/{rule_id}",
+        _WRITE,
+        "kb:contribute",
+        "Delete one rule from a project.",
+    ),
+    _op(
+        "admin.groups.list",
+        "GET",
+        "/orgs/{organisation_id}/groups",
+        _READ,
+        "kb:admin",
+        "List an organisation's groups.",
+    ),
+    _op(
+        "admin.groups.create",
+        "POST",
+        "/orgs/{organisation_id}/groups",
+        _WRITE,
+        "kb:admin",
+        "Create a group.",
+    ),
+    _op(
+        "admin.groups.list_group_grants",
+        "GET",
+        "/orgs/{organisation_id}/groups/{group_id}/grants",
+        _READ,
+        "kb:admin",
+        "List the libraries one group has been granted.",
+    ),
+    _op(
+        "admin.groups.set_group_library_grant",
+        "PUT",
+        "/orgs/{organisation_id}/groups/{group_id}/grants/{library_id}",
+        _WRITE,
+        "kb:admin",
+        "Grant one group access to one library.",
+    ),
+    _op(
+        "admin.groups.revoke_library_grant",
+        "DELETE",
+        "/orgs/{organisation_id}/groups/{group_id}/grants/{library_id}",
+        _WRITE,
+        "kb:admin",
+        "Revoke one group's access to one library.",
+    ),
+    _op(
+        "admin.groups.set_member_role",
+        "PUT",
+        "/orgs/{organisation_id}/groups/{group_id}/members/{principal_id}",
+        _WRITE,
+        "kb:admin",
+        "Set one principal's role in one group.",
+    ),
+    _op(
+        "admin.groups.remove_member",
+        "DELETE",
+        "/orgs/{organisation_id}/groups/{group_id}/members/{principal_id}",
+        _WRITE,
+        "kb:admin",
+        "Remove one principal from one group.",
+    ),
+    _op(
+        "admin.members.list",
+        "GET",
+        "/orgs/{organisation_id}/members",
+        _READ,
+        "kb:admin",
+        "List an organisation's members.",
+    ),
+    _op(
+        "admin.members.read",
+        "GET",
+        "/orgs/{organisation_id}/members/{principal_id}",
+        _READ,
+        "kb:admin",
+        "Read one member.",
+    ),
+    _op(
+        "admin.members.accept_invitation",
+        "POST",
+        "/orgs/{organisation_id}/members/me",
+        _WRITE,
+        "kb:admin",
+        "Accept the caller's own invitation into the organisation.",
+    ),
+    _op(
+        "admin.members.deactivate",
+        "POST",
+        "/orgs/{organisation_id}/members/{principal_id}/deactivate",
+        _WRITE,
+        "kb:admin",
+        "Deactivate one member and release their grants.",
+    ),
+    _op(
+        "admin.invitations.list",
+        "GET",
+        "/orgs/{organisation_id}/invitations",
+        _READ,
+        "kb:admin",
+        "List outstanding invitations.",
+    ),
+    _op(
+        "admin.invitations.create",
+        "POST",
+        "/orgs/{organisation_id}/invitations",
+        _WRITE,
+        "kb:admin",
+        "Invite a principal into the organisation.",
+    ),
+    _op(
+        "admin.invitations.accept",
+        "POST",
+        "/orgs/{organisation_id}/invitations/{invitation_id}/accept",
+        _WRITE,
+        "kb:admin",
+        "Accept one invitation as its addressee.",
+    ),
+    _op(
+        "admin.invitations.notify",
+        "POST",
+        "/orgs/{organisation_id}/invitations/{invitation_id}/notify",
+        _WRITE,
+        "kb:admin",
+        "Re-send one outstanding invitation.",
+    ),
+    _op(
+        "admin.invitations.withdraw",
+        "POST",
+        "/orgs/{organisation_id}/invitations/{invitation_id}/withdraw",
+        _WRITE,
+        "kb:admin",
+        "Withdraw one outstanding invitation.",
+    ),
+    _op(
+        "admin.revocations.list",
+        "GET",
+        "/orgs/{organisation_id}/outstanding-revocations",
+        _READ,
+        "kb:admin",
+        "List revocations that have not finished propagating.",
+    ),
+    _op(
+        "admin.revocations.retry",
+        "POST",
+        "/orgs/{organisation_id}/outstanding-revocations/retry",
+        _WRITE,
+        "kb:admin",
+        "Retry the outstanding revocations.",
+    ),
+    _op(
+        "admin.policy_journal.read",
+        "GET",
+        "/orgs/{organisation_id}/policy-journal",
+        _READ,
+        "kb:admin",
+        "Read the organisation's policy change journal.",
+    ),
+    _op(
+        "admin.orgs.read_self",
+        "GET",
+        "/orgs/{organisation_id}/me",
+        _READ,
+        "kb:admin",
+        "Read the caller's own administrative view of the organisation.",
+    ),
+    _op(
+        "admin.access.read_library_access",
+        "GET",
+        "/orgs/{organisation_id}/access/{principal_id}/libraries/{library_id}",
+        _READ,
+        "kb:admin",
+        "Read why one principal has access to one library.",
+    ),
 )
 
 OPERATIONS_BY_NAME: Final[dict[str, Operation]] = {op.name: op for op in OPERATIONS}
@@ -624,10 +894,15 @@ def canonical_api_path(path: str) -> str | None:
     Both shipped prefixes collapse onto the same canonical path before any scope
     rule looks at it. That is what stops ``/api/v1`` from answering a grants
     route that ``/api`` would have held to ``kb:admin``.
+
+    A request for a bare prefix is returned as the canonical prefix rather than
+    passed through, because the docstring promises a canonical value and a
+    caller that then slices off :data:`CANONICAL_PREFIX` must not be handed a
+    shorter string than the prefix it is slicing.
     """
     for prefix in sorted(API_PREFIXES, key=len, reverse=True):
         if path == prefix:
-            return prefix
+            return CANONICAL_PREFIX
         if path.startswith(f"{prefix}/"):
             return f"{CANONICAL_PREFIX}{path[len(prefix) :]}"
     return None
@@ -695,17 +970,24 @@ def assert_registry_consistent() -> None:
 
 
 def unclaimed_routes(inventory: set[tuple[str, str]]) -> list[tuple[str, str]]:
-    """Inventory entries under the canonical prefix that no operation claims.
+    """Served paths under the canonical prefix that no operation claims.
 
-    The registry test prints this rather than failing on it: the admin and
-    upload routes are served by the app on purpose and are not product
-    operations. It is returned so a reviewer can see the exact residual.
+    ``inventory`` entries carry the FULL canonical path, because that is what a
+    route table holds. :data:`OPERATION_ROUTES` is keyed by the prefix-free
+    template, because that is what an operation declares. The lookup has to
+    strip the prefix first: comparing the two directly is true for every entry,
+    which reported all served routes as unclaimed and made this guard unable to
+    notice a new one. With the prefix stripped the residual is the honest set
+    of protected routes the registry has not absorbed.
     """
-    return sorted(
-        (method, path)
-        for method, path in inventory
-        if path.startswith(f"{CANONICAL_PREFIX}/") and (method, path) not in OPERATION_ROUTES
-    )
+    unclaimed = []
+    for method, path in inventory:
+        if not path.startswith(f"{CANONICAL_PREFIX}/"):
+            continue
+        key = (method.upper(), path[len(CANONICAL_PREFIX) :])
+        if key not in OPERATION_ROUTES:
+            unclaimed.append((method, path))
+    return sorted(unclaimed)
 
 
 __all__ = [

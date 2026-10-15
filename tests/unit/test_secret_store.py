@@ -1,6 +1,6 @@
 import pytest
 
-from kb.retrieval.secret_store import FileSecretSink, read_credentials
+from kb.adapters.secrets import FileSecretSink, read_credentials
 
 READ = "kb-svc-read-" + "0" * 32
 INDEX = "kb-svc-index-" + "1" * 32

@@ -16,14 +16,15 @@ from test_runtime import runtime_db as runtime_db
 from test_runtime import world as world
 
 from kb.access.policy import Principal, transaction_identity
-from kb.catalog import libraries, research
+from kb.catalog import libraries
 from kb.jobs.ingestion import submit_processing
+from kb.research import runs
 
 pytestmark = pytest.mark.integration
 
 
 def _research(conn, item, source_id, key=None):
-    return research.submit_research(
+    return runs.submit_research(
         conn,
         item["principal"],
         item["lib"],

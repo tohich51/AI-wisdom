@@ -6,11 +6,11 @@ import psycopg
 import pytest
 
 from kb.access.policy import transaction_identity
+from kb.adapters.vector_reader import Candidate, IndexUnavailable
 from kb.catalog.content import search_knowledge
 from kb.retrieval import semantic_registry as registry
 from kb.retrieval.embedding_profile import SELECTED_PROFILE
 from kb.retrieval.semantic_search import SemanticSearch
-from kb.retrieval.vector_reader import Candidate, IndexUnavailable
 
 pytestmark = pytest.mark.integration
 

@@ -128,7 +128,7 @@ def build_mcp(app, hosts):
         try:
             require_scope(identity, HANDLER_SCOPES.get(handler.__name__))
             principal = bearer_principal(identity)
-            with app.state.db_pool.connection() as conn:
+            with app.state.db_connection() as conn:
                 return jsonable_encoder(handler(conn, principal, *args, **kwargs))
         except Exception:
             raise ValueError("request_refused") from None

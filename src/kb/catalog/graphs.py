@@ -3,7 +3,7 @@
 from psycopg.rows import dict_row
 
 from kb.access.policy import AccessDenied, transaction_identity
-from kb.catalog.research import _library
+from kb.research.runs import _library
 
 
 def provenance_graph(conn, principal, library_id, source_ids=None, limit=200):

@@ -26,7 +26,7 @@ def main(argv=None):
     sys.argv = [sys.argv[0], *remaining]
     modules = {
         "worker": "kb.jobs.ingestion",
-        "model-runner": "kb.adapters.model_runner",
+        "model-runner": "kb.jobs.model_runner",
         "migrate": "kb.migrate",
         "indexer": "kb.jobs.indexer",
     }

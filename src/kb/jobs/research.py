@@ -11,9 +11,9 @@ from psycopg.rows import dict_row
 from psycopg.types.json import Jsonb
 
 from kb.access.policy import AccessDenied, Principal, transaction_identity
-from kb.catalog.grounding import check_snapshot, resolve_citation
-from kb.catalog.research import checked_run
-from kb.research.model import Draft
+from kb.research.generation import Draft
+from kb.research.grounding import check_snapshot, resolve_citation
+from kb.research.runs import checked_run
 
 
 class AttemptInProgress(RuntimeError):
@@ -149,7 +149,7 @@ def run_research(dsn, run_id, principal, runner_url, worker_token):
                     "context_limited": row["manifest"].get("context_limited", True),
                 }
                 if row["kind"] == "network" and not draft["no_evidence"]:
-                    from kb.catalog.semantic import import_network
+                    from kb.research.semantic import import_network
 
                     import_network(
                         cur, principal, row["library_id"], run_id, row["manifest"], result

@@ -528,7 +528,7 @@ def list_rules(
                    r.created_at
             FROM kb.rule AS r
             WHERE r.library_id = %s
-            ORDER BY r.created_at DESC, r.lineage_id, r.version_no DESC
+            ORDER BY r.created_at DESC, r.lineage_id, r.version_no DESC, r.id
             LIMIT %s OFFSET %s
             """,
             (library_id, limit, offset),

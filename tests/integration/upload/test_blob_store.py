@@ -18,7 +18,7 @@ import os
 
 import pytest
 
-from kb.catalog.storage import (
+from kb.adapters.originals import (
     ImmutableObject,
     LocalBlobStore,
     ObjectKeyRejected,

@@ -5,14 +5,15 @@ from uuid import UUID
 
 from mcp.server.mcpserver import Context
 
-from kb.catalog import graphs, notes, research, research_rules, semantic
-from kb.research.model import Kind, Predicate
+from kb.catalog import graphs
+from kb.research import notes, rule_handoff, runs, semantic
+from kb.research.generation import Kind, Predicate
 
 
 def install_tools(server, call):
     @server.tool()
     def research_sources(library_id: UUID, ctx: Context):
-        return call(ctx, research.list_research_sources, library_id)
+        return call(ctx, runs.list_research_sources, library_id)
 
     @server.tool()
     def start_research(
@@ -23,17 +24,15 @@ def install_tools(server, call):
         kind: Kind = "research",
         query: str = "",
     ):
-        return call(
-            ctx, research.submit_research, library_id, source_ids, kind, query, idempotency_key
-        )
+        return call(ctx, runs.submit_research, library_id, source_ids, kind, query, idempotency_key)
 
     @server.tool()
     def list_research(library_id: UUID, ctx: Context):
-        return call(ctx, research.list_research, library_id)
+        return call(ctx, runs.list_research, library_id)
 
     @server.tool()
     def research_status(run_id: UUID, ctx: Context):
-        return call(ctx, research.get_research, run_id)
+        return call(ctx, runs.get_research, run_id)
 
     @server.tool()
     def save_research_note(run_id: UUID, title: str, ctx: Context, comment: str = ""):
@@ -57,7 +56,7 @@ def install_tools(server, call):
     ):
         return call(
             ctx,
-            research_rules.draft_rule_from_research,
+            rule_handoff.draft_rule_from_research,
             run_id,
             title,
             when_to_apply,
