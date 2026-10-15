@@ -63,6 +63,7 @@ from fastapi import (
     status,
 )
 from fastapi.responses import StreamingResponse
+from starlette.types import Receive, Scope, Send
 
 from kb.access.policy import AccessDenied
 from kb.adapters.originals import LocalBlobStore, StorageError
@@ -212,11 +213,23 @@ def _range_bounds(header: str | None, size: int) -> tuple[int, int] | None:
         length = int(raw_stop)
         if length == 0:
             raise HTTPException(HTTP_416, "unsupported Range")
+        if size == 0:
+            # A suffix range asks for the last ``length`` bytes, and a zero-byte
+            # object has no last byte. Answering ``bytes 0-0/0`` would put a
+            # header in front of the client naming a byte that does not exist.
+            raise HTTPException(HTTP_416, "the original is empty")
         return max(size - length, 0), size
     start = int(raw_start)
     if start >= size:
         raise HTTPException(HTTP_416, "the range starts past the end")
     stop = int(raw_stop) + 1 if raw_stop else size
+    if stop <= start:
+        # "bytes=9-3" is not a range at all. Handing storage (9, 4) asks it for
+        # a slice that cannot exist, and the refusal comes back as a 503 — a
+        # server fault reported for a header the client wrote. An unsatisfiable
+        # range is the client's mistake, and it is answered like every other one
+        # here: 416.
+        raise HTTPException(HTTP_416, "the range ends before it starts")
     return start, min(stop, size)
 
 
@@ -370,6 +383,54 @@ async def _original_body(delivery: catalog.OriginalDelivery) -> AsyncIterator[by
         delivery.close()
 
 
+class _DeliveredStream(StreamingResponse):
+    """A streaming response that releases the descriptor itself, on every exit.
+
+    ``_original_body`` closes the delivery in a ``finally``, and that is right
+    for every way out of the *body*: the end of the stream, a cancellation that
+    lands inside the generator, an exception in the middle of a read. It is not
+    enough for the ways out that never come back to the body at all, and the
+    gap is Starlette's rather than ours. ``stream_response`` awaits ``send`` for
+    the response start and again for every chunk, and a write that fails raises
+    out of ``__call__`` with the body generator still suspended at its
+    ``yield``. From ASGI 2.4 on there is no task group to cancel and nothing
+    that closes an abandoned iterator, so that ``finally`` is deferred to
+    whenever the generator is finally collected — which, for as long as the
+    response object is still referenced by the failure that produced it, may be
+    never. A client that disconnects then costs one open descriptor per
+    abandoned download, bounded by nothing but the process's file limit.
+
+    So the release moves up one level, to the frame that actually sees the
+    failure. A ``try`` around ``super().__call__`` covers the ordinary end of
+    the stream, a transport that dies part way through the body, a transport
+    that dies on the very first ``send`` before the body has been entered at
+    all, and a read that raises. ``OriginalDelivery.close`` is idempotent, so a
+    close from here and a second one from the generator's ``finally`` are still
+    one close, performed once.
+    """
+
+    def __init__(
+        self,
+        delivery: catalog.OriginalDelivery,
+        *,
+        headers: dict[str, str],
+        status_code: int,
+    ) -> None:
+        self._delivery = delivery
+        super().__init__(
+            _original_body(delivery),
+            media_type=delivery.original.media_type,
+            headers=headers,
+            status_code=status_code,
+        )
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        try:
+            await super().__call__(scope, receive, send)
+        finally:
+            self._delivery.close()
+
+
 def _original_headers(original: catalog.Original) -> dict[str, str]:
     """The response headers for one original, active media type or not.
 
@@ -447,18 +508,16 @@ def read_original(
     headers = _original_headers(delivery.original)
     headers["Content-Length"] = str(delivery.length)
     if delivery.complete:
-        return StreamingResponse(
-            _original_body(delivery),
-            media_type=delivery.original.media_type,
+        return _DeliveredStream(
+            delivery,
             headers=headers,
             status_code=status.HTTP_200_OK,
         )
     start = delivery.start
     end = start + max(delivery.length - 1, 0)
     headers["Content-Range"] = f"bytes {start}-{end}/{size}"
-    return StreamingResponse(
-        _original_body(delivery),
-        media_type=delivery.original.media_type,
+    return _DeliveredStream(
+        delivery,
         headers=headers,
         status_code=status.HTTP_206_PARTIAL_CONTENT,
     )
