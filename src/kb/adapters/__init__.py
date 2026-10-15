@@ -1,11 +1,21 @@
-"""Outbound adapters: code that calls a process or a service we do not own.
+"""Outbound adapters: the data and services this application does not own.
 
-The model runner belongs here rather than in :mod:`kb.jobs` because the part
-that is a job — claim, authorise, persist — belongs to the job layer, and the
-part that is not ours — spawn the cloud coding agent, parse its stdout, refuse
-a malformed answer — is an adapter around someone else's contract.
+What is here is the blob store the uploaded originals live in, the OpenViking
+vector reader and writer, and the secret store the read keys come from. Each one
+is an outbound edge: the code, the protocol and the failure modes all belong to
+something outside this process.
 
-Keeping the boundary explicit matters for the review that has to happen before
-any change here: an adapter is the only place allowed to build an argv, and it
-must never be handed a value that came from a request body.
+The model runner is *not* here. It used to be, and this docstring was the
+argument for it — that spawning somebody else's CLI is an adapter. The frozen
+contract's layer rule put it the other way: `kb.jobs` is what survives a
+restart, and the model runner is a durable queue service behind the
+`model-runner` CLI name. It was moved to :mod:`kb.jobs` and this paragraph was
+left behind arguing against the move, which made two documents in one repository
+disagree about the same module. ``kb.cli`` resolves the service name to
+``kb.jobs.model_runner``; this is the record of why.
+
+Keeping the boundary explicit still matters for the review that has to happen
+before any change here: an adapter is the only place allowed to speak another
+system's protocol, and it must never be handed a value that came from a request
+body without the boundary that data is allowed to cross.
 """

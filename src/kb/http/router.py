@@ -5,13 +5,21 @@ is the canonical prefix and the one the OpenAPI schema is served from. Both
 mount the *same* router object, so an operation is declared once and a
 compatibility prefix cannot drift into a second implementation of it.
 
-The alias adds paths. It does not add work: :func:`assert_prefix_parity` fails
-startup if any ``(method, full path)`` pair is bound more than once, which is
-the structural form of "a POST through the alias is executed once, not twice".
+The alias adds paths. It does not add work, and
+:func:`assert_prefix_parity` is what makes that checkable: it fails if any
+``(method, full path)`` pair is bound more than once, which is the structural
+form of "a POST through the alias is executed once, not twice". It is a
+**test-time** assertion, called from ``tests/runtime/test_operation_registry.py``
+and nowhere on the startup path — this docstring used to claim otherwise, and
+the two statements in this repository contradicted each other.
 
-Every registered operation is also checked against the real route table, so a
-registry entry that names a route nobody serves is a startup error rather than a
-contract that quietly documents a fiction.
+What *is* a startup error is the neighbouring check: every registered operation
+is matched against the real route table by
+:func:`assert_routes_match_registry`, which :func:`mount_api` calls while the
+application is being built. A registry entry naming a route nobody serves is
+therefore a startup error, not a contract that quietly documents a fiction.
+The two checks answer different questions and are called from different places,
+so neither is described as the other.
 """
 
 from __future__ import annotations

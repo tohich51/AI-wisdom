@@ -908,6 +908,95 @@ def canonical_api_path(path: str) -> str | None:
     return None
 
 
+def _segments(path: str) -> tuple[str, ...]:
+    return tuple(segment for segment in path.split("/") if segment)
+
+
+def _is_parameter(segment: str) -> bool:
+    return segment.startswith("{") and segment.endswith("}")
+
+
+def _literal_count(path: str) -> int:
+    return sum(1 for segment in _segments(path) if not _is_parameter(segment))
+
+
+def _template_matches(path: str, segments: tuple[str, ...]) -> bool:
+    """Does a concrete segment list satisfy this route template?
+
+    Segment counts must be equal, a literal must equal the segment, and a
+    ``{parameter}`` matches exactly one non-empty segment. A parameter does not
+    span a slash, so ``/libraries/{library_id}`` cannot swallow
+    ``/libraries/a/b``.
+    """
+    declared = _segments(path)
+    if len(declared) != len(segments):
+        return False
+    for template_segment, actual in zip(declared, segments, strict=True):
+        if _is_parameter(template_segment):
+            if not actual:
+                return False
+        elif template_segment != actual:
+            return False
+    return True
+
+
+#: (method, segment count) -> operations with that shape, most literal first.
+#: Ordering by descending literal count is what makes a static route win over a
+#: parameterised one, which is the order the router resolves them in.
+_TEMPLATE_INDEX: Final[dict[tuple[str, int], tuple[Operation, ...]]] = {}
+
+
+def _build_template_index() -> dict[tuple[str, int], tuple[Operation, ...]]:
+    grouped: dict[tuple[str, int], list[Operation]] = {}
+    for op in OPERATIONS:
+        grouped.setdefault((op.method, len(_segments(op.path))), []).append(op)
+    return {
+        key: tuple(sorted(ops, key=lambda op: (-_literal_count(op.path), op.path)))
+        for key, ops in grouped.items()
+    }
+
+
+_TEMPLATE_INDEX.update(_build_template_index())
+
+
+def operation_for_template(method: str, path: str) -> Operation | None:
+    """Resolve a concrete, prefix-free path against the registered templates.
+
+    Returns ``None`` when no template matches, and also when two templates
+    match equally well. Ambiguity is closed rather than guessed: if a path is
+    not owned by exactly one operation it gets no scope, which is the contract's
+    rule for an unknown protected operation and the only safe reading of a
+    path two operations both claim.
+
+    A trailing slash is refused for the same reason. The router redirects
+    ``/libraries/`` to ``/libraries`` rather than serving it, so a path that
+    shape is not one any operation is actually serving.
+    """
+    method = method.upper()
+    if path.endswith("/") and path != "/":
+        return None
+
+    segments = _segments(path)
+    candidates = _TEMPLATE_INDEX.get((method, len(segments)), ())
+    if not candidates:
+        return None
+
+    best: Operation | None = None
+    best_literals = -1
+    ties = 0
+    for op in candidates:
+        if not _template_matches(op.path, segments):
+            continue
+        literals = _literal_count(op.path)
+        if literals > best_literals:
+            best, best_literals, ties = op, literals, 1
+        elif literals == best_literals:
+            ties += 1
+    if best is None or ties > 1:
+        return None
+    return best
+
+
 def operation_for(method: str, path: str) -> Operation | None:
     """Find the operation a served (method, path) belongs to.
 
@@ -916,11 +1005,25 @@ def operation_for(method: str, path: str) -> Operation | None:
     no operation claims is not an error — member administration, uploads
     bookkeeping and the auth routes are served by the same app without being
     product operations.
+
+    Two passes, in this order. The exact pass answers for a template, which is
+    what a route table and every registry check hands in. The template pass
+    answers for a concrete path, which is what a request carries: a router
+    template says ``/libraries/{library_id}/sources`` and the client sent
+    ``/api/v1/libraries/<uuid>/sources``. Only the second pass can find the
+    operation behind a real URL, and without it every parameterized operation
+    resolved to nothing and was closed.
     """
     canonical = canonical_api_path(path)
     if canonical is not None:
-        return OPERATION_ROUTES.get((method.upper(), canonical[len(CANONICAL_PREFIX) :]))
-    return OPERATION_ROUTES.get((method.upper(), path))
+        rest = canonical[len(CANONICAL_PREFIX) :]
+    else:
+        rest = path
+
+    exact = OPERATION_ROUTES.get((method.upper(), rest))
+    if exact is not None:
+        return exact
+    return operation_for_template(method, rest)
 
 
 #: (method, prefix-free path) -> operation, for O(1) dispatch-time lookup.
@@ -1009,5 +1112,6 @@ __all__ = [
     "assert_registry_consistent",
     "canonical_api_path",
     "operation_for",
+    "operation_for_template",
     "unclaimed_routes",
 ]

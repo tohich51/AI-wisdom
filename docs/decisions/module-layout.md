@@ -61,8 +61,9 @@ that `git diff -M -U0 31dbfdd1` reports for the file once imports, docstrings an
 comments are excluded, so a non-zero value there is a change to behaviour and not
 a change to a path.
 
-The previous candidate moved 8 of the 17 to a destination the frozen map does not
-name, and left 9 of them unmoved. `kb.model_runner` went to `kb.adapters`, which
+Of the 17, the previous candidate had 4 at a deviating destination, 4 already at
+the declared one, and 9 never moved at all. The deviating four: `kb.model_runner`
+went to `kb.adapters`, which
 contradicts the contract's own layer rule — `jobs` is what survives a restart, and
 the model runner is a queue service behind the `model-runner` CLI name. It is in
 `kb.jobs`. `kb.queue_schema` became `kb.jobs.queue`, `kb.model_research` became
@@ -85,11 +86,20 @@ Every consumer is inside the lease: `src/kb`, `tests/`, `scripts/`,
 not touched. `docs/handoff/` is the evidence archive of past cards and is
 deliberately left unrewritten, so it still names the pre-move modules.
 
-The reconciliation is re-runnable and covers all 17, not the convenient ones:
+The reconciliation is re-runnable and covers all 17, not the convenient ones.
+The verifier lives with the evidence rather than in a scratch directory, so the
+command below is one a reviewer can actually run:
 
 ```
-python /tmp/f-verify.py    # 17/17 assignments fully reconciled
+python /home/kb-inspect/ai-wisdom-handoff/architecture-20261015/results/F-move-map/verify_move_map.py
+# 17/17 assignments fully reconciled
 ```
+
+It checks four things per assignment: the destination exists, the origin is
+gone, no stale dotted module reference survives in any code surface, and no
+stale `from <old package> import <old leaf>` form survives. Documentation is
+reported as information rather than counted, because a move table is supposed to
+name the module it moved from.
 
 ## Entrypoints and persisted names
 
@@ -225,12 +235,59 @@ Two changes make the table the single dispatch source.
 `http_scope` is retained as the frozen legacy table. It is now a
 cross-check in tests rather than a second source at runtime.
 
+One question is left open on purpose. The 33 routes absorbed into the registry
+carry the scope they already answered under, read out of that frozen table
+rather than chosen, so the change is behaviour-preserving — but it also means
+the registry now declares, as the dispatch source, policy that was never
+individually reviewed. `GET /libraries/{id}/grants` answers under `kb:read`
+rather than `kb:admin`, because the frozen table only demanded `kb:admin` for
+non-GET. That is the acting contract and this card does not change it; whether
+it is the policy the project wants is a coordinator decision that belongs
+before A1, A2 and B1 rely on the registry as their scope source. It is recorded
+as an open question in the fix receipt, not resolved here.
+
 `unclaimed_routes` was inert and is now a real guard. It compared the full
 canonical path carried by a route inventory against `OPERATION_ROUTES`, which
 is keyed by the prefix-free template, so `(method, path) not in OPERATION_ROUTES`
 was true for every entry: 83 served, 50 registered, 83 reported unclaimed, 50
 false positives. The residual is empty, and the test asserts empty instead of
 printing it.
+
+## How a concrete path reaches its operation
+
+The scope section above says the registry is the dispatch source. It is only
+true if a request path can be matched to a registered operation, and for a while
+it was not.
+
+A router template and a request path are different strings.
+`/libraries/{library_id}/sources` is what the router declares;
+`/api/v1/libraries/<uuid>/sources` is what the client sends. `operation_for` was
+doing an exact dictionary lookup on the template, so every parameterized
+operation resolved to nothing, `scope_for_request` returned `None`, and the
+caller was refused — with the correct scope in their token. 122 of 166
+operation/prefix combinations were closed this way, including
+`GET /api/libraries/<uuid>/sources` and `POST /api/v1/uses/<uuid>/applied`.
+
+`operation_for` now tries the exact template first, which is what a route table
+and every registry check hands it, and then resolves the concrete path against
+the templates. Three properties are deliberate:
+
+* **Prefix normalisation is untouched.** The canonical prefix is stripped first,
+  so both prefixes reach the same templates and cannot diverge.
+* **A literal outranks a parameter**, which is the order the router resolves
+  them in. The registry contains exactly one pair where a concrete path matches
+  two templates — `GET /research/sources` against `GET /research/{run_id}` — and
+  the static operation is the one Starlette actually serves.
+* **Ambiguity is closed, not guessed.** A path two templates match equally well
+  resolves to nothing, as does a trailing slash the router would only redirect.
+  Scope is granted when exactly one operation owns the path.
+
+The reason this went unnoticed is worth recording: the earlier registry tests
+looked the template up, which is the one input the exact pass answered. They
+passed while 61 operations were unreachable. `tests/runtime/test_scope_resolution.py`
+uses real UUIDs everywhere, drives one GET and one POST through the real
+`kb.runtime_identity` bearer branch, and keeps the negatives — unknown path,
+mismatched method, missing scope — closed at that same boundary.
 
 ## The shared connection factory
 
@@ -264,9 +321,18 @@ guarantee: a connection is only useful here with the identity already on it,
 and that identity is transaction-local.
 
 The four test fixtures that stood a pool up for a test app now publish the
-factory too, and a test asserts that no file under `tests/` re-publishes the
-pool — a fixture that quietly restored it would make every integration test
-pass while reopening the hole.
+factory too, so they exercise the same path the application does. The guards
+that do exist are two, both over `src/kb`: an AST sweep asserting
+`pool.connection()` is called from exactly one place, and a text sweep asserting
+nothing under `src/kb` still names the removed `db_pool` attribute.
+
+There is no `tests/`-scoped guard, and an earlier version of this record claimed
+there was. The claim was not a missing test but a missing edit: a stale local
+copy of the test file was pushed over the one that carried the sweep, so the
+assertion was silently dropped while both this record and the receipt went on
+describing it. The claim is withdrawn rather than the guard rebuilt, because the
+four fixtures are already covered by the integration suites that run them, and a
+source-text sweep over the test tree would mostly be a guard against prose.
 
 ## The /app/* SPA fallback
 
