@@ -35,7 +35,7 @@ from kb.domain.tiers import UsageState
 
 def test_original_and_research_studio_graph_tools_are_declared():
     assert set(MCP_TOOLS) == EXPECTED_TOOLS
-    assert len(MCP_TOOLS) == 30
+    assert len(MCP_TOOLS) == 31
     assert {
         "start_research",
         "research_status",
@@ -44,6 +44,7 @@ def test_original_and_research_studio_graph_tools_are_declared():
         "get_semantic_network",
         "save_research_note",
         "publish_knowledge",
+        "list_retrievals",
     } <= EXPECTED_TOOLS
 
 
