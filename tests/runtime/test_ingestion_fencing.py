@@ -11,7 +11,7 @@ from test_runtime import source
 from test_runtime import world as world
 
 from kb import ingestion
-from kb.access.policy import AccessDenied
+from kb.access.policy import AccessDenied, transaction_identity
 
 pytestmark = pytest.mark.integration
 
@@ -233,6 +233,16 @@ def test_authority_revoked_during_provider_prevents_late_persistence(
                 conn.execute(
                     "UPDATE kb.source SET publication='withdrawn' WHERE id=%s", (source_id,)
                 )
+        # The retained legacy overload must never finish a newer fenced attempt.
+        with (
+            psycopg.connect(world["worker"]) as conn,
+            transaction_identity(conn, world["principal"]),
+        ):
+            conn.execute(
+                "SELECT kb.finish_revoked_job(%s,%s,%s)",
+                (job, world["principal"].principal_id, world["principal"].account_id),
+            )
+        assert _snapshot(world, job)[0][0] == "running"
     finally:
         _finish(thread, barrier)
     assert errors == []
