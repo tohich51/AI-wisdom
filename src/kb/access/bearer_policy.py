@@ -3,6 +3,7 @@
 import os
 
 from kb.access.policy import AccessDenied, Principal
+from kb.contracts.operations import ALIAS_PREFIX, CANONICAL_PREFIX, canonical_api_path
 
 HANDLER_SCOPES = {
     "list_libraries": "kb:read",
@@ -60,7 +61,24 @@ def bearer_principal(identity) -> Principal:
     )
 
 
+def api_scope_path(path: str) -> str:
+    """Collapse the canonical prefix back onto the shipped /api form.
+
+    The rules in :func:`http_scope` are frozen and are written against a literal
+    ``/api`` prefix. Normalising first means adding ``/api/v1`` cannot quietly
+    drop the ``kb:admin`` checks that match on ``/api/libraries/`` and let a
+    grants or policy route answer under a weaker scope. A path outside the API
+    prefixes is returned untouched, so the auth and static routes keep the
+    behaviour they always had.
+    """
+    canonical = canonical_api_path(path)
+    if canonical is None:
+        return path
+    return f"{ALIAS_PREFIX}{canonical[len(CANONICAL_PREFIX) :]}"
+
+
 def http_scope(method: str, path: str) -> str:
+    path = api_scope_path(path)
     if "/orgs/" in path:
         return "kb:admin"  # Administrative MCP is intentionally absent in v1.
     if method not in {"GET", "HEAD"} and path.startswith("/api/libraries/"):

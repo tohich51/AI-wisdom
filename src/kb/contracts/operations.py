@@ -1,0 +1,731 @@
+"""The shared operation registry: one declaration per product operation.
+
+Before this module the HTTP router, the MCP surface and the bearer scope table
+each carried their own private copy of "which operation is this, which method,
+which path, which scope, does it change state". Three copies drift. The visible
+consequence of that drift is a route that answers under one scope in the
+browser and under another over MCP, and an alias prefix that quietly loses an
+admin check because the scope table matched on a literal ``/api`` string.
+
+So the registry is the single declaration, and everything else either consumes
+it or is asserted against it:
+
+* :mod:`kb.http.router` mounts the transport under both prefixes and verifies
+  that every registered operation resolves to a real route.
+* :mod:`kb.mcp.server` verifies that every registered MCP tool keeps the scope
+  its handler has always required.
+* :mod:`kb.access.bearer_policy` normalises a request path through
+  :func:`canonical_api_path` so ``/api`` and ``/api/v1`` cannot diverge.
+
+This module is deliberately free of ``kb`` imports. It is contract data, and it
+must be importable from the contracts package without pulling in FastAPI, the
+database layer or the identity stack.
+
+The HTTP path templates here are prefix-free: the same declaration serves the
+canonical ``/api/v1`` prefix and the compatible ``/api`` alias. The MCP tool
+column is the *existing* tool name from :mod:`kb.contracts.mcp_tools`; nothing
+in this module renames a tool, a route, a scope or a behaviour.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+from enum import StrEnum
+from typing import Final
+
+#: Contract revision for the operation declarations below. Bump the patch part
+#: for a wording or docstring edit, the minor part when a declaration is added,
+#: and never silently change an existing (method, path, scope) triple.
+CONTRACT_REVISION: Final[str] = "architecture-20261015-v1"
+
+#: The canonical prefix. New clients use it; the schema is served from it.
+API_VERSION: Final[str] = "v1"
+CANONICAL_PREFIX: Final[str] = f"/api/{API_VERSION}"
+
+#: The prefix that already shipped. It stays byte-compatible and is kept out of
+#: the OpenAPI schema so the two prefixes cannot produce duplicate operation ids.
+ALIAS_PREFIX: Final[str] = "/api"
+
+#: Canonical first, alias second. Every consumer keeps this order.
+API_PREFIXES: Final[tuple[str, ...]] = (CANONICAL_PREFIX, ALIAS_PREFIX)
+
+
+class Effect(StrEnum):
+    """Whether fulfilling an operation changes persisted state.
+
+    ``read`` operations are safe to retry and must never appear with a method
+    that mutates. ``write`` operations are the ones that need an idempotency
+    key, a CSRF check and exactly one dispatch — the reason the alias mount is
+    asserted to add paths rather than to add a second call.
+    """
+
+    READ = "read"
+    WRITE = "write"
+
+
+READ_METHODS: Final[frozenset[str]] = frozenset({"GET", "HEAD", "OPTIONS"})
+
+
+@dataclass(frozen=True, slots=True)
+class Page:
+    """Server-side pagination declared for one list operation.
+
+    ``limit_default`` is the value a caller gets when it sends no parameters.
+    It is not a new default invented for v1: it is the limit the catalog
+    function already applied, so an existing client that sends nothing sees
+    exactly the rows it saw before.
+    """
+
+    limit_default: int
+    limit_max: int
+    offset_default: int = 0
+
+    def __post_init__(self) -> None:
+        if not 1 <= self.limit_default <= self.limit_max:
+            raise ValueError("limit_default must be within 1..limit_max")
+        if self.offset_default < 0:
+            raise ValueError("offset_default must not be negative")
+
+
+@dataclass(frozen=True, slots=True)
+class Operation:
+    """One product operation, declared once for every surface that serves it.
+
+    ``path`` is the prefix-free template exactly as the router declares it, so
+    a drift between this table and the router is a plain string mismatch that
+    the registry test can report, not a semantic guess.
+    """
+
+    name: str
+    method: str
+    path: str
+    effect: Effect
+    scope: str
+    summary: str
+    mcp_tool: str | None = None
+    page: Page | None = None
+
+    @property
+    def route_key(self) -> tuple[str, str]:
+        """Identity of the route itself, independent of which prefix serves it."""
+        return (self.method, self.path)
+
+    @property
+    def canonical_path(self) -> str:
+        return f"{CANONICAL_PREFIX}{self.path}"
+
+    @property
+    def alias_path(self) -> str:
+        return f"{ALIAS_PREFIX}{self.path}"
+
+    def full_path(self, prefix: str) -> str:
+        return f"{prefix}{self.path}"
+
+    @property
+    def is_paginated(self) -> bool:
+        return self.page is not None
+
+
+def _op(
+    name: str,
+    method: str,
+    path: str,
+    effect: Effect,
+    scope: str,
+    summary: str,
+    mcp_tool: str | None = None,
+    page: Page | None = None,
+) -> Operation:
+    return Operation(
+        name=name,
+        method=method,
+        path=path,
+        effect=effect,
+        scope=scope,
+        summary=summary,
+        mcp_tool=mcp_tool,
+        page=page,
+    )
+
+
+_READ = Effect.READ
+_WRITE = Effect.WRITE
+
+#: The whole registry. Order is documentation order, not dispatch order.
+OPERATIONS: Final[tuple[Operation, ...]] = (
+    # ------------------------------------------------------------ libraries
+    _op(
+        "libraries.list",
+        "GET",
+        "/libraries",
+        _READ,
+        "kb:read",
+        "List libraries the caller can see.",
+        mcp_tool="list_libraries",
+    ),
+    _op(
+        "libraries.create",
+        "POST",
+        "/libraries",
+        _WRITE,
+        "kb:contribute",
+        "Create a library.",
+    ),
+    _op(
+        "libraries.read",
+        "GET",
+        "/libraries/{library_id}",
+        _READ,
+        "kb:read",
+        "Read one library.",
+    ),
+    # Bounded server-side pagination. The defaults are the catalog defaults.
+    _op(
+        "libraries.sources",
+        "GET",
+        "/libraries/{library_id}/sources",
+        _READ,
+        "kb:read",
+        "List RLS-visible sources in a library, newest first.",
+        page=Page(limit_default=100, limit_max=100),
+    ),
+    _op(
+        "libraries.knowledge",
+        "GET",
+        "/libraries/{library_id}/knowledge",
+        _READ,
+        "kb:read",
+        "List knowledge items in a library, oldest first.",
+        page=Page(limit_default=500, limit_max=500),
+    ),
+    _op(
+        "libraries.rules",
+        "GET",
+        "/libraries/{library_id}/rules",
+        _READ,
+        "kb:read",
+        "List rule versions in a library, published history beside drafts.",
+        page=Page(limit_default=100, limit_max=100),
+    ),
+    _op(
+        "libraries.policy.read",
+        "GET",
+        "/libraries/{library_id}/policy",
+        _READ,
+        "kb:read",
+        "Read the library policy.",
+        mcp_tool="read_library_policy",
+    ),
+    _op(
+        "libraries.policy.write",
+        "PUT",
+        "/libraries/{library_id}/policy",
+        _WRITE,
+        "kb:admin",
+        "Replace the library policy.",
+    ),
+    _op(
+        "libraries.experience.list",
+        "GET",
+        "/libraries/{library_id}/experience",
+        _READ,
+        "kb:read",
+        "List published shared experience for a library.",
+        mcp_tool="list_shared_experience",
+    ),
+    _op(
+        "libraries.experience.publish",
+        "POST",
+        "/libraries/{library_id}/experience",
+        _WRITE,
+        "kb:experience",
+        "Publish a shared experience from a use and its outcome.",
+        mcp_tool="publish_experience",
+    ),
+    _op(
+        "libraries.review",
+        "POST",
+        "/libraries/{library_id}/review",
+        _WRITE,
+        "kb:contribute",
+        "Publish or reject a batch of reviewed items.",
+        mcp_tool="review_items",
+    ),
+    _op(
+        "libraries.export",
+        "POST",
+        "/libraries/{library_id}/export",
+        _WRITE,
+        "kb:export",
+        "Export the selected rules as a skill file.",
+        mcp_tool="export_skill",
+    ),
+    # --------------------------------------------------------------- sources
+    _op(
+        "sources.submit.url",
+        "POST",
+        "/libraries/{library_id}/sources/from-url",
+        _WRITE,
+        "kb:contribute",
+        "Submit a source by link for durable ingestion.",
+        mcp_tool="submit_source",
+    ),
+    _op(
+        "sources.submit.upload",
+        "POST",
+        "/libraries/{library_id}/sources/upload",
+        _WRITE,
+        "kb:contribute",
+        "Submit an uploaded original file for durable ingestion.",
+    ),
+    _op(
+        "sources.read",
+        "GET",
+        "/sources/{source_id}",
+        _READ,
+        "kb:read",
+        "Read one source and a bounded, ordinal-ordered fragment page.",
+        mcp_tool="read_source",
+    ),
+    _op(
+        "sources.original",
+        "GET",
+        "/sources/{source_id}/original",
+        _READ,
+        "kb:export",
+        "Stream the original file bytes.",
+    ),
+    _op(
+        "sources.metadata",
+        "PATCH",
+        "/sources/{source_id}/metadata",
+        _WRITE,
+        "kb:contribute",
+        "Update source citation metadata.",
+    ),
+    _op(
+        "sources.process",
+        "POST",
+        "/sources/{source_id}/process",
+        _WRITE,
+        "kb:contribute",
+        "Queue a source for processing.",
+    ),
+    # ------------------------------------------------------------- knowledge
+    _op(
+        "knowledge.edit",
+        "PATCH",
+        "/knowledge/{knowledge_id}",
+        _WRITE,
+        "kb:contribute",
+        "Edit a knowledge item against its expected statement.",
+        mcp_tool="edit_knowledge",
+    ),
+    _op(
+        "knowledge.publish",
+        "POST",
+        "/knowledge/{knowledge_id}/publish",
+        _WRITE,
+        "kb:contribute",
+        "Publish a knowledge item.",
+        mcp_tool="publish_knowledge",
+    ),
+    _op(
+        "knowledge.reject",
+        "POST",
+        "/knowledge/{knowledge_id}/reject",
+        _WRITE,
+        "kb:contribute",
+        "Withdraw an unpublished knowledge item.",
+    ),
+    # ----------------------------------------------------------------- rules
+    _op(
+        "rules.read",
+        "GET",
+        "/rules/{rule_id}",
+        _READ,
+        "kb:read",
+        "Read one exact rule version.",
+        mcp_tool="get_rule",
+    ),
+    _op(
+        "rules.create",
+        "POST",
+        "/libraries/{library_id}/rules",
+        _WRITE,
+        "kb:contribute",
+        "Create a rule version.",
+    ),
+    _op(
+        "rules.publish",
+        "POST",
+        "/rules/{rule_id}/publish",
+        _WRITE,
+        "kb:contribute",
+        "Publish a rule version.",
+    ),
+    _op(
+        "rules.reject",
+        "POST",
+        "/rules/{rule_id}/reject",
+        _WRITE,
+        "kb:contribute",
+        "Withdraw an unpublished rule version.",
+    ),
+    # ------------------------------------------------------- search and jobs
+    _op(
+        "knowledge.search",
+        "GET",
+        "/search",
+        _READ,
+        "kb:read",
+        "Search knowledge, lexically and optionally semantically.",
+        mcp_tool="search_knowledge",
+    ),
+    _op(
+        "jobs.read",
+        "GET",
+        "/jobs/{job_id}",
+        _READ,
+        "kb:read",
+        "Read one ingestion job.",
+        mcp_tool="job_status",
+    ),
+    _op(
+        "jobs.list",
+        "GET",
+        "/jobs",
+        _READ,
+        "kb:read",
+        "List ingestion jobs.",
+        mcp_tool="list_jobs",
+    ),
+    _op(
+        "experience.summary",
+        "GET",
+        "/experience-summary",
+        _READ,
+        "kb:read",
+        "Summarise retrieval, use and outcome experience.",
+        mcp_tool="get_experience_summary",
+    ),
+    _op(
+        "retrievals.list",
+        "GET",
+        "/retrievals",
+        _READ,
+        "kb:read",
+        "List recorded retrieval events.",
+        mcp_tool="list_retrievals",
+    ),
+    # ------------------------------------------------------------ experience
+    _op(
+        "uses.start",
+        "POST",
+        "/uses",
+        _WRITE,
+        "kb:experience",
+        "Record the start of a rule use.",
+        mcp_tool="start_use",
+    ),
+    _op(
+        "uses.list",
+        "GET",
+        "/uses",
+        _READ,
+        "kb:read",
+        "List recorded rule uses.",
+    ),
+    _op(
+        "uses.applied",
+        "POST",
+        "/uses/{use_id}/applied",
+        _WRITE,
+        "kb:experience",
+        "Mark a rule use as applied.",
+    ),
+    _op(
+        "uses.outcomes",
+        "POST",
+        "/uses/{use_id}/outcomes",
+        _WRITE,
+        "kb:experience",
+        "Record the outcome of a rule use.",
+        mcp_tool="record_outcome",
+    ),
+    # -------------------------------------------------------------- projects
+    _op(
+        "projects.context",
+        "GET",
+        "/projects/{project_id}/context",
+        _READ,
+        "kb:read",
+        "Read validated project context and its pinned rules.",
+        mcp_tool="get_project_context",
+    ),
+    # -------------------------------------------------------------- research
+    _op(
+        "research.sources",
+        "GET",
+        "/research/sources",
+        _READ,
+        "kb:read",
+        "List sources available to a research run.",
+        mcp_tool="research_sources",
+    ),
+    _op(
+        "research.list",
+        "GET",
+        "/research",
+        _READ,
+        "kb:read",
+        "List research runs for a library.",
+        mcp_tool="list_research",
+    ),
+    _op(
+        "research.start",
+        "POST",
+        "/research",
+        _WRITE,
+        "kb:contribute",
+        "Start a research run.",
+        mcp_tool="start_research",
+    ),
+    _op(
+        "research.status",
+        "GET",
+        "/research/{run_id}",
+        _READ,
+        "kb:read",
+        "Read one research run.",
+        mcp_tool="research_status",
+    ),
+    _op(
+        "research.export",
+        "GET",
+        "/research/{run_id}/markdown",
+        _READ,
+        "kb:export",
+        "Export a research run as markdown.",
+        mcp_tool="export_research",
+    ),
+    _op(
+        "research.draft_rule",
+        "POST",
+        "/research/{run_id}/draft-rule",
+        _WRITE,
+        "kb:contribute",
+        "Draft a rule from a research run.",
+        mcp_tool="draft_rule_from_research",
+    ),
+    # ----------------------------------------------------------------- notes
+    _op(
+        "notes.list",
+        "GET",
+        "/notes",
+        _READ,
+        "kb:read",
+        "List research notes in a library.",
+        mcp_tool="list_research_notes",
+    ),
+    _op(
+        "notes.create",
+        "POST",
+        "/notes",
+        _WRITE,
+        "kb:contribute",
+        "Save a note against a research run.",
+        mcp_tool="save_research_note",
+    ),
+    _op(
+        "notes.read",
+        "GET",
+        "/notes/{note_id}",
+        _READ,
+        "kb:read",
+        "Read one research note.",
+        mcp_tool="read_research_note",
+    ),
+    _op(
+        "notes.update",
+        "PATCH",
+        "/notes/{note_id}",
+        _WRITE,
+        "kb:contribute",
+        "Update a research note.",
+    ),
+    # ---------------------------------------------------------------- graphs
+    _op(
+        "graphs.provenance",
+        "GET",
+        "/graphs/provenance",
+        _READ,
+        "kb:read",
+        "Build a bounded provenance graph.",
+        mcp_tool="get_knowledge_graph",
+    ),
+    _op(
+        "graphs.semantic",
+        "GET",
+        "/graphs/semantic",
+        _READ,
+        "kb:read",
+        "Build the semantic network for a library.",
+        mcp_tool="get_semantic_network",
+    ),
+    _op(
+        "graphs.concepts",
+        "POST",
+        "/graphs/concepts",
+        _WRITE,
+        "kb:contribute",
+        "Create a semantic concept.",
+        mcp_tool="create_semantic_concept",
+    ),
+    _op(
+        "graphs.relations",
+        "POST",
+        "/graphs/relations",
+        _WRITE,
+        "kb:contribute",
+        "Create a semantic relation.",
+        mcp_tool="create_semantic_relation",
+    ),
+    _op(
+        "graphs.review",
+        "POST",
+        "/graphs/review",
+        _WRITE,
+        "kb:contribute",
+        "Review a semantic relation.",
+        mcp_tool="review_semantic_relation",
+    ),
+)
+
+OPERATIONS_BY_NAME: Final[dict[str, Operation]] = {op.name: op for op in OPERATIONS}
+
+#: MCP tool name -> operation. The tool names are the existing contract names.
+MCP_OPERATIONS: Final[dict[str, Operation]] = {
+    op.mcp_tool: op for op in OPERATIONS if op.mcp_tool is not None
+}
+
+#: The list operations that paginate on the server, keyed by canonical path.
+PAGINATED_OPERATIONS: Final[dict[str, Operation]] = {
+    op.path: op for op in OPERATIONS if op.is_paginated
+}
+
+#: Families whose list routes must be bounded rather than silently truncated.
+PAGINATED_FAMILIES: Final[tuple[str, ...]] = ("sources", "knowledge", "rules")
+
+
+def canonical_api_path(path: str) -> str | None:
+    """Return ``path`` under the canonical prefix, or ``None`` if it is not one.
+
+    Both shipped prefixes collapse onto the same canonical path before any scope
+    rule looks at it. That is what stops ``/api/v1`` from answering a grants
+    route that ``/api`` would have held to ``kb:admin``.
+    """
+    for prefix in sorted(API_PREFIXES, key=len, reverse=True):
+        if path == prefix:
+            return prefix
+        if path.startswith(f"{prefix}/"):
+            return f"{CANONICAL_PREFIX}{path[len(prefix) :]}"
+    return None
+
+
+def operation_for(method: str, path: str) -> Operation | None:
+    """Find the operation a served (method, path) belongs to.
+
+    Accepts either prefix, and also the prefix-free shape a router declares, so
+    the registry can be checked against a route table directly. A request that
+    no operation claims is not an error — member administration, uploads
+    bookkeeping and the auth routes are served by the same app without being
+    product operations.
+    """
+    canonical = canonical_api_path(path)
+    if canonical is not None:
+        return OPERATION_ROUTES.get((method.upper(), canonical[len(CANONICAL_PREFIX) :]))
+    return OPERATION_ROUTES.get((method.upper(), path))
+
+
+#: (method, prefix-free path) -> operation, for O(1) dispatch-time lookup.
+OPERATION_ROUTES: Final[dict[tuple[str, str], Operation]] = {op.route_key: op for op in OPERATIONS}
+
+
+def assert_registry_consistent() -> None:
+    """Fail loudly if the registry contradicts itself.
+
+    This is deliberately cheap and total: it is called while the application is
+    being built, so a bad declaration is a startup error and not a 500 that
+    only one client happens to see.
+    """
+    duplicates = sorted(
+        name for name in OPERATIONS_BY_NAME if sum(1 for op in OPERATIONS if op.name == name) > 1
+    )
+    if duplicates:
+        raise ValueError(f"duplicate operation names: {duplicates}")
+
+    colliding = sorted(
+        f"{method} {path}"
+        for (method, path) in OPERATION_ROUTES
+        if sum(1 for op in OPERATIONS if op.route_key == (method, path)) > 1
+    )
+    if colliding:
+        raise ValueError(f"two operations share one route: {colliding}")
+
+    tools = [op.mcp_tool for op in OPERATIONS if op.mcp_tool is not None]
+    if len(tools) != len(set(tools)):
+        raise ValueError("one MCP tool is bound to more than one operation")
+
+    for op in OPERATIONS:
+        if not op.path.startswith("/"):
+            raise ValueError(f"{op.name}: path must be absolute, prefix-free")
+        if "{" in op.name or "}" in op.name or " " in op.name:
+            raise ValueError(f"{op.name}: operation name must be a plain slug")
+        if op.method not in {"GET", "HEAD", "POST", "PUT", "PATCH", "DELETE"}:
+            raise ValueError(f"{op.name}: unsupported method {op.method!r}")
+        if op.effect is Effect.READ and op.method not in READ_METHODS:
+            raise ValueError(f"{op.name}: a read operation cannot use {op.method}")
+        if op.effect is Effect.WRITE and op.method in READ_METHODS:
+            raise ValueError(f"{op.name}: a write operation cannot use {op.method}")
+        if not op.scope:
+            raise ValueError(f"{op.name}: an operation must declare its scope")
+        if not op.summary:
+            raise ValueError(f"{op.name}: an operation must declare a summary")
+
+
+def unclaimed_routes(inventory: set[tuple[str, str]]) -> list[tuple[str, str]]:
+    """Inventory entries under the canonical prefix that no operation claims.
+
+    The registry test prints this rather than failing on it: the admin and
+    upload routes are served by the app on purpose and are not product
+    operations. It is returned so a reviewer can see the exact residual.
+    """
+    return sorted(
+        (method, path)
+        for method, path in inventory
+        if path.startswith(f"{CANONICAL_PREFIX}/") and (method, path) not in OPERATION_ROUTES
+    )
+
+
+__all__ = [
+    "ALIAS_PREFIX",
+    "API_PREFIXES",
+    "API_VERSION",
+    "CANONICAL_PREFIX",
+    "CONTRACT_REVISION",
+    "MCP_OPERATIONS",
+    "OPERATIONS",
+    "OPERATIONS_BY_NAME",
+    "OPERATION_ROUTES",
+    "PAGINATED_FAMILIES",
+    "PAGINATED_OPERATIONS",
+    "READ_METHODS",
+    "Effect",
+    "Operation",
+    "Page",
+    "assert_registry_consistent",
+    "canonical_api_path",
+    "operation_for",
+    "unclaimed_routes",
+]

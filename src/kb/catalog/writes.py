@@ -425,11 +425,22 @@ def job_status(conn, principal, job_id):
         return dict(row)
 
 
-def list_knowledge(conn, principal, library_id):
+def list_knowledge(conn, principal, library_id, limit=500, offset=0):
+    """List knowledge items in a library, oldest first, on a stable order.
+
+    The tiebreaker on id is what makes an offset page mean the same thing twice:
+    without it, rows that share a created_at can move between pages. The default
+    limit is the 500 this function always applied.
+    """
+    if not 1 <= limit <= 500:
+        raise ValueError("invalid_limit")
+    if offset < 0:
+        raise ValueError("invalid_offset")
     with transaction_identity(conn, principal), conn.cursor(row_factory=dict_row) as cur:
         cur.execute(
-            "SELECT * FROM kb.knowledge WHERE library_id=%s ORDER BY created_at LIMIT 500",
-            (library_id,),
+            "SELECT * FROM kb.knowledge WHERE library_id=%s "
+            "ORDER BY created_at, id LIMIT %s OFFSET %s",
+            (library_id, limit, offset),
         )
         records = [dict(r) for r in cur.fetchall()]
         for record in records:

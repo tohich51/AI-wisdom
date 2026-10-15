@@ -1,6 +1,6 @@
 """Thin HTTP adapters sharing the catalog and SQL access policies with MCP."""
 
-from typing import Literal
+from typing import Annotated, Literal
 from uuid import UUID
 
 from fastapi import APIRouter, Query, Request
@@ -74,9 +74,18 @@ def update_library_policy(library_id: UUID, body: policies.LibraryPolicyInput, c
 
 
 @router.get("/libraries/{library_id}/sources")
-def sources(library_id: UUID, conn: Db, me: Me):
+def sources(
+    library_id: UUID,
+    conn: Db,
+    me: Me,
+    limit: Annotated[int, Query(ge=1, le=100)] = 100,
+    offset: Annotated[int, Query(ge=0)] = 0,
+):
+    """Bounded page of sources, newest first. Sending neither parameter returns
+    the same hundred rows the catalog default always returned, in the same
+    order, so an existing client is unaffected."""
     with mapped_errors():
-        return content.list_sources(conn, me, library_id)
+        return content.list_sources(conn, me, library_id, limit, offset)
 
 
 @router.get("/sources/{source_id}")
@@ -168,15 +177,31 @@ def search(
 
 
 @router.get("/libraries/{library_id}/knowledge")
-def knowledge(library_id: UUID, conn: Db, me: Me):
+def knowledge(
+    library_id: UUID,
+    conn: Db,
+    me: Me,
+    limit: Annotated[int, Query(ge=1, le=500)] = 500,
+    offset: Annotated[int, Query(ge=0)] = 0,
+):
+    """Bounded page of knowledge items, oldest first. The previous behaviour was
+    a silent LIMIT 500 with no way to ask for the rest; the default is still
+    500, so a caller that sends nothing sees exactly what it saw before."""
     with mapped_errors():
-        return writes.list_knowledge(conn, me, library_id)
+        return writes.list_knowledge(conn, me, library_id, limit, offset)
 
 
 @router.get("/libraries/{library_id}/rules")
-def rules(library_id: UUID, conn: Db, me: Me):
+def rules(
+    library_id: UUID,
+    conn: Db,
+    me: Me,
+    limit: Annotated[int, Query(ge=1, le=100)] = 100,
+    offset: Annotated[int, Query(ge=0)] = 0,
+):
+    """Bounded page of rule versions, drafts beside published history."""
     with mapped_errors():
-        return content.list_rules(conn, me, library_id)
+        return content.list_rules(conn, me, library_id, limit, offset)
 
 
 @router.get("/rules/{rule_id}")

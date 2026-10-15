@@ -52,7 +52,27 @@ from kb.contracts.mcp_tools import (
 from kb.ingestion import submit_processing
 
 
+def assert_mcp_contract_registered() -> None:
+    """Every MCP tool in the frozen contract declares an operation.
+
+    A new tool that forgot to register would otherwise ship with no HTTP
+    binding and no declared scope, and nothing would notice until someone
+    compared the two surfaces by hand.
+    """
+    from kb.contracts.mcp_tools import EXPECTED_TOOLS
+    from kb.contracts.operations import MCP_OPERATIONS, assert_registry_consistent
+
+    assert_registry_consistent()
+    missing = sorted(EXPECTED_TOOLS - set(MCP_OPERATIONS))
+    if missing:
+        raise ValueError(f"MCP tools without a registry operation: {missing}")
+    unknown = sorted(set(MCP_OPERATIONS) - EXPECTED_TOOLS)
+    if unknown:
+        raise ValueError(f"the registry binds tools the contract does not declare: {unknown}")
+
+
 def build_mcp(app, hosts):
+    assert_mcp_contract_registered()
     resource = os.environ["KB_MCP_RESOURCE_URL"]
 
     class Verifier:

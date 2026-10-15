@@ -14,8 +14,8 @@ from psycopg_pool import ConnectionPool
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from kb.catalog.storage import LocalBlobStore
-from kb.http import content, libraries, members, projects, research, uploads
 from kb.http.auth_config import AuthSettings
+from kb.http.router import mount_api
 from kb.mcp.server import build_mcp
 from kb.retrieval.embedding_profile import SELECTED_PROFILE
 from kb.retrieval.semantic_search import SemanticSearch
@@ -89,13 +89,9 @@ def create_app() -> FastAPI:
     install_auth(app, pool, http_client, settings)
     app.add_middleware(TrustedHostMiddleware, allowed_hosts=allowed_hosts)
 
-    app.include_router(libraries.router, prefix="/api")
-    app.include_router(projects.router, prefix="/api")
-    app.include_router(members.router, prefix="/api")
-    app.include_router(uploads.router, prefix="/api")
-
-    app.include_router(content.router, prefix="/api")
-    app.include_router(research.router, prefix="/api")
+    # /api/v1 is canonical; /api stays as a byte-compatible alias over the
+    # same router object, so an operation is declared and dispatched once.
+    mount_api(app)
     static = Path(__file__).parent / "static"
     app.mount("/static", StaticFiles(directory=static), name="static")
     index_html = (static / "index.html").read_text(encoding="utf-8")
