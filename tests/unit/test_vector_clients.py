@@ -177,6 +177,27 @@ def _try_lease(cache, identity, budget, result):
         result.append(type(exc).__name__)
 
 
+def wait_flag(owner, name, timeout=2.0):
+    """Wait briefly for an attribute on a double to become truthy.
+
+    The cancel is scheduled before the caller returns and observed by the SDK
+    coroutine a moment later, so "did it see it" is a question about a
+    delivered event and not about the instant the lease raised.
+    """
+    end = time.monotonic() + timeout
+    while not getattr(owner, name, False) and time.monotonic() < end:
+        time.sleep(0.005)
+    return bool(getattr(owner, name, False))
+
+
+def wait_event(event, timeout=2.0):
+    """The same wait for a flag that is already an Event."""
+    end = time.monotonic() + timeout
+    while not event.is_set() and time.monotonic() < end:
+        time.sleep(0.005)
+    return event.is_set()
+
+
 def wait_closed(clients, timeout=5.0):
     """Wait for handed-off closes to actually land. Returns whether they did.
 
@@ -935,7 +956,7 @@ def test_a_slow_initialize_is_cancelled_at_the_deadline(store):
     elapsed = time.monotonic() - began
 
     assert started.is_set(), "initialization must actually begin"
-    assert cancelled.is_set(), "a cancelled initialize must be told, not dropped"
+    assert wait_event(cancelled), "a cancelled initialize must be told, not dropped"
     assert elapsed < 2.0, elapsed
     cache.shutdown()
     assert built[0].closed, "a half-built client must be closed, not leaked"
@@ -1251,7 +1272,7 @@ def test_a_close_that_refuses_to_stop_is_owned_until_it_really_ends(store, monke
     deadline = time.monotonic() + 5
     while (cache.io_loop_running or cache._abandoned_closes == 0) and time.monotonic() < deadline:
         time.sleep(0.005)
-    assert built[0].cancelled.is_set(), "the cancellation must reach the SDK coroutine"
+    assert wait_flag(built[0], "cancelled"), "the cancellation must reach the SDK coroutine"
     assert cache._abandoned_closes == 1, "a cancelled close is not a close, and says so"
     assert wait_idle(cache)
     assert cache._finalized
@@ -1658,7 +1679,7 @@ def test_a_cancelled_initialize_returns_at_its_budget_not_budget_plus_grace(stor
     elapsed = time.monotonic() - began[0]
 
     assert elapsed < 0.15, f"budget plus grace was paid: {elapsed:.3f}s"
-    assert built[0].cancelled, "the cancellation must reach the SDK coroutine"
+    assert wait_flag(built[0], "cancelled"), "the cancellation must reach the SDK coroutine"
     release.set()
     # The pool is live, so nothing is torn down until it is shut down. What has
     # to be finished first is the charge, which the real unwind releases.
@@ -1741,3 +1762,67 @@ def _record(built, client):
 
 def _live_clients(built):
     return sum(1 for c in built if not c.closed)
+
+
+def test_a_failing_release_step_still_hands_the_charge_back(store):
+    """A release step that raises must not strand the pool.
+
+    This is the shape of the run that had to be stopped. The charge was
+    decremented after the release step, so an exception there left the pool
+    permanently undrainable and every teardown in the rest of the run waited
+    out its full timeout instead of failing.
+    """
+    read_root, _identities = store
+    built = []
+    cache = pool_for(read_root, built)
+
+    def failing_release():
+        raise ValueError("synthetic release failure")
+
+    cache._own_work("release-failure", lambda: None, failing_release)
+    deadline = time.monotonic() + 5
+    while cache._outstanding_work() and time.monotonic() < deadline:
+        time.sleep(0.005)
+
+    assert cache._outstanding_work() == 0, "the charge is handed back regardless"
+    cache.shutdown()
+    assert wait_idle(cache)
+
+
+def test_the_client_permit_comes_back_when_the_budget_is_gone_after_construction(store):
+    """A client built for a budget that had already run out returns its permit.
+
+    The permit belongs to the caller until the build succeeds or an unfinished
+    initialization takes it over, so this branch returns it. When both returned
+    it, a bounded semaphore raised, and that raise landed inside a deferred
+    release step, which is the strand above.
+    """
+    read_root, identities = store
+    identity = identities[0]
+    built = []
+
+    def make(**kwargs):
+        client = FakeClient(**kwargs)
+        built.append(client)
+        return client
+
+    # Capped at one, so a returned permit is readable as one.
+    cache = VectorClientCache(URL, read_root, make, max_clients=1)
+    key = cache.key_for(identity, credential_revision(KEY))
+
+    now = [0.0]
+    gone = Deadline(1.0, clock=lambda: now[0])
+    now[0] = 5.0  # the budget is spent before the build is even attempted
+    closers = []
+    with cache._lock:
+        with pytest.raises(TimeoutError):
+            cache._build_locked(key, KEY, gone, closers)
+        # Read under the lock, which the context manager releases for us.
+        caller_free = cache._client_slots._value
+        cache._close_all(closers)
+
+    assert built, "a client was constructed, and must not be left unclosed"
+    assert caller_free == 1, "the permit is the caller's to return"
+    assert cache._client_slots._value == 1, "and it comes back exactly once"
+    cache.shutdown()
+    assert wait_idle(cache)

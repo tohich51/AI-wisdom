@@ -834,8 +834,18 @@ class VectorClientCache:
                 # or the path, and neither belongs in a log line.
                 _logger.debug("deferred %s failed: %s", label, type(exc).__name__)
             finally:
-                if on_done is not None:
-                    on_done()
+                try:
+                    if on_done is not None:
+                        on_done()
+                except Exception as exc:
+                    # A release step that fails must not strand the charge. A
+                    # stranded charge means the pool can never drain, so the
+                    # finalizer never runs, and every teardown after it waits
+                    # out its whole timeout: one raised exception becomes a run
+                    # that appears to hang.
+                    _logger.debug(
+                        "deferred %s release failed: %s", label, type(exc).__name__
+                    )
                 with self._holders_changed:
                     self._deferred -= 1
                     self._holders_changed.notify_all()
@@ -1176,10 +1186,20 @@ class VectorClientCache:
             # here has its close started, and that close is what returns the
             # permit. Every entry busy means there is nothing to drop, and the
             # owned cap is then the honest answer rather than a spin.
-            with self._critical(None) as closers:
+            # Bounded like the wait it sits in. Another thread doing
+            # lifecycle work under the lock must not turn this into a wait
+            # with no end of its own; the slice is spent and the loop tries
+            # again.
+            if not self._acquire_pool_lock(Deadline(CAPACITY_POLL_SECONDS)):
+                continue
+            try:
+                closers: list[_Entry] = []
                 if not self._make_room_locked(closers):
                     return False
-                self._evict_locked(self._clock(), closers)
+                # Counted under the lock, as everywhere else.
+                self._close_all(closers)
+            finally:
+                self._lock.release()
 
     def _build_locked(
         self,
@@ -1207,16 +1227,12 @@ class VectorClientCache:
         if budget <= 0:
             # The budget is gone. Build nothing rather than start work that
             # cannot be waited for.
-            # The permit is already taken, so the entry carries it: closed
-            # below, which is what gives it back. Without this it leaked.
+            # The permit is the caller's until the build succeeds, and the
+            # caller returns it when this raises. The entry must therefore not
+            # carry it as well: two holders returning one permit is an
+            # over-release, and an over-release on a bounded semaphore raises.
             closers.append(
-                _Entry(
-                    key=key,
-                    client=client,
-                    last_used=self._clock(),
-                    closed=True,
-                    holds_slot=True,
-                )
+                _Entry(key=key, client=client, last_used=self._clock(), closed=True)
             )
             raise TimeoutError(INDEX_DEADLINE_EXCEEDED)
         # From here the client exists, so it holds capacity until it is closed.
@@ -1238,6 +1254,8 @@ class VectorClientCache:
             # ordinary path applies: claimed for closing here, closed after the
             # lock is released with the rest.
             entry.closed = True
+            # Same rule: the caller returns the permit for this raise.
+            entry.holds_slot = False
             closers.append(entry)
             raise
         return entry
