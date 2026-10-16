@@ -137,7 +137,14 @@ class IndexCallStillOpen(RuntimeError):
     facts, and a caller that cleans up differently for the two must be able to
     tell them apart. This one says the cancellation did not take within the
     grace period, so the request may still be on the wire.
+
+    ``submission`` is the exact unfinished submission whose ``finished`` event
+    proves when the client may finally be retired and released.
     """
+
+    def __init__(self, message: str, submission: _Submission) -> None:
+        super().__init__(message)
+        self.submission = submission
 
 
 class VectorClientPoolClosed(RuntimeError):
@@ -355,7 +362,10 @@ class _IODispatcher:
         except RuntimeError:  # pragma: no cover - the loop stopped under us
             pass
         if not submission.await_unwound(self._grace):
-            raise IndexCallStillOpen("index call did not stop after cancellation")
+            raise IndexCallStillOpen(
+                "index call did not stop after cancellation",
+                submission=submission,
+            )
         if not submission.cancelled:
             # It stopped, but not because we cancelled it: either it had not
             # begun when the cancel landed, or the socket timeout or the
@@ -404,28 +414,41 @@ class LeasedClient:
     pool closes it when eviction, rotation or shutdown says so.
     """
 
-    __slots__ = ("_client", "_deadline", "_pool", "revision")
+    __slots__ = ("_client", "_deadline", "_entry", "_pool", "_stuck", "revision")
 
     def __init__(
         self,
         pool: VectorClientCache,
-        client: Any,
+        entry: _Entry,
         revision: str,
         deadline: Deadline | None,
     ) -> None:
         self._pool = pool
-        self._client = client
+        self._client = entry.client
+        self._entry = entry
         self.revision = revision
         self._deadline = deadline
+        self._stuck: IndexCallStillOpen | None = None
 
     @property
     def deadline(self) -> Deadline | None:
         return self._deadline
 
+    @property
+    def unfinished_submission(self) -> _Submission | None:
+        return self._stuck.submission if self._stuck is not None else None
+
     def call(self, make_coro: Callable[[], Any]) -> Any:
         """Run one SDK coroutine, bounded by this lease's remaining budget."""
+        if self._stuck is not None:
+            raise self._stuck
         remaining = self._deadline.remaining if self._deadline is not None else None
-        return self._pool._io.run(make_coro, remaining)
+        try:
+            return self._pool._io.run(make_coro, remaining)
+        except IndexCallStillOpen as exc:
+            self._stuck = exc
+            self._pool._quarantine(self._entry)
+            raise
 
     def find(self, query: str, **kwargs: Any) -> Any:
         """One bounded ``find()`` against the pooled client."""
@@ -521,6 +544,10 @@ class VectorClientCache:
             self._entries.pop(entry.key, None)
         self._close(entry)
 
+    def _quarantine(self, entry: _Entry) -> None:
+        with self._lock:
+            self._retire_locked(entry)
+
     def _evict_locked(self, now: float) -> None:
         for entry in [e for e in self._entries.values() if e.holders == 0 and self._stale(e, now)]:
             if self._entries.get(entry.key) is entry:
@@ -556,6 +583,49 @@ class VectorClientCache:
         self._io.run(client.initialize, CLOSE_TIMEOUT_SECONDS)
         return _Entry(key=key, client=client, last_used=self._clock())
 
+    def _release_holder(self, entry: _Entry, holder_owner: int) -> bool:
+        with self._lock:
+            entry.holders -= 1
+            if entry.holders == 0:
+                if entry.retired or self._stale(entry, self._clock()):
+                    # Guarded by identity: a rotated-out entry shares its key
+                    # with the replacement and must not evict it.
+                    if self._entries.get(entry.key) is entry:
+                        self._entries.pop(entry.key, None)
+                    self._close(entry)
+                else:
+                    entry.touch(self._clock())
+            # Releasing is when a client becomes idle, and it is the only moment
+            # the bound can be restored without waiting for the next acquire.
+            self._evict_locked(self._clock())
+            # Keep ownership registered until all required closes finish.
+            self._live_holders[holder_owner] -= 1
+            if self._live_holders[holder_owner] == 0:
+                del self._live_holders[holder_owner]
+                self._holders_changed.notify_all()
+            return self._closed and not self._live_holders
+
+    def _defer_holder_release(
+        self,
+        entry: _Entry,
+        holder_owner: int,
+        submission: _Submission,
+    ) -> None:
+        def release_when_finished() -> None:
+            submission.finished.wait()
+            stop_io = self._release_holder(entry, holder_owner)
+            if stop_io:
+                self._io.stop()
+            self._outstanding.release()
+
+        # Only exceptional cancellations create a waiter. The semaphore slot
+        # remains held, bounding these waiters to max_outstanding.
+        threading.Thread(
+            target=release_when_finished,
+            name="kb-vector-retired-release",
+            daemon=True,
+        ).start()
+
     @contextmanager
     def lease(self, identity: str, deadline: Deadline | None = None) -> Iterator[LeasedClient]:
         """One client, reference counted, for the duration of one call.
@@ -579,6 +649,7 @@ class VectorClientCache:
         entry: _Entry | None = None
         holder_owner = threading.get_ident()
         stop_io = False
+        release_deferred = False
         try:
             with self._lock:
                 if self._closed:
@@ -616,36 +687,23 @@ class VectorClientCache:
                 self._live_holders[holder_owner] = self._live_holders.get(holder_owner, 0) + 1
                 self._evict_locked(now)
 
+            leased = LeasedClient(self, entry, revision, deadline)
             try:
-                yield LeasedClient(self, entry.client, revision, deadline)
+                yield leased
             finally:
-                with self._lock:
-                    entry.holders -= 1
-                    if entry.holders == 0:
-                        if entry.retired or self._stale(entry, self._clock()):
-                            # Guarded by identity: a rotated-out entry shares its
-                            # key with the replacement and must not evict it.
-                            if self._entries.get(entry.key) is entry:
-                                self._entries.pop(entry.key, None)
-                            self._close(entry)
-                        else:
-                            entry.touch(self._clock())
-                    # Releasing is when a client becomes idle, and it is the
-                    # only moment the bound can be restored without waiting for
-                    # the next acquire. Without this, concurrent callers that
-                    # pushed the pool past max_clients leave it over the bound
-                    # until traffic picks up again.
-                    self._evict_locked(self._clock())
-                    # Keep ownership registered until all required closes finish.
-                    self._live_holders[holder_owner] -= 1
-                    if self._live_holders[holder_owner] == 0:
-                        del self._live_holders[holder_owner]
-                        self._holders_changed.notify_all()
-                    stop_io = self._closed and not self._live_holders
+                submission = leased.unfinished_submission
+                if submission is None:
+                    stop_io = self._release_holder(entry, holder_owner)
+                else:
+                    # This lease's one holder and slot remain charged until the
+                    # actual submission reaches its completion event.
+                    release_deferred = True
+                    self._defer_holder_release(entry, holder_owner, submission)
         finally:
-            if stop_io:
-                self._io.stop()
-            self._outstanding.release()
+            if not release_deferred:
+                if stop_io:
+                    self._io.stop()
+                self._outstanding.release()
 
     def shutdown(self) -> None:
         """Retire every client and stop the I/O loop when teardown is safe.
