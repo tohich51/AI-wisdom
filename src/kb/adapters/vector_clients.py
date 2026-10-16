@@ -542,6 +542,11 @@ class VectorClientCache:
         # credential read, a contended lock. Shutdown has to see these, or it
         # declares the pool drained while work it started is still running.
         self._pending = 0
+        # Closes that are really running. Counted like holders and pending
+        # acquisitions, because a close that is still in flight is work this
+        # pool started and has not finished: "drained" was true while one ran,
+        # which is how a shutdown managed to stop the loop underneath it.
+        self._closes = 0
         self._readers: concurrent.futures.ThreadPoolExecutor | None = None
         self._readers_lock = threading.Lock()
         self._closed = False
@@ -592,9 +597,50 @@ class VectorClientCache:
             _logger.debug("vector client close failed: %s", type(exc).__name__)
 
     def _close_all(self, entries: list[_Entry]) -> None:
-        """Close a batch of dropped clients. Always called with no lock held."""
-        for entry in entries:
-            self._close(entry)
+        """Hand a batch of dropped clients to a closer and return at once.
+
+        A close is a round trip to the I/O loop and is the pool's own
+        housekeeping, so it is never spent on a caller's budget: a rotation
+        that retires another identity's client must not make this caller
+        return after its own deadline. The entries are counted as outstanding
+        work before the thread starts and stay owned by the pool until their
+        closes actually land, so nothing can reuse them, close them a second
+        time, or stop the loop while a close is on it.
+
+        One thread per batch, not per client: a burst of evictions is one
+        closer, and the batch is bounded by the pool's own client bound.
+        """
+        if not entries:
+            return
+        with self._holders_changed:
+            self._closes += 1
+            self._holders_changed.notify_all()
+
+        def close_batch() -> None:
+            try:
+                for entry in entries:
+                    self._close(entry)
+            finally:
+                with self._holders_changed:
+                    self._closes -= 1
+                    self._holders_changed.notify_all()
+                # The last close out is also the last moment at which the pool
+                # may be drained, so this is where the loop-stop decision has
+                # to be re-taken.
+                self._maybe_stop_io()
+
+        threading.Thread(target=close_batch, name="kb-vector-close", daemon=True).start()
+
+    def _maybe_stop_io(self) -> None:
+        """Stop the I/O loop if the pool is shut down and fully drained.
+
+        Only ever called after deferred work has been *registered*, never
+        before. A close or a release started by the current call has to be
+        counted first, or this decides the pool is drained while its own
+        cleanup is still running -- which is the failure this replaced.
+        """
+        if self._closed and self._drained():
+            self._io.stop()
 
     def _drop_locked(self, entry: _Entry, closers: list[_Entry]) -> None:
         """Take an idle entry out of the pool and claim its close exactly once.
@@ -685,15 +731,15 @@ class VectorClientCache:
     def _drained(self) -> bool:
         """Whether nothing this pool started is still outstanding.
 
-        Read without the drain lock. It is a predicate over two counters and
+        Read without the drain lock. It is a predicate over three counters and
         the only consequence of a torn read is one extra turn of the wait loop
         in :meth:`shutdown`, which is bounded and re-evaluates anyway.
         """
-        return not self._live_holders and not self._pending
+        return not self._live_holders and not self._pending and not self._closes
 
     def _outstanding_work(self) -> int:
-        """Live holders plus acquisitions that still own a slot."""
-        return sum(self._live_holders.values()) + self._pending
+        """Live holders, acquisitions that own a slot, and closes still running."""
+        return sum(self._live_holders.values()) + self._pending + self._closes
 
     def _begin_acquisition(self) -> None:
         """Register work that holds a slot but has no entry yet."""
@@ -799,7 +845,7 @@ class VectorClientCache:
             raise
         return _Entry(key=key, client=client, last_used=self._clock())
 
-    def _release_holder(self, entry: _Entry, holder_owner: int) -> bool:
+    def _release_holder(self, entry: _Entry, holder_owner: int) -> None:
         with self._critical(None) as closers:
             entry.holders -= 1
             if entry.holders == 0:
@@ -816,7 +862,6 @@ class VectorClientCache:
                 if self._live_holders[holder_owner] == 0:
                     del self._live_holders[holder_owner]
                     self._holders_changed.notify_all()
-                return self._closed and self._drained()
 
     def _defer_holder_release(
         self,
@@ -826,9 +871,8 @@ class VectorClientCache:
     ) -> None:
         def release_when_finished() -> None:
             submission.finished.wait()
-            stop_io = self._release_holder(entry, holder_owner)
-            if stop_io:
-                self._io.stop()
+            self._release_holder(entry, holder_owner)
+            self._maybe_stop_io()
             self._outstanding.release()
 
         # Only exceptional cancellations create a waiter. The semaphore slot
@@ -873,7 +917,6 @@ class VectorClientCache:
         deferred_read: concurrent.futures.Future | None = None
         entry: _Entry | None = None
         holder_owner = threading.get_ident()
-        stop_io = False
         release_deferred = False
         try:
             try:
@@ -931,7 +974,7 @@ class VectorClientCache:
             finally:
                 submission = leased.unfinished_submission
                 if submission is None:
-                    stop_io = self._release_holder(entry, holder_owner)
+                    self._release_holder(entry, holder_owner)
                 else:
                     # This lease's one holder and slot remain charged until the
                     # actual submission reaches its completion event.
@@ -950,8 +993,8 @@ class VectorClientCache:
             if release_deferred:
                 pass
             else:
-                if stop_io:
-                    self._io.stop()
+                # After the release, so any close it started is already counted.
+                self._maybe_stop_io()
                 if promoted:
                     self._outstanding.release()
                 elif deferred_read is not None:
@@ -968,14 +1011,16 @@ class VectorClientCache:
         """Retire every client and stop the I/O loop when teardown is safe.
 
         Clients still in use are closed by the holder that releases them last.
-        Shutdown waits up to ``IO_JOIN_SECONDS`` for live holders *and* for
-        acquisitions that still own a slot -- a credential read that overran a
-        caller's budget is exactly one of those -- when they belong to other
-        threads; a holder calling shutdown in its own thread is reported
-        immediately instead of waiting on itself. If work remains after the
-        bounded wait, shutdown reports the still-open work and leaves the loop
-        running. The last release then closes the retired client and stops the
-        loop, so shutdown never closes or stops it under a live call.
+        Shutdown waits up to ``IO_JOIN_SECONDS`` for three kinds of outstanding
+        work belonging to other threads: live holders, acquisitions that still
+        own a slot (a credential read that overran a caller's budget is exactly
+        one of those), and closes that are really running. A holder calling
+        shutdown in its own thread is reported immediately instead of waiting
+        on itself. If work remains after the bounded wait, shutdown reports
+        the still-open work and leaves the loop running. The last release then
+        closes the retired client and stops the loop, so shutdown never closes
+        or stops it under a live call or under a close that is still in
+        flight.
         """
         with self._critical(None) as closers:
             self._closed = True

@@ -163,6 +163,22 @@ def store(tmp_path):
     return sink_root / "read", identities
 
 
+def wait_closed(clients, timeout=5.0):
+    """Wait for handed-off closes to actually land. Returns whether they did.
+
+    Closes no longer run on the caller's thread: that spent a caller's budget
+    on another client's teardown. They are owned, counted, and guaranteed, but
+    a test that asserted ``closed`` the instant a lease returned was asserting
+    a race. These wait for the completion the pool actually promises.
+    """
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if all(client.closed for client in clients):
+            return True
+        time.sleep(0.001)
+    return all(client.closed for client in clients)
+
+
 def pool_for(read_root, built, **kwargs):
     def factory(**client_kwargs):
         client = FakeClient(**client_kwargs)
@@ -170,6 +186,14 @@ def pool_for(read_root, built, **kwargs):
         return client
 
     return VectorClientCache(URL, read_root, factory, **kwargs)
+
+
+def wait_idle(cache, timeout=5.0):
+    """Wait for the I/O loop to actually stop, if it is going to."""
+    deadline = time.monotonic() + timeout
+    while cache.io_loop_running and time.monotonic() < deadline:
+        time.sleep(0.001)
+    return not cache.io_loop_running
 
 
 def test_one_client_is_reused_across_calls_and_closed_on_shutdown(store):
@@ -262,11 +286,11 @@ def test_rotation_evicts_and_closes_the_old_client(store, tmp_path):
         pass
 
     assert len(built) == 2
-    assert first.closed, "a rotated-away credential must close its client"
+    assert wait_closed([first]), "a rotated-away credential must close its client"
     assert built[1].kwargs["api_key"] == ROTATED
     assert not built[1].closed
     cache.shutdown()
-    assert built[1].closed
+    assert wait_closed([built[1]])
 
 
 def test_eviction_is_bounded_and_closes_what_it_drops(store):
@@ -282,11 +306,11 @@ def test_eviction_is_bounded_and_closes_what_it_drops(store):
     assert len(built) == 3
     # Bound is two, so exactly one entry was dropped: the oldest. The two that
     # survive are the most recent, and all three clients are accounted for.
-    assert built[0].closed, "eviction must close, not leak"
+    assert wait_closed([built[0]]), "eviction must close, not leak"
     assert not built[1].closed and not built[2].closed
     assert len(cache) == 2
     cache.shutdown()
-    assert built[1].closed and built[2].closed
+    assert wait_closed([built[1], built[2]])
 
 
 def test_ttl_expiry_closes_the_stale_client(store):
@@ -303,7 +327,7 @@ def test_ttl_expiry_closes_the_stale_client(store):
     now[0] += 11.0
     with cache.lease(identity):
         pass
-    assert built[0].closed
+    assert wait_closed([built[0]])
     assert len(built) == 2
 
 
@@ -317,10 +341,10 @@ def test_a_client_in_use_is_never_closed_under_the_caller(store):
         assert leased.revision == credential_revision(KEY)
         cache.shutdown()  # the process is going away mid-call
         assert not built[0].closed, "shutdown must not close under a live call"
-    assert built[0].closed, "the last holder releases it, and then it closes"
-    # The loop is only stopped once the last holder is gone, so the close above
-    # had a loop to run on.
-    assert not cache.io_loop_running
+    assert wait_closed([built[0]]), "the last holder releases it, and then it closes"
+    # The loop is only stopped once the last holder is gone AND that holder's
+    # close has actually landed, so the close above had a loop to run on.
+    assert wait_idle(cache)
 
 
 def test_eviction_skips_a_busy_client_and_does_not_grow_past_the_bound(store):
@@ -339,7 +363,7 @@ def test_eviction_skips_a_busy_client_and_does_not_grow_past_the_bound(store):
             assert not built[1].closed
         # The inner call released first and became the idle one, so it is the
         # entry the bound is restored with.
-        assert built[1].closed
+        assert wait_closed([built[1]])
         assert not built[0].closed
 
     assert len(cache) <= 1
@@ -347,7 +371,7 @@ def test_eviction_skips_a_busy_client_and_does_not_grow_past_the_bound(store):
     # release would be back to building a client per call.
     assert not built[0].closed
     cache.shutdown()
-    assert built[0].closed
+    assert wait_closed([built[0]])
 
 
 def test_expired_deadline_starts_nothing_and_says_so(store):
