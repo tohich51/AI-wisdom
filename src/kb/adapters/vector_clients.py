@@ -172,6 +172,11 @@ class VectorClientPoolClosed(RuntimeError):
     """A client was asked for after the pool had already been shut down."""
 
 
+def _start_closer(target: Callable[[], None]) -> None:
+    """Start one closer thread. A seam, so the failed-start path is testable."""
+    threading.Thread(target=target, name="kb-vector-close", daemon=True).start()
+
+
 def credential_revision(secret: str) -> str:
     """A short, in-process fingerprint of a credential.
 
@@ -609,6 +614,11 @@ class VectorClientCache:
 
         One thread per batch, not per client: a burst of evictions is one
         closer, and the batch is bounded by the pool's own client bound.
+
+        This must be called with the pool lock still held. The batch is counted
+        before the caller releases it, because a shutdown arriving in the gap
+        between the unlock and the count would see every counter at zero and
+        stop the I/O loop under a close that had been chosen but not started.
         """
         if not entries:
             return
@@ -629,7 +639,17 @@ class VectorClientCache:
                 # to be re-taken.
                 self._maybe_stop_io()
 
-        threading.Thread(target=close_batch, name="kb-vector-close", daemon=True).start()
+        try:
+            _start_closer(close_batch)
+        except Exception as exc:
+            # No closer will run, so the reservation has to be handed back:
+            # otherwise the counter never returns to zero, the pool never
+            # drains, and these clients are never closed. Reported by type
+            # only, because a handoff failure can carry the endpoint.
+            with self._holders_changed:
+                self._closes -= 1
+                self._holders_changed.notify_all()
+            _logger.error("vector client close handoff failed: %s", type(exc).__name__)
 
     def _maybe_stop_io(self) -> None:
         """Stop the I/O loop if the pool is shut down and fully drained.
@@ -638,9 +658,26 @@ class VectorClientCache:
         before. A close or a release started by the current call has to be
         counted first, or this decides the pool is drained while its own
         cleanup is still running -- which is the failure this replaced.
+
+        The pool lock is held across the decision *and* the stop, because
+        registration happens under that same lock. Deciding outside it would
+        leave a window in which a thread that is mid-release registers a close
+        after the check and before the stop, which is the same bug one level
+        down. The lock cannot deadlock against the join: the I/O loop only
+        runs SDK coroutines and never asks for the pool lock.
+
+        The ``_closed`` pre-check is not an optimisation. Every lease release
+        calls this, and taking the pool lock unconditionally put an unbounded
+        wait for that lock back onto the request path -- the exact defect the
+        acquisition repair removed. The loop is only ever stopped after
+        shutdown, so a live pool answers from a plain bool and never touches
+        the lock.
         """
-        if self._closed and self._drained():
-            self._io.stop()
+        if not self._closed:
+            return
+        with self._lock:
+            if self._closed and self._drained():
+                self._io.stop()
 
     def _drop_locked(self, entry: _Entry, closers: list[_Entry]) -> None:
         """Take an idle entry out of the pool and claim its close exactly once.
@@ -716,8 +753,9 @@ class VectorClientCache:
     def _critical(self, deadline: Deadline | None) -> Iterator[list[_Entry]]:
         """The pool lock, held for bookkeeping only, never for I/O.
 
-        Yields the list of clients the caller wants closed. The closes run
-        after the lock has been released.
+        Yields the list of clients the caller wants closed. They are counted
+        as outstanding work and their closer started before the lock is
+        released, and the closes themselves run after it is.
         """
         if not self._acquire_pool_lock(deadline):
             raise TimeoutError(INDEX_DEADLINE_EXCEEDED)
@@ -725,8 +763,10 @@ class VectorClientCache:
         try:
             yield closers
         finally:
-            self._lock.release()
-            self._close_all(closers)
+            try:
+                self._close_all(closers)
+            finally:
+                self._lock.release()
 
     def _drained(self) -> bool:
         """Whether nothing this pool started is still outstanding.
@@ -1048,8 +1088,13 @@ class VectorClientCache:
                 still_open,
             )
         else:
-            self._io.stop()
-            self._stop_readers()
+            # Under the pool lock for the same reason _maybe_stop_io is: a
+            # holder that is mid-release has not registered its close yet, and
+            # stopping the loop before it does is the bug this replaced.
+            with self._lock:
+                if self._closed and self._drained():
+                    self._io.stop()
+                    self._stop_readers()
 
     # ``close`` is the spelling the rest of the codebase uses for an owned
     # resource; keep both so a shutdown hook does not have to know which.

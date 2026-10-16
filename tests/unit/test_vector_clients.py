@@ -1010,3 +1010,121 @@ def test_shutdown_accounts_for_an_acquisition_still_reading_its_credential(store
     assert stopper.is_set(), "shutdown did not return once the read ended"
     assert not cache.io_loop_running
     cache.shutdown()
+
+
+def test_a_close_is_counted_before_the_pool_lock_is_released(store):
+    """The ordering the review called out, pinned without racing.
+
+    A close is chosen while the pool lock is held, so it has to be counted
+    there too. Counting it after the unlock left a window in which a shutdown
+    arriving in between saw every counter at zero and stopped the I/O loop
+    under a close that had been chosen but not yet started. Trying to hit that
+    interleaving with sleeps would be a flaky test for a contract, so the
+    contract is asserted directly: at the point the lock is still held, the
+    pool already counts the close.
+    """
+    read_root, identities = store
+    identity = identities[0]
+    built = []
+    cache = pool_for(read_root, built)
+    with cache.lease(identity) as leased:
+        leased.find("q", target_uri="x", limit=1)
+
+    observed = {}
+
+    def dropper():
+        with cache._lock:
+            closers: list = []
+            for entry in list(cache._entries.values()):
+                cache._drop_locked(entry, closers)
+            # Where the pool counts it: still under the lock.
+            cache._close_all(closers)
+            observed["under_lock"] = cache._outstanding_work()
+        observed["after_unlock"] = cache._outstanding_work()
+
+    worker = threading.Thread(target=dropper, daemon=True)
+    worker.start()
+    worker.join(5)
+
+    assert observed.get("under_lock", 0) >= 1, (
+        "a close chosen under the lock must be counted before it is released"
+    )
+    assert wait_closed([built[0]])
+    cache.shutdown()
+
+
+def test_a_close_handoff_that_cannot_start_is_handed_back(store, monkeypatch):
+    """A closer that never starts must not strand the drain count.
+
+    If the reservation is not given back, the counter never returns to zero,
+    the pool never drains again, and the clients it was holding are never
+    closed. Both of those are worse than the close failing.
+    """
+    read_root, identities = store
+    identity = identities[0]
+    built = []
+    cache = pool_for(read_root, built)
+    with cache.lease(identity) as leased:
+        leased.find("q", target_uri="x", limit=1)
+
+    def refuse(_target):
+        raise RuntimeError("cannot start new thread")
+
+    monkeypatch.setattr("kb.adapters.vector_clients._start_closer", refuse)
+    for entry in list(cache._entries.values()):
+        with cache._critical(None) as chosen:
+            cache._drop_locked(entry, chosen)
+            cache._close_all(chosen)
+
+    assert cache._outstanding_work() == 0, "the reservation must be handed back"
+    cache.shutdown()
+    assert not cache.io_loop_running, "a failed handoff must not strand the pool"
+
+
+def test_shutdown_does_not_stop_the_loop_under_a_close_in_flight(store):
+    """The loop outlives a close that is really running, and is stopped after.
+
+    The behaviour end to end, through the pool's own release path: a slow close
+    is in flight, a shutdown arrives, and it has to find the close and wait for
+    it rather than reporting a drained pool and stopping the loop underneath.
+    """
+    read_root, identities = store
+    identity = identities[0]
+    built = []
+    started, release = threading.Event(), threading.Event()
+
+    class SlowClose(FakeClient):
+        async def close(self):
+            started.set()
+            await asyncio.to_thread(release.wait, 5)
+            self.closed = True
+            self.closes += 1
+
+    def make(**kwargs):
+        client = SlowClose(**kwargs)
+        built.append(client)
+        return client
+
+    cache = VectorClientCache(URL, read_root, make)
+    with cache.lease(identity) as leased:
+        leased.find("q", target_uri="x", limit=1)
+
+    # shutdown itself drops the idle entry, so the close is on the pool's path.
+    returned = threading.Event()
+
+    def stop():
+        cache.shutdown()
+        returned.set()
+
+    stopper = threading.Thread(target=stop, daemon=True)
+    stopper.start()
+    assert started.wait(5), "the idle client should be closing"
+
+    stopper.join(0.2)
+    assert not returned.is_set(), "shutdown must wait for a close that is running"
+    assert cache.io_loop_running, "the loop must survive while a close is on it"
+
+    release.set()
+    stopper.join(10)
+    assert wait_closed([built[0]])
+    assert wait_idle(cache)
