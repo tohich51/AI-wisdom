@@ -4,7 +4,9 @@
 <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
 <title>AI-wisdom</title>
 <link rel="stylesheet" href="/static/style.css">
-<script src="/static/vendor/cytoscape-3.34.3.min.js" defer></script>
+<script src="/static/data.js" defer></script>
+<script src="/static/router.js" defer></script>
+<script src="/static/pager.js" defer></script>
 <script src="/static/graph-canvas.js" defer></script>
 <script src="/static/research-result.js" defer></script>
 <script src="/static/research.js" defer></script>
@@ -29,14 +31,16 @@
 <span>Извлечение: черновики, подписка MiniMax</span>
 </div>
 <nav class="main-nav" aria-label="Основные разделы">
-<p class="nav-label">Разделы</p><button type="button" data-tab="libraries" aria-controls="libraries-tab" aria-pressed="true">Библиотеки</button><button type="button" data-tab="uses" aria-controls="uses-tab" aria-pressed="false">Опыт</button>
-<button type="button" data-tab="research" aria-controls="research-tab" aria-pressed="false">Исследование и Studio</button>
-<button type="button" data-tab="maps" aria-controls="maps-tab" aria-pressed="false">Карта знаний</button>
-<button type="button" data-tab="access" aria-controls="access-tab" aria-pressed="false">Доступ</button>
-<button type="button" data-tab="jobs" aria-controls="jobs-tab" aria-pressed="false">Задания</button>
+<p class="nav-label">Разделы</p>
+<a class="nav-link" href="/app/libraries" data-route="libraries" aria-controls="libraries-tab">Библиотеки</a>
+<a class="nav-link" href="/app/experience" data-route="uses" aria-controls="uses-tab">Опыт</a>
+<a class="nav-link" href="/app/research" data-route="research" aria-controls="research-tab">Исследование и Studio</a>
+<a class="nav-link" href="/app/maps" data-route="maps" aria-controls="maps-tab">Карта знаний</a>
+<a class="nav-link" href="/app/settings/access" data-route="access" aria-controls="access-tab">Доступ</a>
+<a class="nav-link" href="/app/jobs" data-route="jobs" aria-controls="jobs-tab">Задания</a>
 </nav>
 </aside>
-<main>
+<main id="main">
 <section id="libraries-tab" aria-labelledby="libraries-heading">
 <div class="section-heading"><h1 id="libraries-heading">Библиотеки знаний</h1>
 <p>Создавайте рабочие коллекции и находите материалы в хранилище.</p>
@@ -92,6 +96,11 @@
 <div class="section-heading"><h1 id="jobs-heading">Задания</h1>
 <p>Состояние обработки материалов и готовые части.</p></div>
 <div id="jobs-workspace" aria-live="polite"></div>
+</section>
+<section id="context-tab" aria-labelledby="context-heading" hidden>
+<div class="section-heading"><h1 id="context-heading">Контекст проекта</h1>
+<p>Цели, ограничения и накопленный опыт проекта по адресу /app/projects/:id/context.</p></div>
+<div id="context-workspace" aria-live="polite"></div>
 </section>
 </main>
 </div>

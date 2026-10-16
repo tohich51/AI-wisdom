@@ -2,6 +2,27 @@
   'use strict';
 
   const api = window.WisdomGraphCanvas || (window.WisdomGraphCanvas = {});
+  // Ленивая загрузка библиотеки графа: cytoscape весит больше всех остальных
+  // скриптов вместе взятых и нужен только на экране «Карта знаний» и только
+  // когда в карте есть узлы. Файл в vendor не меняется, он подключается один раз.
+  const libraryUrl = '/static/vendor/cytoscape-3.34.3.min.js';
+  let loading = null;
+  api.ensureLibrary = function ensureLibrary() {
+    if (window.cytoscape) return Promise.resolve(true);
+    if (loading) return loading;
+    loading = new Promise((resolve, reject) => {
+      const script = document.createElement('script');
+      script.src = libraryUrl;
+      script.async = true;
+      script.addEventListener('load', () => resolve(Boolean(window.cytoscape)));
+      script.addEventListener('error', () => {
+        loading = null;
+        reject(new Error('Библиотека графа недоступна.'));
+      });
+      document.head.append(script);
+    });
+    return loading;
+  };
   const colors = {
     source: '#2563eb', fragment: '#6b7280', knowledge: '#16a34a',
     rule: '#d97706', use: '#7c3aed', outcome: '#1e3a8a',

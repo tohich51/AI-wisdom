@@ -9,7 +9,7 @@ window.WisdomResearch = (() => {
   function question(query, sourceIds, libraryId) {
     pending = {query, sourceIds, libraryId}; host?.navigateResearch();
   }
-  async function mount(container, helpers, libraryId) {
+  async function mount(container, helpers, libraryId, openRunId) {
     invalidate(); root = container; host = helpers;
     const generation = epoch; controller = new AbortController();
     const n = host.node; let selected = new Set(), currentRun, currentNote, currentNoteData, runSerial=0, operation, listSerial=0;
@@ -198,6 +198,9 @@ window.WisdomResearch = (() => {
       if (data.truncated) sources.append(n('p','Показаны 100 последних источников.'));
       if (!data.sources.length) sources.append(n('p','Загрузите и обработайте материал в разделе «Библиотеки».'));
       await refreshLists();
+      // Адрес /app/research/:runId открывает сразу нужный прогон: список прогонов
+      // к этому моменту уже отрисован, поэтому showRun ничего не теряет.
+      if (openRunId) await showRun(openRunId);
     } catch (error) { if (valid() && error.name!=='AbortError') { result.replaceChildren(); host.notify(error.message); } }
   }
   const labels={research:'Исследование',summary:'Краткое содержание',faq:'Вопросы и ответы',comparison:'Сравнение',checklist:'Чек-лист',flashcards:'Карточки',topic:'Карта тем',network:'Семантическая сеть'};
