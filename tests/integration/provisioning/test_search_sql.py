@@ -22,7 +22,7 @@ INDEX_NAME = "knowledge_statement_simple_fts_gin"
 
 @pytest.fixture
 def catalog(world, admin):
-    world.organisation()
+    world.account_id = world.organisation()
     for person in (world.owner, world.colleague):
         admin.execute(
             """
@@ -40,8 +40,8 @@ def _insert_source(world, library_id, source_id):
     world.conn.execute(
         """
         INSERT INTO kb.source(
-          id,library_id,title,media_type,submitted_by,object_key,content_hash
-        ) VALUES(%s,%s,'Synthetic B2 source','text/plain',%s,%s,%s)
+          id,library_id,title,media_type,submitted_by,object_key,content_hash,publication
+        ) VALUES(%s,%s,'Synthetic B2 source','text/plain',%s,%s,%s,'published')
         """,
         (
             source_id,
@@ -59,14 +59,16 @@ def lexical_rows(catalog):
     active_a, active_b, withdrawn_source = uuid4(), uuid4(), uuid4()
     for source_id in (active_a, active_b, withdrawn_source):
         _insert_source(world, library_id, source_id)
-    world.conn.execute(
-        "UPDATE kb.source SET publication='withdrawn' WHERE id=%s",
-        (withdrawn_source,),
-    )
 
-    tied = tuple(sorted(world.knowledge(library_id, title="b2lex alpha") for _ in range(3)))
-    older = world.knowledge(library_id, title="b2lex alpha")
-    excluded_by_withdrawn_source = world.knowledge(library_id, title="b2lex alpha")
+    tied = tuple(
+        sorted(
+            world.knowledge(library_id, title="b2lex alpha", publication="draft") for _ in range(3)
+        )
+    )
+    older = world.knowledge(library_id, title="b2lex alpha", publication="draft")
+    excluded_by_withdrawn_source = world.knowledge(
+        library_id, title="b2lex alpha", publication="draft"
+    )
     withdrawn_knowledge = world.knowledge(library_id, title="b2lex alpha", publication="withdrawn")
 
     older_time = dt.datetime(2026, 1, 1, tzinfo=dt.UTC)
@@ -112,6 +114,19 @@ def lexical_rows(catalog):
             """,
             (excluded_by_withdrawn_source, source_id),
         )
+
+    world.conn.execute(
+        """
+        UPDATE kb.knowledge
+        SET publication='published'
+        WHERE id=ANY(%s::uuid[])
+        """,
+        ([*tied, older, excluded_by_withdrawn_source],),
+    )
+    world.conn.execute(
+        "UPDATE kb.source SET publication='withdrawn' WHERE id=%s",
+        (withdrawn_source,),
+    )
 
     return {
         "active_a": active_a,
@@ -311,9 +326,8 @@ def test_batch_mapping_duplicates_empty_and_stale(catalog, gateway):
             SELECT id,item_id
             FROM kb.retrieval_event
             WHERE id=ANY(%s::uuid[])
-            """(
-                event_ids,
-            ),
+            """,
+            (event_ids,),
         ).fetchall()
 
     item_by_event = {event_id: item_id for event_id, item_id in rows}
