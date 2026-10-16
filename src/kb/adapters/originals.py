@@ -48,7 +48,7 @@ import weakref
 from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
-from typing import BinaryIO
+from typing import BinaryIO, Literal
 
 # The same expression the object_key CHECK uses in migrations/0004_uploads.sql.
 # A key that cannot be stored must also not be looked up, or the two layers
@@ -326,7 +326,7 @@ class ObjectReader:
     def __enter__(self) -> ObjectReader:
         return self
 
-    def __exit__(self, *_exc: object) -> bool:
+    def __exit__(self, *_exc: object) -> Literal[False]:
         self.close()
         return False
 
