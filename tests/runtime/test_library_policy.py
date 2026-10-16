@@ -128,7 +128,7 @@ async def test_mcp_requires_action_scope_and_current_grant_independently(world, 
     app = SimpleNamespace(
         state=SimpleNamespace(
             resolve_token=resolve,
-            db_pool=SimpleNamespace(connection=lambda: psycopg.connect(world["dsn"])),
+            db_connection=lambda: psycopg.connect(world["dsn"]),
         )
     )
     server, _ = build_mcp(app, ["gateway.example"])

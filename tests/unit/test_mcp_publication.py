@@ -39,7 +39,7 @@ async def test_publication_rechecks_transport_identity(monkeypatch):
     app = SimpleNamespace(
         state=SimpleNamespace(
             resolve_token=resolve,
-            db_pool=SimpleNamespace(connection=lambda: nullcontext(conn)),
+            db_connection=lambda: nullcontext(conn),
         )
     )
     monkeypatch.setattr("kb.catalog.writes.publish", publish)
@@ -91,7 +91,7 @@ async def test_shared_copy_mutation_requires_experience_scope_not_contribute(mon
     app = SimpleNamespace(
         state=SimpleNamespace(
             resolve_token=lambda _token: identity,
-            db_pool=SimpleNamespace(connection=lambda: nullcontext(object())),
+            db_connection=lambda: nullcontext(object()),
         )
     )
     monkeypatch.setattr("kb.catalog.shared_experience.publish", publish)
