@@ -44,6 +44,7 @@ import hashlib
 import os
 import re
 import tempfile
+import weakref
 from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
@@ -57,6 +58,13 @@ OBJECT_KEY_RE = re.compile(r"^[a-z0-9][a-z0-9/_.-]*$")
 # Streaming chunk. Large enough that a 20-30 book corpus does not turn into
 # thousands of syscalls, small enough that the buffer is never the memory story.
 _CHUNK = 1024 * 1024
+
+# The bounded unit of a *delivery*. Smaller than the write chunk on purpose:
+# this one is held in RAM by every open download at once, and a 512 MB ceiling
+# with five concurrent readers is 2.5 GB if the reader buffers the object and
+# 1.25 MB if it does not. 256 KiB keeps a book to a few hundred reads and a
+# reader to one buffer, which is the whole memory story of the read path.
+_STREAM_CHUNK = 256 * 1024
 
 # Refuse a key that tries to name a parent. ".." cannot appear in a generated
 # key, so its presence means the key did not come from object_key_for().
@@ -164,6 +172,171 @@ def _resolve_in_root(root: Path, object_key: str) -> Path:
     if candidate == root_resolved or not candidate.is_relative_to(root_resolved):
         raise ObjectKeyRejected("object key resolves outside the store")
     return candidate
+
+
+class ObjectReader:
+    """One immutable object, held by descriptor instead of by path.
+
+    Three properties, and each one is a contract rather than a convenience:
+
+    ``stable``
+        The descriptor is opened once, here, and an existing key is never
+        rewritten, so nothing can change the bytes under a reader that is
+        already open. A reader that re-resolved its path would be delivering
+        whatever the name points at *now*, which is not what was verified. The
+        only seeks below are seeks on the descriptor already in hand.
+
+    ``bounded``
+        Iteration yields at most ``_STREAM_CHUNK`` bytes at a time and never
+        holds the object. ``digest()`` is a prepass over the same descriptor,
+        not a copy of it, so proving a 512 MB original costs one buffer.
+
+    ``owned``
+        The holder closes it, and closing twice is a no-op. Whoever drives the
+        reader owns the close, and a reader that only closes on the happy path
+        leaks a descriptor for every download a client abandons.
+
+    The close is also registered as a finaliser on the reader itself, which is
+    the second line rather than the first. ASGI does not promise to hand a
+    cancelled response back to the handler: depending on the spec version the
+    server is on, an abandoned stream either ends in the response's task or in
+    a write that fails, and in the second case nobody calls ``close()``. When
+    the last reference to the reader goes — which, under CPython's reference
+    counting, is the moment the response that owned it is collected — the
+    descriptor is released whether or not an event loop is still running to
+    finish an async generator.
+    """
+
+    def __init__(
+        self, handle: BinaryIO, *, size: int, start: int = 0, stop: int | None = None
+    ) -> None:
+        self._handle = handle
+        self._size = size
+        self._start = start
+        self._stop = size if stop is None else min(stop, size)
+        self._position: int | None = None
+        self._closed = False
+        self._finaliser = weakref.finalize(self, _close_quietly, handle)
+
+    # ------------------------------------------------------------------ facts
+
+    @property
+    def size(self) -> int:
+        """The size of the whole object, which is not the size of the slice."""
+        return self._size
+
+    @property
+    def start(self) -> int:
+        return self._start
+
+    @property
+    def stop(self) -> int:
+        return self._stop
+
+    @property
+    def length(self) -> int:
+        """Exactly how many bytes iterating this reader will produce.
+
+        A delivery announces it in ``Content-Length``, so it is computed from
+        the descriptor's own size rather than from a manifest claim.
+        """
+        return max(self._stop - self._start, 0)
+
+    @property
+    def closed(self) -> bool:
+        return self._closed
+
+    def __len__(self) -> int:
+        return self.length
+
+    # ----------------------------------------------------------------- reading
+
+    def digest(self) -> str:
+        """SHA-256 of the whole object, in bounded chunks, descriptor unchanged.
+
+        The position is restored afterwards, so a reader may be proved and then
+        streamed from the same open descriptor. Nothing is buffered and no
+        second descriptor is opened: the bytes that are checked are the bytes
+        that will be sent.
+        """
+        if self._closed:
+            raise StorageError("the object reader is closed")
+        position = self._handle.tell()
+        try:
+            self._handle.seek(0)
+            digest = hashlib.sha256()
+            while True:
+                chunk = self._handle.read(_STREAM_CHUNK)
+                if not chunk:
+                    break
+                digest.update(chunk)
+        finally:
+            self._handle.seek(position)
+        return digest.hexdigest()
+
+    def read_chunk(self) -> bytes:
+        """The next bounded piece of the slice, or ``b""`` at its end.
+
+        One call, one buffer, no internal state that a caller could observe:
+        this is what both :meth:`__iter__` and a streaming response drive, so
+        the two cannot disagree about how much is read at a time.
+        """
+        if self._closed:
+            raise StorageError("the object reader is closed")
+        if self._position is None:
+            # The first read positions the descriptor, once. Everything after it
+            # is sequential, which is what makes a Range read a seek and a
+            # stream a walk rather than a re-resolve per chunk.
+            self._position = self._start
+            self._handle.seek(self._start)
+        remaining = self._stop - self._position
+        if remaining <= 0:
+            return b""
+        chunk = self._handle.read(min(_STREAM_CHUNK, remaining))
+        if not chunk:
+            # A local filesystem does not truncate an open file. If this fires,
+            # something is genuinely wrong underneath us, and a short body under
+            # a Content-Length that promised more is the worst possible answer:
+            # say so instead.
+            raise StorageError("the stored object ended before its recorded size")
+        self._position += len(chunk)
+        return chunk
+
+    def __iter__(self) -> Iterator[bytes]:
+        """The slice, in bounded chunks, from the descriptor already open."""
+        while True:
+            chunk = self.read_chunk()
+            if not chunk:
+                return
+            yield chunk
+
+    def read_all(self) -> bytes:
+        """Every byte at once. For in-process callers, never for a response."""
+        return b"".join(self)
+
+    # ----------------------------------------------------------------- closing
+
+    def close(self) -> None:
+        """Release the descriptor. Idempotent, and safe from a ``finally``."""
+        if self._closed:
+            return
+        self._closed = True
+        self._finaliser()
+
+    def __enter__(self) -> ObjectReader:
+        return self
+
+    def __exit__(self, *_exc: object) -> bool:
+        self.close()
+        return False
+
+
+def _close_quietly(handle: BinaryIO) -> None:
+    """Close a descriptor, swallowing a descriptor that is already gone."""
+    try:
+        handle.close()
+    except OSError:  # pragma: no cover - a descriptor that is already closed
+        pass
 
 
 class LocalBlobStore:
@@ -320,6 +493,77 @@ class LocalBlobStore:
             yield handle
         finally:
             handle.close()
+
+    def open_range(
+        self, object_key: str, start: int | None = None, stop: int | None = None
+    ) -> ObjectReader:
+        """Open a slice — or the whole object — with no whole-file verification.
+
+        A Range request is a delivery of a *part*, and verifying the whole file
+        for each one turns a PDF reader's dozen Range requests into a dozen full
+        reads of the book. The frozen contract asks for the opposite: a bounded
+        integrity prepass on a whole delivery, and none per range. What is
+        checked here is the shape of the answer — the size comes from the
+        descriptor itself, and a range that runs past the end is truncated to
+        it, because that is what a well-behaved reader asked for.
+
+        ``None`` for either bound means the edge of the object, so
+        ``open_range(key)`` is the whole object without verifying it.
+        """
+        if (start is not None and start < 0) or (stop is not None and stop < 0):
+            raise StorageError("range bounds must not be negative")
+        if start is not None and stop is not None and stop < start:
+            raise StorageError("a range whose end precedes its start is not a range")
+        path = _resolve_in_root(self._root, object_key)
+        try:
+            handle = path.open("rb")
+        except FileNotFoundError as exc:
+            raise ObjectNotFound(f"no object under key {object_key}") from exc
+        except OSError as exc:  # pragma: no cover - permissions on a local temp dir
+            raise StorageError(f"could not read the object: {exc.strerror}") from exc
+        # fstat on the descriptor, not stat on the path: the two can disagree
+        # between the open and the stat, and this answer is going out as a
+        # Content-Length.
+        size = os.fstat(handle.fileno()).st_size
+        begin = min(start or 0, size)
+        return ObjectReader(handle, size=size, start=begin, stop=stop)
+
+    def open_verified(
+        self,
+        object_key: str,
+        *,
+        content_hash: str | None = None,
+        byte_size: int | None = None,
+    ) -> ObjectReader:
+        """Open the whole object and prove it is the object the key names.
+
+        One bounded prepass, through the descriptor the caller will stream
+        from, and then that descriptor rewound and handed over: the bytes that
+        are checked are the bytes that are sent, and the whole operation costs
+        one buffer rather than the object's size.
+
+        Both manifest claims are checked. The hash alone would already imply the
+        size, but a manifest that drifted from the volume is exactly the case
+        where a refusal is the only honest answer, and it is cheaper to say so
+        once than to discover it through a truncated download. A mismatch
+        raises and closes the descriptor: a partially verified object is never
+        handed to a caller, and a failed prepass leaves nothing open behind it.
+        """
+        reader = self.open_range(object_key)
+        try:
+            if content_hash is not None and reader.digest() != content_hash:
+                raise StorageError(
+                    "the stored bytes do not match the content-addressed key; "
+                    "refusing to serve them"
+                )
+            if byte_size is not None and reader.size != byte_size:
+                raise StorageError(
+                    "the stored object is not the size the manifest records; refusing to serve it"
+                )
+        except BaseException:
+            reader.close()
+            raise
+        return reader
 
     def read_range(self, object_key: str, start: int, stop: int) -> bytes:
         """Read ``[start, stop)`` — the PDF Range read, on a real file.

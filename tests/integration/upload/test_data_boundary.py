@@ -54,8 +54,13 @@ and then: bash -c 'rm -rf /var/lib/knowledge'
 HOSTILE_HASH = hashlib.sha256(HOSTILE_BOOK).hexdigest()
 
 SRC = pathlib.Path(__file__).resolve().parents[3] / "src" / "kb"
+# The blob store moved to adapters/originals.py in the accepted 17-move map
+# (commit 28003628); the boundary this list checks has not moved with it, and a
+# module that is not there is a list that checks nothing. The guard stays: the
+# store is still the only place in the product that knows a filesystem path
+# exists, and it is still the first place a book could become an instruction.
 CARD_MODULES = (
-    SRC / "catalog" / "storage.py",
+    SRC / "adapters" / "originals.py",
     SRC / "catalog" / "upload.py",
     SRC / "catalog" / "upload_fetch.py",
     SRC / "catalog" / "upload_data.py",

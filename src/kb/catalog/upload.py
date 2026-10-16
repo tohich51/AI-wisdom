@@ -41,8 +41,8 @@ What this module refuses to do:
 from __future__ import annotations
 
 import datetime as dt
-import hashlib
 import io
+from dataclasses import dataclass
 from typing import BinaryIO, Literal
 from urllib.parse import urlsplit
 from uuid import UUID
@@ -52,7 +52,13 @@ import psycopg
 from pydantic import BaseModel, ConfigDict, Field
 
 from kb.access.policy import AccessDenied, Principal, authorize, transaction_identity
-from kb.adapters.originals import LocalBlobStore, ObjectNotFound, StorageError, object_key_for
+from kb.adapters.originals import (
+    LocalBlobStore,
+    ObjectNotFound,
+    ObjectReader,
+    StorageError,
+    object_key_for,
+)
 from kb.catalog.retrieval_events import record_retrieval
 from kb.catalog.upload_fetch import (
     FetchedObject,
@@ -170,6 +176,40 @@ class OriginalRead(_Model):
     original: Original
     content: bytes
     complete: bool = True
+
+
+@dataclass(frozen=True, slots=True)
+class OriginalDelivery:
+    """An original that has already been authorised, verified and audited.
+
+    It carries what a response needs and nothing that belongs to the database:
+    the manifest row, the descriptor that owns the bytes, and the bounds that
+    were served. There is deliberately no connection here. By the time this
+    object exists the access check, the export policy, the retrieval record and
+    the final ACL re-read have all been written, so the caller releases its
+    lease and streams with nothing but a file descriptor in hand — which is
+    what keeps a download from occupying a pooled connection.
+    """
+
+    original: Original
+    reader: ObjectReader
+    complete: bool
+
+    @property
+    def start(self) -> int:
+        return self.reader.start
+
+    @property
+    def stop(self) -> int:
+        return self.reader.stop
+
+    @property
+    def length(self) -> int:
+        """Exactly the number of bytes the stream will produce."""
+        return self.reader.length
+
+    def close(self) -> None:
+        self.reader.close()
 
 
 # ------------------------------------------------------------------ internals
@@ -606,7 +646,7 @@ def describe_original(
     return OriginalRead(original=original, content=b"", complete=True)
 
 
-def read_original(
+def open_original(
     conn: psycopg.Connection,
     principal: Principal,
     store: LocalBlobStore,
@@ -614,20 +654,27 @@ def read_original(
     *,
     start: int | None = None,
     stop: int | None = None,
-) -> OriginalRead:
-    """Read an original, or a byte range of one, after the access check.
+) -> OriginalDelivery:
+    """Authorise, audit and open an original. Move no bytes.
 
-    The order is access first, bytes second. A caller with no grant never reaches
-    ``store.open``: RLS has already returned no row, and the answer is the same
-    404-shaped refusal as for a source that does not exist. There is no signed
-    URL, no pre-signed Range and no long-lived handle — SCALING.md §5 is explicit
-    that "выдача долгоживущего прямого URL не должна обходить последующий отзыв
-    прав", so every read comes back through here and re-checks.
+    The order is the contract, and every step is finished before the next one
+    starts:
 
-    A whole-object read re-hashes what it read and compares it with the
-    content-addressed key. A mismatch is reported rather than served: the bytes
-    are not what the catalogue says they are, and handing them out as if they
-    were would put fabricated provenance into a reader's hands.
+    1. describe under RLS, so "not yours" and "does not exist" stay the same
+       answer and a caller without a grant never reaches the volume;
+    2. the export policy, because a read grant is not an export grant;
+    3. the object exists, because a row whose bytes have gone is a refusal and
+       never a substitute;
+    4. the descriptor is opened — a whole object with a bounded integrity
+       prepass, a Range with none, so a PDF reader's dozen ranges are not a
+       dozen full reads of the book;
+    5. the retrieval is recorded and the final ACL snapshot is re-read, so the
+       bytes about to be sent are the bytes the current grant admits;
+    6. the delivery is handed back, holding a descriptor and nothing else.
+
+    Everything that touches the database is done when this returns. The caller
+    may therefore close its lease before the first byte moves, which is the
+    difference between a download and a connection held for its duration.
     """
     described = _describe(conn, principal, source_id)
     if described is None:
@@ -638,49 +685,83 @@ def read_original(
         # The row and the blob have drifted apart. Refuse loudly.
         raise ObjectNotFound(f"no stored object for source {source_id}")
 
-    if start is None and stop is None:
-        with store.open(original.object_key) as handle:
-            content = handle.read()
-        if hashlib.sha256(content).hexdigest() != original.content_hash:
-            raise StorageError(
-                "the stored bytes do not match the source's content hash; refusing to serve them"
-            )
-        result = OriginalRead(original=original, content=content, complete=True)
-    else:
-        begin = start or 0
-        end = stop
-        if end is None:
-            end = begin + original.byte_size
-        result = OriginalRead(
-            original=original,
-            content=store.read_range(original.object_key, begin, end),
-            complete=False,
-        )
-
-    # File I/O and whole-object hashing are finished. The final authorization
-    # snapshot must still admit these exact bytes; a refusal rolls back issuance.
-    with transaction_identity(conn, principal), conn.cursor() as cur:
-        record_retrieval(cur, principal, item_kind="source", item_id=source_id)
-        cur.execute(
-            "SELECT s.library_id,s.object_key,s.content_hash,"
-            "m.backend_key,m.byte_size,m.media_type "
-            "FROM kb.source s JOIN kb.object_manifest m ON m.source_id=s.id "
-            "JOIN kb.library l ON l.id=s.library_id "
-            "WHERE s.id=%s AND l.organisation_id=%s "
-            "AND m.object_key=s.object_key AND m.content_hash=s.content_hash "
-            "AND kb.library_policy_allows(l.id,'export')",
-            (source_id, principal.account_id),
-        )
-        if cur.fetchone() != (
-            _source.library_id,
+    complete = start is None and stop is None
+    if complete:
+        # Bounded prepass, descriptor rewound and kept: the bytes that were
+        # proved are the bytes that will be sent.
+        reader = store.open_verified(
             original.object_key,
-            original.content_hash,
-            original.backend,
-            original.byte_size,
-            original.media_type,
-        ):
-            raise AccessDenied("no such source")
-    return result
+            content_hash=original.content_hash,
+            byte_size=original.byte_size,
+        )
+    else:
+        # No whole-file verification here, and deliberately so: a Range is a
+        # delivery of a part, and re-hashing the book for each of a reader's
+        # dozen ranges is the cost the contract refuses to pay.
+        begin = start or 0
+        end = original.byte_size if stop is None else stop
+        reader = store.open_range(original.object_key, begin, end)
+
+    try:
+        # File I/O and the whole-object prepass are finished. The final
+        # authorization snapshot must still admit these exact bytes; a refusal
+        # rolls back issuance and closes the descriptor on the way out.
+        with transaction_identity(conn, principal), conn.cursor() as cur:
+            record_retrieval(cur, principal, item_kind="source", item_id=source_id)
+            cur.execute(
+                "SELECT s.library_id,s.object_key,s.content_hash,"
+                "m.backend_key,m.byte_size,m.media_type "
+                "FROM kb.source s JOIN kb.object_manifest m ON m.source_id=s.id "
+                "JOIN kb.library l ON l.id=s.library_id "
+                "WHERE s.id=%s AND l.organisation_id=%s "
+                "AND m.object_key=s.object_key AND m.content_hash=s.content_hash "
+                "AND kb.library_policy_allows(l.id,'export')",
+                (source_id, principal.account_id),
+            )
+            if cur.fetchone() != (
+                _source.library_id,
+                original.object_key,
+                original.content_hash,
+                original.backend,
+                original.byte_size,
+                original.media_type,
+            ):
+                raise AccessDenied("no such source")
+    except BaseException:
+        reader.close()
+        raise
+    return OriginalDelivery(original=original, reader=reader, complete=complete)
+
+
+def read_original(
+    conn: psycopg.Connection,
+    principal: Principal,
+    store: LocalBlobStore,
+    source_id: UUID,
+    *,
+    start: int | None = None,
+    stop: int | None = None,
+) -> OriginalRead:
+    """Read an original into memory. For in-process callers, not for a response.
+
+    Same authorisation, same audit, same integrity prepass as
+    :func:`open_original` — it is the same delivery, joined into one buffer.
+    A caller that needs the bytes (a test, an export, a re-hash) uses this; a
+    route that answers a client opens the delivery and streams it, because a
+    512 MB ceiling in one response buffer is a denial of service that the size
+    limit was supposed to prevent.
+
+    Raises ``AccessDenied`` for a source the caller may not open and for one
+    that does not exist — the same answer, because the difference is a directory
+    of invisible objects — and ``StorageError`` when the bytes on the volume are
+    not the bytes the catalogue says they are.
+    """
+    delivery = open_original(conn, principal, store, source_id, start=start, stop=stop)
+    try:
+        content = delivery.reader.read_all()
+    finally:
+        delivery.close()
+    return OriginalRead(original=delivery.original, content=content, complete=delivery.complete)
 
 
 __all__ = [
@@ -689,6 +770,7 @@ __all__ = [
     "FetchUrl",
     "ObjectNotFound",
     "Original",
+    "OriginalDelivery",
     "OriginalRead",
     "StorageError",
     "SubmitFile",
@@ -696,6 +778,7 @@ __all__ = [
     "SubmittedSource",
     "UrlRefused",
     "describe_original",
+    "open_original",
     "read_original",
     "submit_file",
     "submit_url",

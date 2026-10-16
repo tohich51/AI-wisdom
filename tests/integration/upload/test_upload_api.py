@@ -60,7 +60,12 @@ def test_a_contributor_upload_creates_a_source_a_manifest_and_an_attempt(
     assert body["source"]["submitted_by"] == str(people.owner)
     assert body["original"]["byte_size"] == len(BOOK)
     assert body["original"]["backend"] == "local"
-    assert response.headers["Location"] == f"/sources/{body['source']['id']}/original"
+    assert response.headers["Location"] == f"/api/v1/sources/{body['source']['id']}/original"
+    # The canonical prefix, whatever the app served the POST under. Both
+    # prefixes answer this one operation, so the emitted value cannot depend on
+    # which one the client used; the composed both-prefix behaviour, and the
+    # fact that the emitted path is really servable, are proved in
+    # test_original_delivery.py.
 
     # one row of each, all by the migration role so RLS is not in the way
     assert len(world.sources_in(library)) == 1
@@ -362,6 +367,57 @@ def test_an_unusable_range_is_a_416_not_a_guess(api, people, world, key: str) ->
     for bad in ("bytes=abc-def", "bytes=-", "items=0-1", f"bytes={len(BOOK) + 10}-"):
         response = client.get(f"/sources/{source_id}/original", headers={"Range": bad})
         assert response.status_code == 416, bad
+
+
+def test_a_reversed_range_is_the_clients_mistake_and_not_a_503(
+    api, people, world, key: str
+) -> None:
+    """``bytes=9-3`` is not a range, and it is answered as one.
+
+    The bounds (9, 4) name a slice that cannot exist, so storage refuses them and
+    the refusal used to reach the client as a 503 — a server fault reported for a
+    header the client wrote, which is both the wrong code and a lie about whose
+    mistake it was. An unsatisfiable range is the client's, and this route
+    already answers 416 for the other two ways of writing one.
+    """
+    library = world.open_library(name="ref", who=people.owner, role="contributor")
+    source_id = upload(api.as_(people.owner), library, BOOK, key).json()["source"]["id"]
+    client = api.as_(people.owner)
+
+    reversed_range = client.get(f"/sources/{source_id}/original", headers={"Range": "bytes=9-3"})
+    assert reversed_range.status_code == 416, reversed_range.text
+
+    # The same object still serves the well-formed version of that range, so the
+    # refusal is about the header and not about the source.
+    well_formed = client.get(f"/sources/{source_id}/original", headers={"Range": "bytes=3-9"})
+    assert well_formed.status_code == 206, well_formed.text
+    assert well_formed.content == BOOK[3:10]
+
+
+def test_a_suffix_range_on_an_empty_original_is_a_416(api, people, world, key: str) -> None:
+    """A zero-byte original has no suffix to return, and must not pretend to.
+
+    ``bytes=-16`` on an empty object used to answer 206 with an empty body and
+    ``Content-Range: bytes 0-0/0`` — a header naming byte zero of an object with
+    no byte zero, which a client is entitled to believe. The whole object is
+    still served, empty, as a 200; only the range is unsatisfiable.
+    """
+    library = world.open_library(name="ref", who=people.owner, role="contributor")
+    client = api.as_(people.owner)
+    submitted = client.post(
+        f"/libraries/{library}/sources/upload",
+        files={"file": ("empty.txt", b"", "text/plain")},
+        data={"idempotency_key": key},
+    )
+    assert submitted.status_code in (200, 201), submitted.text
+    source_id = submitted.json()["source"]["id"]
+
+    whole = client.get(f"/sources/{source_id}/original")
+    assert whole.status_code == 200, whole.text
+    assert whole.content == b""
+
+    suffix = client.get(f"/sources/{source_id}/original", headers={"Range": "bytes=-16"})
+    assert suffix.status_code == 416, suffix.text
 
 
 def test_a_range_never_bypasses_the_access_check(api, people, world, key: str) -> None:
