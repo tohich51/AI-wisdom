@@ -1480,6 +1480,13 @@ class VectorClientCache:
                             # Idle past its TTL: replace it rather than hand back a
                             # connection that has been sitting since.
                             self._retire_locked(existing, closers)
+                        if not needs_capacity:
+                            # The optimistic hit can change before this locked
+                            # recheck. Every build must own one permit, but waiting
+                            # for it under the pool lock is forbidden.
+                            if not self._client_slots.acquire(blocking=False):
+                                raise TimeoutError(INDEX_DEADLINE_EXCEEDED)
+                            reservation.callback(self._client_slots.release)
                         # Built under the lock so two callers cannot both build a
                         # client for one key and leave one of them unowned. The
                         # build is itself bounded: a budget that has run out

@@ -1899,3 +1899,55 @@ def test_failed_initialization_keeps_capacity_until_blocked_close_finishes(store
     finally:
         release_close.set()
         cache.shutdown()
+
+
+def test_expired_optimistic_cache_hit_cannot_build_without_capacity(
+    store, monkeypatch
+):
+    read_root, identities = store
+    built = []
+    now = [0.0]
+    armed = [False]
+
+    def clock():
+        value = now[0]
+        if armed[0]:
+            armed[0] = False
+            now[0] = 2.0
+        return value
+
+    cache = pool_for(
+        read_root,
+        built,
+        ttl_seconds=1.0,
+        max_clients=1,
+        max_outstanding=1,
+        clock=clock,
+    )
+    identity = identities[0]
+    close_started = threading.Event()
+    release_close = threading.Event()
+    result = []
+    try:
+        with cache.lease(identity):
+            pass
+        assert len(built) == 1
+        first = built[0]
+        original_close = first.close
+
+        async def blocked_close():
+            close_started.set()
+            if not release_close.wait(5.0):
+                raise AssertionError("blocked close was not released")
+            await original_close()
+
+        monkeypatch.setattr(first, "close", blocked_close)
+        armed[0] = True
+        _try_lease(cache, identity, None, result)
+        assert wait_event(close_started, timeout=5.0)
+        assert len(built) == 1
+        assert result == ["timeout"]
+    finally:
+        release_close.set()
+        cache.shutdown()
+    assert wait_closed(built)
