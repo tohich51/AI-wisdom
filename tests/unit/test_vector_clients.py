@@ -1789,40 +1789,113 @@ def test_a_failing_release_step_still_hands_the_charge_back(store):
     assert wait_idle(cache)
 
 
-def test_the_client_permit_comes_back_when_the_budget_is_gone_after_construction(store):
-    """A client built for a budget that had already run out returns its permit.
-
-    The permit belongs to the caller until the build succeeds or an unfinished
-    initialization takes it over, so this branch returns it. When both returned
-    it, a bounded semaphore raised, and that raise landed inside a deferred
-    release step, which is the strand above.
-    """
+def test_client_built_after_budget_expiry_keeps_capacity_until_close_finishes(store):
+    """A blocked close keeps the one slot reserved for client construction."""
     read_root, identities = store
     identity = identities[0]
     built = []
+    close_started = threading.Event()
+    release_close = threading.Event()
+    WAIT_TIMEOUT = 2.0
+    CAPACITY_BUDGET = 0.05
+    now = [0.0]
 
     def make(**kwargs):
         client = FakeClient(**kwargs)
         built.append(client)
+
+        async def close():
+            close_started.set()
+            while not release_close.is_set():
+                try:
+                    await asyncio.sleep(0.001)
+                except asyncio.CancelledError:
+                    continue
+            client.closed = True
+            client.closes += 1
+
+        client.close = close
+        now[0] = 2.0
         return client
 
-    # Capped at one, so a returned permit is readable as one.
-    cache = VectorClientCache(URL, read_root, make, max_clients=1)
-    key = cache.key_for(identity, credential_revision(KEY))
-
-    now = [0.0]
-    gone = Deadline(1.0, clock=lambda: now[0])
-    now[0] = 5.0  # the budget is spent before the build is even attempted
-    closers = []
-    with cache._lock:
+    cache = VectorClientCache(
+        URL,
+        read_root,
+        make,
+        max_clients=1,
+        max_outstanding=1,
+        clock=lambda: now[0],
+    )
+    try:
+        gone = Deadline(1.0, clock=lambda: now[0])
         with pytest.raises(TimeoutError):
-            cache._build_locked(key, KEY, gone, closers)
-        # Read under the lock, which the context manager releases for us.
-        caller_free = cache._client_slots._value
-        cache._close_all(closers)
+            with cache.lease(identity, gone):
+                pass
 
-    assert built, "a client was constructed, and must not be left unclosed"
-    assert caller_free == 1, "the permit is the caller's to return"
-    assert cache._client_slots._value == 1, "and it comes back exactly once"
-    cache.shutdown()
-    assert wait_idle(cache)
+        assert len(built) == 1
+        assert wait_event(close_started, WAIT_TIMEOUT), "the constructed client was not closed"
+
+        with pytest.raises(TimeoutError):
+            with cache.lease(identity, Deadline(CAPACITY_BUDGET)):
+                pass
+
+        assert len(built) == 1, "capacity was reused while the first close was blocked"
+    finally:
+        release_close.set()
+        cache.shutdown()
+
+
+def test_failed_initialization_keeps_capacity_until_blocked_close_finishes(store):
+    """A failed initialize cannot return capacity while its close is running."""
+    read_root, identities = store
+    identity = identities[0]
+    built = []
+    close_started = threading.Event()
+    release_close = threading.Event()
+    WAIT_TIMEOUT = 2.0
+    CAPACITY_BUDGET = 0.05
+
+    def make(**kwargs):
+        client = FakeClient(**kwargs)
+        built.append(client)
+
+        async def initialize():
+            raise RuntimeError("initialize failed")
+
+        async def close():
+            close_started.set()
+            while not release_close.is_set():
+                try:
+                    await asyncio.sleep(0.001)
+                except asyncio.CancelledError:
+                    continue
+            client.closed = True
+            client.closes += 1
+
+        client.initialize = initialize
+        client.close = close
+        return client
+
+    cache = VectorClientCache(
+        URL,
+        read_root,
+        make,
+        max_clients=1,
+        max_outstanding=1,
+    )
+    try:
+        with pytest.raises(RuntimeError, match="initialize failed"):
+            with cache.lease(identity, Deadline(1.0)):
+                pass
+
+        assert len(built) == 1
+        assert wait_event(close_started, WAIT_TIMEOUT), "the failed client was not closed"
+
+        with pytest.raises(TimeoutError):
+            with cache.lease(identity, Deadline(CAPACITY_BUDGET)):
+                pass
+
+        assert len(built) == 1, "failed initialization returned capacity before close"
+    finally:
+        release_close.set()
+        cache.shutdown()

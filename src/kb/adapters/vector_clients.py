@@ -66,7 +66,7 @@ import logging
 import threading
 import time
 from collections.abc import Callable, Iterator
-from contextlib import contextmanager
+from contextlib import ExitStack, contextmanager
 from dataclasses import dataclass
 from typing import Any
 
@@ -501,6 +501,8 @@ class _Entry:
     retired: bool = False
     #: Whether this entry is holding one of the pool's total-owned-client slots.
     holds_slot: bool = False
+    #: The transferred reservation whose finalizer returns this one slot.
+    slot_cleanup: ExitStack | None = None
     #: Set the moment this entry is handed to a close. Closes now run outside
     #: the lock, so two selection paths can reach the same entry; without this
     #: a client could be closed twice.
@@ -707,10 +709,12 @@ class VectorClientCache:
         gone: a close that completed, or a close that was cancelled and has
         finally unwound.
         """
-        if not entry.holds_slot:
+        cleanup = entry.slot_cleanup
+        if cleanup is None:
             return
+        entry.slot_cleanup = None
         entry.holds_slot = False
-        self._client_slots.release()
+        cleanup.close()
 
     def _close_entry(self, entry: _Entry) -> None:
         """Close a dropped client, keeping the pool's ownership until it ends.
@@ -1206,6 +1210,7 @@ class VectorClientCache:
         key: ClientKey,
         secret: str,
         deadline: Deadline | None,
+        reservation: ExitStack,
         closers: list[_Entry],
     ) -> _Entry:
         # Capacity was taken by the caller, before the critical section, so
@@ -1215,29 +1220,26 @@ class VectorClientCache:
         # does not consult the caller's budget, because a client is shared: a
         # timeout derived from one request's deadline is inherited by every
         # later request that reuses the client.
-        # No permit handling here: the caller took the permit before it entered
-        # the critical section and gives it back on any failure out here, so
-        # releasing it in both places would release a bounded semaphore twice.
+        # ``reservation`` owns the caller's release until construction succeeds.
+        # A factory failure leaves it to unwind; a constructed client transfers
+        # that cleanup to its entry before budget validation or initialization.
         client = self._factory(url=key[0], api_key=secret, timeout=self._network_timeout)
-        budget = (
-            CLOSE_TIMEOUT_SECONDS
-            if deadline is None
-            else deadline.timeout_for(CLOSE_TIMEOUT_SECONDS)
+        entry = _Entry(
+            key=key, client=client, last_used=0.0, holds_slot=True
         )
-        if budget <= 0:
-            # The budget is gone. Build nothing rather than start work that
-            # cannot be waited for.
-            # The permit is the caller's until the build succeeds, and the
-            # caller returns it when this raises. The entry must therefore not
-            # carry it as well: two holders returning one permit is an
-            # over-release, and an over-release on a bounded semaphore raises.
-            closers.append(
-                _Entry(key=key, client=client, last_used=self._clock(), closed=True)
-            )
-            raise TimeoutError(INDEX_DEADLINE_EXCEEDED)
-        # From here the client exists, so it holds capacity until it is closed.
-        entry = _Entry(key=key, client=client, last_used=self._clock(), holds_slot=True)
+        # The factory has returned, so transfer the one reservation now. The
+        # popped stack follows this entry through validation, initialization,
+        # cancellation, and close, and is run only after the client is gone.
+        entry.slot_cleanup = reservation.pop_all()
         try:
+            entry.touch(self._clock())
+            budget = (
+                CLOSE_TIMEOUT_SECONDS
+                if deadline is None
+                else deadline.timeout_for(CLOSE_TIMEOUT_SECONDS)
+            )
+            if budget <= 0:
+                raise TimeoutError(INDEX_DEADLINE_EXCEEDED)
             self._io.run(client.initialize, budget)
         except IndexCallStillOpen as still_open:
             # The initialize ignored its cancellation and is still running, so
@@ -1250,12 +1252,10 @@ class VectorClientCache:
             entry.closed = True
             raise _UnfinishedAcquisition(still_open.submission, entry) from None
         except BaseException:
-            # Anything else means nothing is running on the client, so the
-            # ordinary path applies: claimed for closing here, closed after the
-            # lock is released with the rest.
+            # Anything else means nothing is running on the client, including
+            # an expired validation budget, so queue its close with the rest.
+            # Its transferred reservation is released by that close, not here.
             entry.closed = True
-            # Same rule: the caller returns the permit for this raise.
-            entry.holds_slot = False
             closers.append(entry)
             raise
         return entry
@@ -1441,12 +1441,16 @@ class VectorClientCache:
             # evict the idle entry whose close would free one, so the wait can
             # never finish. If the entry turns out to be reusable after all --
             # another caller may have won the race -- the permit goes straight
-            # back, and a failure at any point returns it too.
+            # back. Until construction succeeds, the reservation context owns
+            # it; construction transfers that cleanup to the new entry.
             needs_capacity = not self._may_reuse(key)
             if needs_capacity and not self._acquire_client_capacity(deadline):
                 raise TimeoutError(INDEX_DEADLINE_EXCEEDED)
+            reservation = ExitStack()
+            if needs_capacity:
+                reservation.callback(self._client_slots.release)
             try:
-                with self._critical(deadline) as closers:
+                with reservation, self._critical(deadline) as closers:
                     if self._closed:
                         raise VectorClientPoolClosed("vector client pool is shut down")
                     now = self._clock()
@@ -1469,12 +1473,8 @@ class VectorClientCache:
                     ):
                         existing.touch(now)
                         entry = existing
-                        if needs_capacity:
-                            # A usable entry appeared while this thread was
-                            # taking a permit it does not need. Handing it
-                            # straight back is the whole cost of guessing early.
-                            self._client_slots.release()
-                            needs_capacity = False
+                        # Any speculative permit belongs to ``reservation`` and
+                        # is returned when the surrounding context exits.
                     else:
                         if existing is not None:
                             # Idle past its TTL: replace it rather than hand back a
@@ -1487,8 +1487,9 @@ class VectorClientCache:
                         # The entry takes over the permit this thread already
                         # holds, so the bound counts a client that is still
                         # being built.
-                        entry = self._build_locked(key, secret, deadline, closers)
-                        needs_capacity = False
+                        entry = self._build_locked(
+                            key, secret, deadline, reservation, closers
+                        )
                         self._entries[key] = entry
                     # Counted before eviction so the entry this call is about to
                     # use is not the one eviction drops.
@@ -1511,15 +1512,10 @@ class VectorClientCache:
                 self._retain_unfinished_acquisition(unfinished)
                 # The entry carries the permit now, so the owner that will close
                 # it after the real unwind is what gives it back.
-                needs_capacity = False
                 handed_over = True
                 # What the caller sees is unchanged and true: the budget
                 # was missed, and nothing is reported as cancelled.
                 raise TimeoutError(INDEX_DEADLINE_EXCEEDED) from None
-            except BaseException:
-                if needs_capacity:
-                    self._client_slots.release()
-                raise
 
             leased = LeasedClient(self, entry, revision, deadline)
             try:
