@@ -1265,16 +1265,25 @@ def test_a_close_that_refuses_to_stop_is_owned_until_it_really_ends(store, monke
     assert cache._outstanding_work() >= 1, "an unfinished close must stay charged"
     assert cache.io_loop_running, "the loop must outlive a close that has not stopped"
 
-    # The real unwind releases the charge and finalises the pool. A close that
-    # was cancelled did not close, so the client is dropped unclosed -- counted
-    # and reported rather than quietly forgotten.
+    # Establish the refusal before opening the release gate. Releasing first
+    # would let the original wait finish before the cancellation was observed,
+    # so this could stop testing the refusal path altogether.
+    io_thread = cache._io._thread
+    assert io_thread is not None and io_thread.is_alive()
+    assert built[0].cancelled.wait(5), "the cancellation must reach the SDK coroutine"
     built[0].close_release.set()
-    deadline = time.monotonic() + 5
-    while (cache.io_loop_running or cache._abandoned_closes == 0) and time.monotonic() < deadline:
-        time.sleep(0.005)
-    assert wait_flag(built[0], "cancelled"), "the cancellation must reach the SDK coroutine"
+
+    # The owner decrements its deferred charge only after the coroutine has
+    # really unwound and the abandoned-close count has been recorded.
+    with cache._holders_changed:
+        drained = cache._holders_changed.wait_for(cache._drained, timeout=5)
+    assert drained, "the refused close must stay owned until its coroutine unwinds"
     assert cache._abandoned_closes == 1, "a cancelled close is not a close, and says so"
-    assert wait_idle(cache)
+
+    # Join the exact loop thread rather than using the handle-clearing
+    # io_loop_running property as a completion proxy.
+    io_thread.join(5)
+    assert not io_thread.is_alive(), "the I/O loop must finish after the finalizer stops it"
     assert cache._finalized
 
 
