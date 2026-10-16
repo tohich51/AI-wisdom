@@ -4,6 +4,7 @@ from uuid import uuid4
 import pytest
 
 from kb.adapters.secrets import FileSecretSink
+from kb.adapters.vector_clients import VectorClientPoolClosed
 from kb.adapters.vector_reader import Candidate, FrozenCandidate, IndexUnavailable, OpenVikingReader
 from kb.retrieval.embedding_profile import SELECTED_PROFILE
 
@@ -171,3 +172,45 @@ def test_candidate_is_the_frozen_type_the_caller_can_reuse(tmp_path, read_identi
     with pytest.raises(FrozenInstanceError):
         result[0].score = 0.1
     reader.close()
+
+
+def test_close_before_first_use_prevents_a_pool_being_created(tmp_path, read_identity):
+    """B1-reader-first-use-close: close before the first use is still a close.
+
+    ``close`` on a reader that never held a pool has nothing to shut down, so
+    it used to do nothing at all -- and the next request then built a pool, with
+    its own I/O loop and credential executor, after the gateway's lifespan
+    shutdown had already returned. The pool has to be refused, not created.
+    """
+    reader = OpenVikingReader(URL, tmp_path / "store" / "read", _never_used_factory())
+    reader.close()
+
+    with pytest.raises(VectorClientPoolClosed):
+        _ = reader.pool
+
+    # And through the reader's own surface, where it is sanitised like any
+    # other reason the index cannot be queried safely.
+    with pytest.raises(IndexUnavailable) as raised:
+        reader.find(read_identity, ROOT, "synthetic query", 5)
+    assert raised.value.args == ("index_unavailable",)
+
+    # Closing again is still safe, and still leaves no pool behind.
+    reader.close()
+    with pytest.raises(VectorClientPoolClosed):
+        _ = reader.pool
+
+
+def test_a_pool_created_before_close_is_shut_and_stays_shut(tmp_path, read_identity):
+    reader = OpenVikingReader(URL, tmp_path / "store" / "read", _never_used_factory())
+    pool = reader.pool
+    reader.close()
+    assert pool.is_shutdown
+    with pytest.raises(VectorClientPoolClosed):
+        _ = reader.pool
+
+
+def _never_used_factory():
+    def factory(**kwargs):
+        raise AssertionError("no client may be built by this test")
+
+    return factory

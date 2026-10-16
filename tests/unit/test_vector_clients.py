@@ -164,6 +164,19 @@ def store(tmp_path):
     return sink_root / "read", identities
 
 
+def _try_lease(cache, identity, budget, result):
+    """Lease once and record the outcome as a bare word."""
+    try:
+        with cache.lease(identity, budget):
+            result.append("admitted")
+    except VectorClientPoolClosed:
+        result.append("VectorClientPoolClosed")
+    except TimeoutError:
+        result.append("timeout")
+    except Exception as exc:
+        result.append(type(exc).__name__)
+
+
 def wait_closed(clients, timeout=5.0):
     """Wait for handed-off closes to actually land. Returns whether they did.
 
@@ -1169,6 +1182,7 @@ def test_a_close_that_refuses_to_stop_is_owned_until_it_really_ends(store, monke
             super().__init__(**kwargs)
             self.close_started = threading.Event()
             self.close_release = threading.Event()
+            self.cancelled = threading.Event()
 
         async def close(self):
             self.close_started.set()
@@ -1177,7 +1191,9 @@ def test_a_close_that_refuses_to_stop_is_owned_until_it_really_ends(store, monke
             except asyncio.CancelledError:
                 # Refuses the cancellation outright, which is the case: a close
                 # that merely unwound on cancel would have finished, and this
-                # test would prove nothing.
+                # test would prove nothing. This flag is what proves the
+                # cancellation actually reached the SDK coroutine.
+                self.cancelled.set()
                 await asyncio.to_thread(self.close_release.wait, 5)
                 raise
             self.closed = True
@@ -1210,16 +1226,15 @@ def test_a_close_that_refuses_to_stop_is_owned_until_it_really_ends(store, monke
     assert cache._outstanding_work() >= 1, "an unfinished close must stay charged"
     assert cache.io_loop_running, "the loop must outlive a close that has not stopped"
 
-    # The real unwind releases the charge and finalises the pool. It does not
-    # close the client: that coroutine was cancelled, so it re-raised instead of
-    # finishing, and a client dropped without being closed is the honest end
-    # state -- counted, not quietly forgotten.
+    # The real unwind releases the charge and finalises the pool. A close that
+    # was cancelled did not close, so the client is dropped unclosed -- counted
+    # and reported rather than quietly forgotten.
     built[0].close_release.set()
     deadline = time.monotonic() + 5
     while (cache.io_loop_running or cache._abandoned_closes == 0) and time.monotonic() < deadline:
         time.sleep(0.005)
-    assert not built[0].closed, "a cancelled close is not a close"
-    assert cache._abandoned_closes == 1, "and it has to be visible, not silent"
+    assert built[0].cancelled.is_set(), "the cancellation must reach the SDK coroutine"
+    assert cache._abandoned_closes == 1, "a cancelled close is not a close, and says so"
     assert wait_idle(cache)
     assert cache._finalized
 
@@ -1365,3 +1380,175 @@ def test_work_finishing_after_shutdown_returns_finalises_the_whole_pool(store, m
     # again is inert rather than a second stop.
     cache.shutdown()
     assert cache._finalized
+
+
+def test_a_lease_admitted_after_shutdown_is_refused_and_owns_no_threads(store, monkeypatch):
+    """B1-shutdown-admission: admission is atomic with the closed transition.
+
+    A waiter that queued before shutdown and is handed a slot afterwards must
+    not then register work, build a credential executor and read a credential
+    over a pool that has already finished shutting down. The thread names are
+    the evidence: a pool that has shut down leaves no kb-vector threads behind.
+    """
+    monkeypatch.setattr(vector_clients, "IO_JOIN_SECONDS", 0.25)
+    read_root, identities = store
+    identity = identities[0]
+    built = []
+    cache = pool_for(read_root, built, max_outstanding=1)
+
+    # Take the only slot, so the second lease queues behind it.
+    held = threading.Event()
+    release = threading.Event()
+
+    def hold():
+        with cache.lease(identity):
+            held.set()
+            release.wait(5)
+
+    holder = threading.Thread(target=hold, daemon=True)
+    holder.start()
+    assert held.wait(5)
+    # This pool's own I/O thread, so the end-state assertion is about this pool
+    # and not about whatever else is running in the same process.
+    io_thread = cache._io._thread
+    assert io_thread is not None and io_thread.is_alive()
+
+    # The waiter starts before shutdown but cannot have its slot yet.
+    result = []
+    waiter = threading.Thread(
+        target=lambda: _try_lease(cache, identity, Deadline(5.0), result), daemon=True
+    )
+    waiter.start()
+
+    cache.shutdown()  # the pool is now closed and drained
+    release.set()
+    holder.join(5)
+    waiter.join(5)
+
+    # Wait on the thread object, not on io_loop_running: that property reports
+    # the handle being cleared, which stop() does before it joins, so it goes
+    # false while the thread is still winding down.
+    deadline = time.monotonic() + 5
+    while (io_thread.is_alive() or cache._readers is not None) and time.monotonic() < deadline:
+        time.sleep(0.005)
+
+    # The late waiter may run, and it may be handed the released slot, but it
+    # must not get as far as owning work or spawning anything.
+    assert result == ["VectorClientPoolClosed"], result
+    assert cache._readers is None, "no credential executor may exist after shutdown"
+    assert not cache.io_loop_running
+    assert cache._finalized
+    assert not io_thread.is_alive(), "the pool's own I/O thread must be gone"
+
+
+def test_a_late_ordinary_acquisition_failure_still_finalizes(store, monkeypatch):
+    """B1-late-shutdown-finalizer, attempt 2: finalise after the decrement.
+
+    An acquisition registered before shutdown can fail after the bounded wait
+    expired. The finalizer used to run while it was still charged, decide the
+    pool was not drained, and then have nothing left to call it again -- so the
+    last work item to finish left the loop and the credential executor running
+    until someone called shutdown a second time.
+    """
+    monkeypatch.setattr(vector_clients, "IO_JOIN_SECONDS", 0.05)
+    read_root, identities = store
+    identity = identities[0]
+    built = []
+    cache = pool_for(read_root, built)
+
+    # Warm it, so there is a loop and a credential executor to be left behind.
+    with cache.lease(identity) as leased:
+        leased.find("q", target_uri="x", limit=1)
+
+    entered, release = threading.Event(), threading.Event()
+
+    def failing_read(_identity):
+        entered.set()
+        release.wait(5)
+        raise RuntimeError("synthetic credential read failure")
+
+    cache.read_key = failing_read
+    result = []
+    worker = threading.Thread(
+        target=lambda: _try_lease(cache, identity, Deadline(0.05), result), daemon=True
+    )
+    worker.start()
+    assert entered.wait(5)
+
+    cache.shutdown()  # the bounded wait expires with the read still open
+    assert cache.io_loop_running, "shutdown must not stop under outstanding work"
+    assert not cache._finalized
+
+    release.set()
+    worker.join(5)
+
+    # The read failed, so nothing was retained: the pool must have finalised
+    # itself, with no second shutdown required.
+    deadline = time.monotonic() + 5
+    while (cache.io_loop_running or cache._readers is not None) and time.monotonic() < deadline:
+        time.sleep(0.005)
+    # Whether the lease sees the read's error or its own timeout is a real race
+    # between the two; what this cause is about is that the pool finalises
+    # itself either way, with no second shutdown called for.
+    assert result != ["admitted"], result
+    assert not cache.io_loop_running, "the last work item must finalise the pool"
+    assert cache._readers is None, "and the credential executor with it"
+    assert cache._finalized
+
+
+def test_post_call_release_does_not_wait_behind_another_keys_initialize(store):
+    """B1-postcall-cleanup-deadline: finishing the call is the end of the budget.
+
+    The release of a holder is bookkeeping, and it needs the pool lock -- which
+    another key's long initialization is holding. A request that has already
+    done its work must not sit behind that.
+    """
+    read_root, identities = store
+    first, second = identities[0], identities[1]
+    built = []
+    entered, release_init = threading.Event(), threading.Event()
+
+    class SlowInit(FakeClient):
+        async def initialize(self):
+            entered.set()
+            await asyncio.to_thread(release_init.wait, 5)
+
+    def make(**kwargs):
+        client = SlowInit(**kwargs)
+        built.append(client)
+        return client
+
+    cache = VectorClientCache(URL, read_root, make)
+    # A lease for another key, whose initialize holds the pool lock.
+    holder = threading.Thread(
+        target=lambda: _lease_and_find(cache, second, Deadline(10.0)), daemon=True
+    )
+    holder.start()
+    assert entered.wait(5), "the other key's initialize should be running"
+
+    # This request has a 30ms budget and its own work is instant.
+    began = time.monotonic()
+    with pytest.raises(TimeoutError):
+        with cache.lease(first, Deadline(0.03)) as leased:
+            leased.find("q", target_uri="x", limit=1)
+    elapsed = time.monotonic() - began
+
+    assert elapsed < 0.2, f"a finished request waited {elapsed:.3f}s for someone else"
+    assert cache._outstanding_work() >= 1, "the deferred release is still charged"
+
+    release_init.set()
+    holder.join(5)
+    deadline = time.monotonic() + 5
+    while cache._outstanding_work() and time.monotonic() < deadline:
+        time.sleep(0.005)
+    assert cache._outstanding_work() == 0, "the deferred release hands the charge back"
+    cache.shutdown()
+
+
+def _lease_and_find(cache, identity, budget, _outcome=None):
+    _outcome = _outcome if _outcome is not None else []
+    try:
+        with cache.lease(identity, budget) as leased:
+            leased.find("q", target_uri="x", limit=1)
+    except Exception as exc:  # this thread only exists to hold the lock
+        _outcome.append(type(exc).__name__)

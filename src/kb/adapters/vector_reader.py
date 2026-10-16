@@ -31,6 +31,7 @@ from kb.adapters.vector_clients import (
     NETWORK_TIMEOUT,
     Deadline,
     VectorClientCache,
+    VectorClientPoolClosed,
 )
 from kb.retrieval.embedding_profile import SELECTED_PROFILE
 
@@ -75,6 +76,10 @@ class OpenVikingReader:
         self._max_outstanding = max_outstanding
         self._cancel_grace = cancel_grace
         self._clients = clients
+        # Set by close(). Read under _pool_lock, and that lock is also what
+        # close() takes, so a close and a first-use pool creation cannot both
+        # believe they got there first.
+        self._closed = False
         self._pool_lock = threading.Lock()
 
     @property
@@ -87,8 +92,18 @@ class OpenVikingReader:
         threads racing here produce one pool, not two, because the assignment
         happens under the lock.
         """
+        if self._closed:
+            raise VectorClientPoolClosed("vector reader is closed")
         if self._clients is None:
             with self._pool_lock:
+                # Re-read under the lock. close() takes the same lock, so if it
+                # has run, this refuses rather than building a pool that the
+                # gateway's completed shutdown does not own -- and that pool
+                # would then create an I/O loop and a credential executor of
+                # its own, after the shutdown that was supposed to have closed
+                # them had already returned.
+                if self._closed:
+                    raise VectorClientPoolClosed("vector reader is closed")
                 if self._clients is None:
                     self._clients = VectorClientCache(
                         self._url,
@@ -179,6 +194,14 @@ class OpenVikingReader:
         the event loop that drove them has been stopped and joined. This is
         what the gateway's lifespan shutdown calls, so a search in progress
         at the end of the process cannot leave a request on the wire.
+
+        Marks the reader closed first, under the same lock that creates the
+        pool, so a close that runs before the first use is still a close. A
+        reader closed before it ever held a pool has nothing to shut down, but
+        it must not be able to grow one afterwards.
         """
-        if self._clients is not None:
-            self._clients.shutdown()
+        with self._pool_lock:
+            self._closed = True
+            clients = self._clients
+        if clients is not None:
+            clients.shutdown()

@@ -509,7 +509,10 @@ class LeasedClient:
             return self._pool._io.run(make_coro, remaining)
         except IndexCallStillOpen as exc:
             self._stuck = exc
-            self._pool._quarantine(self._entry)
+            # Under this lease's own budget: the call being cleaned up after has
+            # already spent it, and another key's initialize must not be able to
+            # hold this cleanup past the deadline.
+            self._pool._quarantine(self._entry, self._deadline)
             raise
 
     def find(self, query: str, **kwargs: Any) -> Any:
@@ -853,9 +856,32 @@ class VectorClientCache:
             return
         self._drop_locked(entry, closers)
 
-    def _quarantine(self, entry: _Entry) -> None:
-        with self._critical(None) as closers:
+    def _critical_soon(self, deadline: Deadline | None) -> bool:
+        """Take the pool lock now if this request's budget still allows it.
+
+        Post-call bookkeeping needs this lock, and the lock can be held by
+        another key's initialization. Waiting for it unconditionally is how a
+        request that had already done its work ended up blocked a hundred
+        milliseconds past a thirty millisecond budget.
+        """
+        if deadline is None:
+            self._lock.acquire()
+            return True
+        return self._acquire_pool_lock(deadline)
+
+    def _quarantine(self, entry: _Entry, deadline: Deadline | None = None) -> None:
+        """Retire a client whose call did not stop, without waiting past a budget."""
+        if not self._critical_soon(deadline):
+            # The lock is busy with someone else's lifecycle work. Owning the
+            # quarantine is enough; nothing waits on it.
+            self._own_work("quarantine", lambda: self._quarantine(entry, None))
+            return
+        closers: list[_Entry] = []
+        try:
             self._retire_locked(entry, closers)
+        finally:
+            self._lock.release()
+        self._close_all(closers)
 
     def _evict_locked(self, now: float, closers: list[_Entry]) -> None:
         for entry in [e for e in self._entries.values() if e.holders == 0 and self._stale(e, now)]:
@@ -937,15 +963,31 @@ class VectorClientCache:
             self._pending += 1
 
     def _end_acquisition(self) -> None:
-        """Unregister it, and wake a shutdown that was waiting for it."""
+        """Unregister it, wake a shutdown waiting for it, then finalise.
+
+        The finalizer comes after the decrement, deliberately. Calling it
+        before would see this work still charged, decide the pool was not
+        drained, and then have nothing left to call it again -- so the last
+        work item to finish could leave the I/O loop and the credential
+        executor running for good, with only another shutdown able to stop
+        them. It is called outside the drain lock because the order is always
+        pool lock then drain lock, and the finalizer takes the pool lock.
+        """
         with self._holders_changed:
             if self._pending:
                 self._pending -= 1
             self._holders_changed.notify_all()
+        self._finalize()
 
     def _ensure_readers(self) -> concurrent.futures.ThreadPoolExecutor:
         with self._readers_lock:
             if self._readers is None:
+                if self._closed:
+                    # Refuse rather than resurrect. The admission check makes
+                    # this hard to reach, and that is the point: a credential
+                    # executor rebuilt after shutdown is a thread the gateway's
+                    # completed shutdown does not own.
+                    raise VectorClientPoolClosed("vector client pool is shut down")
                 self._readers = concurrent.futures.ThreadPoolExecutor(
                     max_workers=max(1, CREDENTIAL_WORKERS),
                     thread_name_prefix="kb-vector-credential",
@@ -1061,23 +1103,59 @@ class VectorClientCache:
             raise
         return _Entry(key=key, client=client, last_used=self._clock())
 
+    def _release_holder_locked(
+        self, entry: _Entry, holder_owner: int, closers: list[_Entry]
+    ) -> None:
+        """The holder bookkeeping. Runs with the pool lock already held."""
+        entry.holders -= 1
+        if entry.holders == 0:
+            if entry.retired or self._stale(entry, self._clock()):
+                self._drop_locked(entry, closers)
+            else:
+                entry.touch(self._clock())
+        # Releasing is when a client becomes idle, and it is the only moment
+        # the bound can be restored without waiting for the next acquire.
+        self._evict_locked(self._clock(), closers)
+        # Keep ownership registered until all required closes finish.
+        with self._holders_changed:
+            self._live_holders[holder_owner] -= 1
+            if self._live_holders[holder_owner] == 0:
+                del self._live_holders[holder_owner]
+            self._holders_changed.notify_all()
+
     def _release_holder(self, entry: _Entry, holder_owner: int) -> None:
+        """Unbounded release, for the paths the pool runs on its own threads."""
         with self._critical(None) as closers:
-            entry.holders -= 1
-            if entry.holders == 0:
-                if entry.retired or self._stale(entry, self._clock()):
-                    self._drop_locked(entry, closers)
-                else:
-                    entry.touch(self._clock())
-            # Releasing is when a client becomes idle, and it is the only moment
-            # the bound can be restored without waiting for the next acquire.
-            self._evict_locked(self._clock(), closers)
-            # Keep ownership registered until all required closes finish.
-            with self._holders_changed:
-                self._live_holders[holder_owner] -= 1
-                if self._live_holders[holder_owner] == 0:
-                    del self._live_holders[holder_owner]
-                    self._holders_changed.notify_all()
+            self._release_holder_locked(entry, holder_owner, closers)
+        self._finalize()
+
+    def _release_holder_bounded(
+        self, entry: _Entry, holder_owner: int, deadline: Deadline | None
+    ) -> bool:
+        """Release at this request's budget, or hand the release to an owner.
+
+        A request that has finished its work must not then queue behind another
+        key's initialization. When the budget is gone the release is owned
+        instead, and the outstanding slot it was charged stays charged until
+        the bookkeeping it pays for has actually happened -- handing the slot
+        back early would let the pool admit more work than its bound allows
+        while that bookkeeping is still outstanding.
+        """
+        if not self._critical_soon(deadline):
+            self._own_work(
+                "holder-release",
+                lambda: self._release_holder(entry, holder_owner),
+                self._outstanding.release,
+            )
+            return False
+        closers: list[_Entry] = []
+        try:
+            self._release_holder_locked(entry, holder_owner, closers)
+        finally:
+            self._lock.release()
+        self._close_all(closers)
+        self._finalize()
+        return True
 
     def _defer_holder_release(
         self,
@@ -1119,6 +1197,11 @@ class VectorClientCache:
         credential read still running keeps this lease's slot and its pool
         registration until it really finishes.
         """
+        # A fast path only. The authoritative check happens under the pool lock
+        # together with the registration below, because a check that is not
+        # atomic with the closed transition is not a check: this thread can be
+        # descheduled here, shutdown can finish, and the next line would admit
+        # work into a pool that has already torn itself down.
         if self._closed:
             raise VectorClientPoolClosed("vector client pool is shut down")
 
@@ -1130,7 +1213,31 @@ class VectorClientCache:
         # From here this acquisition owns an outstanding slot and a pending
         # registration, so shutdown can see it and the outstanding bound counts
         # it, for as long as any part of it is still running.
-        self._begin_acquisition()
+        try:
+            # Bounded as well as atomic. Sharing the lock with shutdown is what
+            # makes the check mean something, but taking it with no bound would
+            # put back the very wait the acquisition repair removed: the lock
+            # is held here for a bool and a counter, so a budget that is gone
+            # must not be spent on it.
+            if not self._acquire_pool_lock(deadline):
+                raise TimeoutError(INDEX_DEADLINE_EXCEEDED)
+            try:
+                # Shutdown sets _closed under this same lock, so either this
+                # thread registers before that and shutdown waits for it, or it
+                # registers after and is refused. There is no window in which
+                # both are true, which is what let a late waiter take a slot
+                # and then build a fresh credential executor over a pool that
+                # had already finished shutting down.
+                if self._closed:
+                    raise VectorClientPoolClosed("vector client pool is shut down")
+                with self._holders_changed:
+                    self._pending += 1
+                    self._holders_changed.notify_all()
+            finally:
+                self._lock.release()
+        except BaseException:
+            self._outstanding.release()
+            raise
         promoted = False
         handed_over = False
         deferred_read: concurrent.futures.Future | None = None
@@ -1210,7 +1317,10 @@ class VectorClientCache:
             finally:
                 submission = leased.unfinished_submission
                 if submission is None:
-                    self._release_holder(entry, holder_owner)
+                    if not self._release_holder_bounded(entry, holder_owner, deadline):
+                        # The owner of the deferred release also owns this
+                        # lease's outstanding slot until it has run.
+                        release_deferred = True
                 else:
                     # This lease's one holder and slot remain charged until the
                     # actual submission reaches its completion event.
@@ -1228,9 +1338,9 @@ class VectorClientCache:
             #   nothing started     -> hand both back here
             if release_deferred:
                 pass
+                self._finalize()
             else:
                 # After the release, so any close it started is already counted.
-                self._finalize()
                 if handed_over:
                     # The owner of the unfinished work holds this acquisition's
                     # slot and registration now. Releasing them here would let
@@ -1245,9 +1355,13 @@ class VectorClientCache:
                     # finishes; its result is discarded, and no SDK work is
                     # ever started from it.
                     self._retain_slot_until_read(deferred_read)
+                    self._finalize()
                 else:
+                    # _end_acquisition finalises after its own decrement, which
+                    # is the last one this lease can cause.
                     self._end_acquisition()
                     self._outstanding.release()
+                    self._finalize()
 
     def shutdown(self) -> None:
         """Retire every client and stop the I/O loop when teardown is safe.
