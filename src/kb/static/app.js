@@ -456,16 +456,30 @@ const featureHost={node,button,api,post,notify:message,libraries:()=>libraries,c
 };
 window.WisdomResearch.configure(featureHost);
 
-const identityReady = (async () => {
-  identity = await api('/api/me');
-  const login = document.querySelector('.login'); if (login) login.hidden = true;
-  const logout = byId('logout'); if (logout) logout.hidden = false;
-  const readiness = await api('/readyz');
-  message(readiness.semantic_search_enabled ? 'Поиск по смыслу доступен для опубликованных знаний. Извлечение создаёт черновики для проверки.' : 'Поиск по словам · извлечение создаёт черновики для проверки.');
-  return identity;
-})();
-identityReady.catch(error => { message(error.message); });
-const ready = () => identityReady;
+let identityReady = null;
+
+const initializeIdentity = () => {
+  if (identityReady !== null) return identityReady;
+
+  identityReady = (async () => {
+    identity = await api('/api/me');
+    const login = document.querySelector('.login'); if (login) login.hidden = true;
+    const logout = byId('logout'); if (logout) logout.hidden = false;
+    const readiness = await api('/readyz');
+    message(readiness.semantic_search_enabled ? 'Поиск по смыслу доступен для опубликованных знаний. Извлечение создаёт черновики для проверки.' : 'Поиск по словам · извлечение создаёт черновики для проверки.');
+    return identity;
+  })().catch(error => {
+    identityReady = null;
+    message(error.message);
+    throw error;
+  });
+
+  return identityReady;
+};
+
+const ready = () => initializeIdentity();
+
+ready().catch(() => {});
 
 router.register('libraries', {
   title: 'AI-wisdom — Библиотеки знаний',
