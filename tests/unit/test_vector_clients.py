@@ -361,31 +361,41 @@ def test_a_client_in_use_is_never_closed_under_the_caller(store):
     assert wait_idle(cache)
 
 
-def test_eviction_skips_a_busy_client_and_does_not_grow_past_the_bound(store):
+def test_a_busy_client_is_never_closed_and_the_cap_still_holds(store):
+    """A client in use is never closed, and the owned cap is not exceeded.
+
+    The cap on *owned* clients used to cover only what the pool held, so a pool
+    of one would briefly hold two: it preferred a live client over its own
+    bound. Now the bound counts clients that exist at all, so a second key is
+    refused while the first client is live and admitted once that client has
+    been released and closed. Refusing is the safe direction -- the alternative
+    was more live SDK clients than the pool said it owned.
+    """
     read_root, identities = store
     first, second = identities[0], identities[1]
     built = []
     cache = pool_for(read_root, built, max_clients=1)
 
-    with cache.lease(first):
-        with cache.lease(second):
-            # Both calls are live and the bound is one. The pool refuses to
-            # close either of them, so it is briefly over the bound rather
-            # than landing a close on a call that is still running.
-            assert len(cache) == 2
-            assert not built[0].closed
-            assert not built[1].closed
-        # The inner call released first and became the idle one, so it is the
-        # entry the bound is restored with.
-        assert wait_closed([built[1]])
-        assert not built[0].closed
+    # The first client stays live for the whole attempt, which is the only state
+    # in which nothing can be dropped to make room.
+    with cache.lease(first) as leased:
+        leased.find("q", target_uri="x", limit=1)
+        with pytest.raises(TimeoutError):
+            with cache.lease(second, Deadline(0.2)) as other:
+                other.find("q", target_uri="x", limit=1)
+        assert not built[0].closed, "a busy client must not be closed to make room"
+        assert len(built) == 1, "and no replacement may be built either"
+        assert len(cache) == 1
 
-    assert len(cache) <= 1
-    # The survivor is idle and still pooled: a pool of one that closed on every
-    # release would be back to building a client per call.
-    assert not built[0].closed
-    cache.shutdown()
+    # Once it has released, there is room. The second key drops the idle client,
+    # whose close hands its permit back, so the pool still owns exactly one.
+    with cache.lease(second, Deadline(5.0)) as other:
+        other.find("q", target_uri="x", limit=1)
     assert wait_closed([built[0]])
+    assert len(built) == 2
+    assert len(cache) == 1
+    cache.shutdown()
+    assert wait_closed(built)
 
 
 def test_expired_deadline_starts_nothing_and_says_so(store):
@@ -633,10 +643,15 @@ def test_a_cached_client_with_a_larger_timeout_does_not_outlive_a_shorter_budget
 
         started = time.monotonic()
         with cache.lease(identity, budget) as leased:
-            with pytest.raises(TimeoutError) as raised:
+            with pytest.raises(IndexCallStillOpen) as raised:
                 leased.find("second", target_uri="x", limit=1)
         elapsed = time.monotonic() - started
-        assert str(raised.value) == "index_deadline_exceeded"
+        # Reported unfinished rather than timed out, because the request no
+        # longer waits out a cancel grace to find out: the submission is handed
+        # to the pool and the caller returns at its own deadline. What this
+        # test is about is unaffected -- the call still ended at the budget and
+        # not at the cached client's 45 second socket timeout.
+        assert "did not stop" in str(raised.value)
         # The whole point: bounded by the budget, not by the 45s socket
         # timeout the cached client carries, and not by a fixed sleep either.
         assert elapsed < 5.0, f"outlived the budget by {elapsed:.1f}s"
@@ -651,9 +666,12 @@ def test_a_cached_client_with_a_larger_timeout_does_not_outlive_a_shorter_budget
         # outstanding slot came back: a leaked one would block this forever.
         with cache.lease(identity, Deadline(20.0)) as leased:
             assert leased.find("third", target_uri="x", limit=1) == {"resources": []}
+        # The cancelled client was quarantined, because its request was still
+        # open when the budget ran out, so the third call is served by a fresh
+        # one -- still on the same fixed ceiling, never on a per-request budget.
         assert len(cache) == 1
-        assert len(built) == 1, "the cancelled call must not have cost a rebuild"
-        assert built[0]["timeout"] == 45.0
+        assert len(built) == 2
+        assert [b["timeout"] for b in built] == [45.0, 45.0]
     finally:
         cache.shutdown()
         server.close()
@@ -1552,3 +1570,174 @@ def _lease_and_find(cache, identity, budget, _outcome=None):
             leased.find("q", target_uri="x", limit=1)
     except Exception as exc:  # this thread only exists to hold the lock
         _outcome.append(type(exc).__name__)
+
+
+def test_a_cancelled_call_returns_at_its_budget_not_budget_plus_grace(store):
+    """B1-request-cancel-grace: the grace is not the caller's to pay.
+
+    A budget of twenty milliseconds with a cancel grace of two hundred returned
+    at two hundred and twenty, for a find and for an initialize alike. The
+    submission is handed to the pool instead, and the caller goes straight
+    back; ownership, not waiting, is what keeps the work safe.
+    """
+    read_root, identities = store
+    identity = identities[0]
+    built = []
+    started, release = threading.Event(), threading.Event()
+
+    class Deaf(FakeClient):
+        async def find(self, query, **kwargs):
+            started.set()
+            try:
+                await asyncio.to_thread(release.wait, 5)
+            except asyncio.CancelledError:
+                # Observes the cancellation and refuses to unwind, which is the
+                # case the grace used to be spent on.
+                self.cancelled = True
+                await asyncio.to_thread(release.wait, 5)
+                raise
+            return {"resources": []}
+
+    def make(**kwargs):
+        client = Deaf(**kwargs)
+        built.append(client)
+        return client
+
+    cache = VectorClientCache(URL, read_root, make, cancel_grace=0.2)
+    t0 = time.monotonic()
+    with pytest.raises(IndexCallStillOpen) as raised:
+        with cache.lease(identity, Deadline(0.02)) as leased:
+            leased.find("q", target_uri="x", limit=1)
+    elapsed = time.monotonic() - t0
+
+    assert "did not stop" in str(raised.value)
+    assert elapsed < 0.15, f"budget plus grace was paid: {elapsed:.3f}s"
+    # The work is still owned, not forgotten: the charge is held until the real
+    # unwind, and the finalizer cannot have run.
+    assert cache._outstanding_work() >= 1
+    assert not cache._finalized
+
+    release.set()
+    # The pool is live, so nothing is torn down until it is shut down. What has
+    # to be finished first is the charge, which the real unwind releases.
+    deadline = time.monotonic() + 5
+    while cache._outstanding_work() and time.monotonic() < deadline:
+        time.sleep(0.005)
+    assert cache._outstanding_work() == 0
+    cache.shutdown()
+    assert wait_idle(cache)
+
+
+def test_a_cancelled_initialize_returns_at_its_budget_not_budget_plus_grace(store):
+    """The same for initialization, which is the other call that can hang."""
+    read_root, identities = store
+    identity = identities[0]
+    built = []
+    release = threading.Event()
+    began = [0.0]
+
+    class DeafInit(FakeClient):
+        async def initialize(self):
+            began[0] = time.monotonic()
+            try:
+                await asyncio.to_thread(release.wait, 5)
+            except asyncio.CancelledError:
+                self.cancelled = True
+                await asyncio.to_thread(release.wait, 5)
+                raise
+
+    def make(**kwargs):
+        client = DeafInit(**kwargs)
+        built.append(client)
+        return client
+
+    cache = VectorClientCache(URL, read_root, make, cancel_grace=0.2)
+    with pytest.raises(TimeoutError):
+        with cache.lease(identity, Deadline(0.02)) as leased:
+            leased.find("q", target_uri="x", limit=1)
+    elapsed = time.monotonic() - began[0]
+
+    assert elapsed < 0.15, f"budget plus grace was paid: {elapsed:.3f}s"
+    assert built[0].cancelled, "the cancellation must reach the SDK coroutine"
+    release.set()
+    # The pool is live, so nothing is torn down until it is shut down. What has
+    # to be finished first is the charge, which the real unwind releases.
+    deadline = time.monotonic() + 5
+    while cache._outstanding_work() and time.monotonic() < deadline:
+        time.sleep(0.005)
+    assert cache._outstanding_work() == 0
+    cache.shutdown()
+    assert wait_idle(cache)
+
+
+def test_detached_closes_cannot_grow_past_the_owned_client_cap(store):
+    """B1-detached-close-capacity: the cap counts clients that exist.
+
+    Forty rotations with a pool of one and one outstanding call left forty
+    unclosed clients and thirty-nine background closes, because the bound
+    counted only what the pool still held. Capacity is now taken before a
+    client is built and held until its close lands, so with the closes held open
+    the pool runs out of capacity and says so rather than building a forty-first
+    SDK client it has no room for.
+    """
+    read_root, identities = store
+    identity = identities[0]
+    built = []
+    revision = [KEY]
+    release_close = threading.Event()
+
+    class HeldClose(FakeClient):
+        async def close(self):
+            await asyncio.to_thread(release_close.wait, 5)
+            self.closed = True
+            self.closes += 1
+
+    cache = VectorClientCache(
+        URL,
+        read_root,
+        lambda **kw: _record(built, HeldClose(**kw)),
+        max_clients=1,
+        max_outstanding=1,
+        cancel_grace=0.05,
+    )
+    cache.read_key = lambda _identity: (revision[0], credential_revision(revision[0]))
+
+    admitted = 0
+    for step in range(40):
+        revision[0] = f"synthetic-read-key-{step}"
+        try:
+            with cache.lease(identity, Deadline(0.05)) as leased:
+                leased.find("q", target_uri="x", limit=1)
+            admitted += 1
+        except TimeoutError:
+            pass
+        # The cap is on clients that exist, not on what the pool still holds, so
+        # this holds however many rotations are attempted and however long the
+        # closes are held open.
+        assert len(built) <= 1, f"step {step}: built {len(built)} clients"
+
+    assert admitted < 40, "a one-client cap must refuse some of forty rotations"
+    assert len(built) == 1
+
+    release_close.set()
+    cache.shutdown()
+    assert wait_idle(cache)
+    assert wait_closed(built)
+
+
+def _record(built, client):
+    built.append(client)
+    return client
+
+
+def _live_clients(built):
+    return sum(1 for c in built if not c.closed)
+
+
+def _record(built, client):
+    built.append(client)
+    return client
+
+
+def _live_clients(built):
+    return sum(1 for c in built if not c.closed)

@@ -124,6 +124,18 @@ MAX_OUTSTANDING = 20
 #: flight at once anyway.
 CREDENTIAL_WORKERS = MAX_OUTSTANDING
 
+#: How long a request without its own budget will wait for owned-client
+#: capacity. Bounded on purpose: a permit comes back when a close lands, and a
+#: close that is never going to land must not turn into a wait that never ends.
+#: The value matches the close ceiling, so a close that is going to finish
+#: normally gets its chance first.
+CLIENT_CAPACITY_WAIT = CLOSE_TIMEOUT_SECONDS
+
+#: How long one poll for a free client permit waits before the pool is asked
+#: to make room. Short on purpose: the only thing that frees a permit is a
+#: close landing, and waiting the whole budget for one would mean never asking.
+CAPACITY_POLL_SECONDS = 0.05
+
 #: One sanitised spelling of the expired-budget failure, so the caller and the
 #: pool never drift apart on what a timeout is called.
 INDEX_DEADLINE_EXCEEDED = "index_deadline_exceeded"
@@ -281,9 +293,15 @@ class _IODispatcher:
         self,
         grace: float = CANCEL_GRACE_SECONDS,
         join_timeout: float = IO_JOIN_SECONDS,
+        defer: Callable[[str, Callable[[], Any]], None] | None = None,
     ) -> None:
         self._grace = float(grace)
         self._join_timeout = float(join_timeout)
+        # Where an unfinished submission goes. The pool supplies its existing
+        # owner, so a cancelled call that has not unwound yet is charged and
+        # finalised like every other piece of unfinished work, and the caller is
+        # not kept waiting for it.
+        self._defer = defer
         self._lock = threading.Lock()
         self._loop: asyncio.AbstractEventLoop | None = None
         self._thread: threading.Thread | None = None
@@ -410,24 +428,48 @@ class _IODispatcher:
         future: Any,
         submission: _Submission,
     ) -> Any:
+        """The budget is gone: cancel, hand over, and return at once.
+
+        The request used to wait out ``CANCEL_GRACE_SECONDS`` here, on top of
+        the budget it had already missed -- so a twenty millisecond deadline
+        with a one hundred and twenty millisecond grace returned at a hundred
+        and forty, for a find and for an initialize alike. That wait is time
+        the caller never budgeted for and cannot be charged to anyone.
+
+        So the cancellation is scheduled, the submission is handed to the
+        pool's existing owner, and the caller goes straight back. Ownership is
+        what keeps the work safe, not the waiting: the entry is quarantined, the
+        holder and its slot stay charged until the submission really unwinds,
+        and the finalizer cannot run while the owner holds it. ``_grace`` is
+        only a fallback for a dispatcher with no owner to hand to.
+        """
         future.cancel()
         try:
             loop.call_soon_threadsafe(request_cancel)
         except RuntimeError:  # pragma: no cover - the loop stopped under us
             pass
-        if not submission.await_unwound(self._grace):
-            raise IndexCallStillOpen(
-                "index call did not stop after cancellation",
-                submission=submission,
-            )
-        if not submission.cancelled:
-            # It stopped, but not because we cancelled it: either it had not
-            # begun when the cancel landed, or the socket timeout or the
-            # provider beat us to it. The budget was still missed, so this is
-            # a timeout -- but the provider-side work is not being claimed as
-            # cancelled on the strength of our ask.
-            _logger.debug("vector call ended without observing cancellation")
-        raise TimeoutError(INDEX_DEADLINE_EXCEEDED)
+        if submission.finished.is_set():
+            # Already unwound, so the cancel was delivered and the call is
+            # simply over. Whether it stopped *because* of the cancel is worth
+            # recording: a task cancelled before its first step never observes
+            # one, and neither should be claimed as cancelled on that basis.
+            if not submission.cancelled:
+                _logger.debug("vector call ended without observing cancellation")
+            raise TimeoutError(INDEX_DEADLINE_EXCEEDED)
+        if self._defer is None:
+            # No owner to hand to, so this is the only place the grace is still
+            # worth spending.
+            if not submission.await_unwound(self._grace):
+                raise IndexCallStillOpen(
+                    "index call did not stop after cancellation",
+                    submission=submission,
+                )
+            raise TimeoutError(INDEX_DEADLINE_EXCEEDED)
+        self._defer("call-unwind", submission.finished.wait)
+        raise IndexCallStillOpen(
+            "index call did not stop after cancellation",
+            submission=submission,
+        )
 
     def stop(self) -> None:
         """Stop the loop and wait for its thread. Idempotent."""
@@ -457,6 +499,8 @@ class _Entry:
     last_used: float
     holders: int = 0
     retired: bool = False
+    #: Whether this entry is holding one of the pool's total-owned-client slots.
+    holds_slot: bool = False
     #: Set the moment this entry is handed to a close. Closes now run outside
     #: the lock, so two selection paths can reach the same entry; without this
     #: a client could be closed twice.
@@ -586,7 +630,7 @@ class VectorClientCache:
         self._readers: concurrent.futures.ThreadPoolExecutor | None = None
         self._readers_lock = threading.Lock()
         self._closed = False
-        self._io = _IODispatcher(grace=cancel_grace)
+        self._io = _IODispatcher(grace=cancel_grace, defer=self._own_work)
         # A last resort for a process that exits without an explicit shutdown,
         # so httpx connection pools and sockets are not left to the
         # interpreter's reclaimer. Idempotent, and never the primary path:
@@ -594,6 +638,15 @@ class VectorClientCache:
         atexit.register(self.shutdown)
         # Bounds how many SDK calls may be in flight at once.
         self._outstanding = threading.BoundedSemaphore(max(1, int(max_outstanding)))
+        # Bounds how many SDK clients exist at all, not merely how many are in
+        # the pool. max_clients alone counted only what _entries held, so a
+        # rotation that retired a client and handed its close to a background
+        # thread built a replacement immediately: with a pool of one and one
+        # outstanding call, forty rotations left forty unclosed clients and
+        # thirty-nine background closes, all invisible to the pool's own bound.
+        # Taken before a client is constructed and held until its close really
+        # lands -- or until a cancelled close really unwinds.
+        self._client_slots = threading.BoundedSemaphore(self._max_clients)
 
     # -- observable state --------------------------------------------------
 
@@ -646,6 +699,19 @@ class VectorClientCache:
             self._abandoned_closes += 1
         return None
 
+    def _release_client_slot(self, entry: _Entry) -> None:
+        """Give back the capacity an owned client was holding.
+
+        Only ever reached once, because the entry is marked as no longer
+        holding a slot at the same moment, and only once the client is really
+        gone: a close that completed, or a close that was cancelled and has
+        finally unwound.
+        """
+        if not entry.holds_slot:
+            return
+        entry.holds_slot = False
+        self._client_slots.release()
+
     def _close_entry(self, entry: _Entry) -> None:
         """Close a dropped client, keeping the pool's ownership until it ends.
 
@@ -658,13 +724,19 @@ class VectorClientCache:
         """
         submission = self._run_close(entry)
         if submission is None:
+            # Closed, or failed outright: either way the client is gone and the
+            # capacity it was holding can go back.
+            self._release_client_slot(entry)
             return
 
         def record_after_unwind() -> None:
             with self._lock:
                 self._abandoned_closes += 1
+            self._release_client_slot(entry)
             _logger.debug("vector client close was cancelled; client dropped unclosed")
 
+        # A cancelled close still holds its capacity until it has unwound, so a
+        # storm of them cannot turn into a storm of live clients.
         self._own_work("close-unwind", submission.finished.wait, record_after_unwind)
 
     def _close(self, entry: _Entry) -> None:
@@ -876,12 +948,14 @@ class VectorClientCache:
             # quarantine is enough; nothing waits on it.
             self._own_work("quarantine", lambda: self._quarantine(entry, None))
             return
-        closers: list[_Entry] = []
+        # Counted under the lock, exactly as _critical does. Registering the
+        # close after the unlock is this cause, on its second attempt: a
+        # shutdown arriving in between sees every counter at zero, stops the
+        # loop, and the client is never closed at all.
         try:
-            self._retire_locked(entry, closers)
+            self._close_all(self._retire_now(entry))
         finally:
             self._lock.release()
-        self._close_all(closers)
 
     def _evict_locked(self, now: float, closers: list[_Entry]) -> None:
         for entry in [e for e in self._entries.values() if e.holders == 0 and self._stale(e, now)]:
@@ -1059,6 +1133,54 @@ class VectorClientCache:
 
         self._own_work("init-unwind", unfinished.submission.finished.wait, release_acquisition)
 
+    def _may_reuse(self, key: ClientKey) -> bool:
+        """Whether an entry for this key looks reusable right now.
+
+        A snapshot taken without the lock, and only to decide whether capacity
+        has to be taken before entering the critical section. The decision is
+        re-made under the lock, and a permit taken on a wrong guess is handed
+        straight back.
+        """
+        entry = self._entries.get(key)
+        return entry is not None and not entry.retired and not self._stale(entry, self._clock())
+
+    def _acquire_client_capacity(self, deadline: Deadline | None) -> bool:
+        """Take one of the pool's total-owned-client permits, or refuse.
+
+        Never called with the pool lock held. Waiting for a permit while
+        holding it is how a full cache stops being able to evict the idle entry
+        whose close is what would free one, and with no caller deadline a
+        permit that never comes is a wait that never ends. So the wait is
+        sliced, and each time a slice runs out the pool is asked to drop what it
+        can before the next one: the close started there is what returns the
+        permit, so the loop makes progress rather than repeating itself.
+        """
+        if self._client_slots.acquire(blocking=False):
+            return True
+        budget = (
+            CLIENT_CAPACITY_WAIT if deadline is None else deadline.timeout_for(CLIENT_CAPACITY_WAIT)
+        )
+        end = time.monotonic() + budget
+        while True:
+            remaining = end - time.monotonic()
+            if remaining <= 0:
+                return False
+            # A short poll, not the whole budget: this catches a permit that a
+            # concurrent close has just freed, and anything still missing is
+            # dealt with below rather than waited out.
+            if self._client_slots.acquire(
+                blocking=True, timeout=min(remaining, CAPACITY_POLL_SECONDS)
+            ):
+                return True
+            # Nothing freed. Ask the pool to make room: an idle entry dropped
+            # here has its close started, and that close is what returns the
+            # permit. Every entry busy means there is nothing to drop, and the
+            # owned cap is then the honest answer rather than a spin.
+            with self._critical(None) as closers:
+                if not self._make_room_locked(closers):
+                    return False
+                self._evict_locked(self._clock(), closers)
+
     def _build_locked(
         self,
         key: ClientKey,
@@ -1066,10 +1188,16 @@ class VectorClientCache:
         deadline: Deadline | None,
         closers: list[_Entry],
     ) -> _Entry:
+        # Capacity was taken by the caller, before the critical section, so
+        # the bound counts clients that are still being built and not just the
+        # ones already pooled -- and so the wait for it never holds this lock.
         # The timeout here is the fixed network ceiling and nothing else. It
         # does not consult the caller's budget, because a client is shared: a
         # timeout derived from one request's deadline is inherited by every
         # later request that reuses the client.
+        # No permit handling here: the caller took the permit before it entered
+        # the critical section and gives it back on any failure out here, so
+        # releasing it in both places would release a bounded semaphore twice.
         client = self._factory(url=key[0], api_key=secret, timeout=self._network_timeout)
         budget = (
             CLOSE_TIMEOUT_SECONDS
@@ -1079,8 +1207,20 @@ class VectorClientCache:
         if budget <= 0:
             # The budget is gone. Build nothing rather than start work that
             # cannot be waited for.
-            closers.append(_Entry(key=key, client=client, last_used=self._clock(), closed=True))
+            # The permit is already taken, so the entry carries it: closed
+            # below, which is what gives it back. Without this it leaked.
+            closers.append(
+                _Entry(
+                    key=key,
+                    client=client,
+                    last_used=self._clock(),
+                    closed=True,
+                    holds_slot=True,
+                )
+            )
             raise TimeoutError(INDEX_DEADLINE_EXCEEDED)
+        # From here the client exists, so it holds capacity until it is closed.
+        entry = _Entry(key=key, client=client, last_used=self._clock(), holds_slot=True)
         try:
             self._io.run(client.initialize, budget)
         except IndexCallStillOpen as still_open:
@@ -1091,17 +1231,16 @@ class VectorClientCache:
             # after the only close that was meant to catch it and be lost.
             # Ownership passes to the caller instead, which keeps this
             # acquisition charged and closes the client after the real unwind.
-            raise _UnfinishedAcquisition(
-                still_open.submission,
-                _Entry(key=key, client=client, last_used=self._clock(), closed=True),
-            ) from None
+            entry.closed = True
+            raise _UnfinishedAcquisition(still_open.submission, entry) from None
         except BaseException:
             # Anything else means nothing is running on the client, so the
             # ordinary path applies: claimed for closing here, closed after the
             # lock is released with the rest.
-            closers.append(_Entry(key=key, client=client, last_used=self._clock(), closed=True))
+            entry.closed = True
+            closers.append(entry)
             raise
-        return _Entry(key=key, client=client, last_used=self._clock())
+        return entry
 
     def _release_holder_locked(
         self, entry: _Entry, holder_owner: int, closers: list[_Entry]
@@ -1122,6 +1261,33 @@ class VectorClientCache:
             if self._live_holders[holder_owner] == 0:
                 del self._live_holders[holder_owner]
             self._holders_changed.notify_all()
+
+    def _make_room_locked(self, closers: list[_Entry]) -> bool:
+        """Drop the least recently used idle entry, to start its close.
+
+        Reached only when no client permit is free, which means the pool is at
+        its owned cap. Dropping an entry does not return its permit -- the close
+        does, once it lands -- but it is what starts that close, so this is the
+        step that turns a full cache into a draining one. A busy entry is never
+        dropped, so this cannot close under a call that is still running.
+        """
+        idle = [e for e in self._entries.values() if e.holders == 0 and not e.closed]
+        if not idle:
+            return False
+        self._drop_locked(min(idle, key=lambda e: e.last_used), closers)
+        return True
+
+    def _retire_now(self, entry: _Entry) -> list[_Entry]:
+        """Retire one entry with the pool lock already held. Returns closers."""
+        closers: list[_Entry] = []
+        self._retire_locked(entry, closers)
+        return closers
+
+    def _release_holder_now(self, entry: _Entry, holder_owner: int) -> list[_Entry]:
+        """Release one holder with the pool lock already held. Returns closers."""
+        closers: list[_Entry] = []
+        self._release_holder_locked(entry, holder_owner, closers)
+        return closers
 
     def _release_holder(self, entry: _Entry, holder_owner: int) -> None:
         """Unbounded release, for the paths the pool runs on its own threads."""
@@ -1148,12 +1314,12 @@ class VectorClientCache:
                 self._outstanding.release,
             )
             return False
-        closers: list[_Entry] = []
+        # Counted under the lock, for the same reason as the quarantine
+        # above and for the same cause.
         try:
-            self._release_holder_locked(entry, holder_owner, closers)
+            self._close_all(self._release_holder_now(entry, holder_owner))
         finally:
             self._lock.release()
-        self._close_all(closers)
         self._finalize()
         return True
 
@@ -1252,6 +1418,15 @@ class VectorClientCache:
                 raise TimeoutError(INDEX_DEADLINE_EXCEEDED) from None
             key = self.key_for(identity, revision)
 
+            # Capacity first, outside the critical section. Holding the pool
+            # lock while waiting for a permit means a cache that is full cannot
+            # evict the idle entry whose close would free one, so the wait can
+            # never finish. If the entry turns out to be reusable after all --
+            # another caller may have won the race -- the permit goes straight
+            # back, and a failure at any point returns it too.
+            needs_capacity = not self._may_reuse(key)
+            if needs_capacity and not self._acquire_client_capacity(deadline):
+                raise TimeoutError(INDEX_DEADLINE_EXCEEDED)
             try:
                 with self._critical(deadline) as closers:
                     if self._closed:
@@ -1276,6 +1451,12 @@ class VectorClientCache:
                     ):
                         existing.touch(now)
                         entry = existing
+                        if needs_capacity:
+                            # A usable entry appeared while this thread was
+                            # taking a permit it does not need. Handing it
+                            # straight back is the whole cost of guessing early.
+                            self._client_slots.release()
+                            needs_capacity = False
                     else:
                         if existing is not None:
                             # Idle past its TTL: replace it rather than hand back a
@@ -1285,7 +1466,11 @@ class VectorClientCache:
                         # client for one key and leave one of them unowned. The
                         # build is itself bounded: a budget that has run out
                         # starts nothing at all.
+                        # The entry takes over the permit this thread already
+                        # holds, so the bound counts a client that is still
+                        # being built.
                         entry = self._build_locked(key, secret, deadline, closers)
+                        needs_capacity = False
                         self._entries[key] = entry
                     # Counted before eviction so the entry this call is about to
                     # use is not the one eviction drops.
@@ -1306,10 +1491,17 @@ class VectorClientCache:
                 # owner that will close the client after the real unwind.
                 # Nothing below may hand them back.
                 self._retain_unfinished_acquisition(unfinished)
+                # The entry carries the permit now, so the owner that will close
+                # it after the real unwind is what gives it back.
+                needs_capacity = False
                 handed_over = True
                 # What the caller sees is unchanged and true: the budget
                 # was missed, and nothing is reported as cancelled.
                 raise TimeoutError(INDEX_DEADLINE_EXCEEDED) from None
+            except BaseException:
+                if needs_capacity:
+                    self._client_slots.release()
+                raise
 
             leased = LeasedClient(self, entry, revision, deadline)
             try:
