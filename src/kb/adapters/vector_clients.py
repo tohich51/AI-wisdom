@@ -1194,7 +1194,11 @@ class VectorClientCache:
             # lifecycle work under the lock must not turn this into a wait
             # with no end of its own; the slice is spent and the loop tries
             # again.
-            if not self._acquire_pool_lock(Deadline(CAPACITY_POLL_SECONDS)):
+            remaining_capacity_wait = end - time.monotonic()
+            if remaining_capacity_wait <= 0:
+                return False
+            lock_budget = min(CAPACITY_POLL_SECONDS, remaining_capacity_wait)
+            if not self._acquire_pool_lock(Deadline(lock_budget)):
                 continue
             try:
                 closers: list[_Entry] = []
