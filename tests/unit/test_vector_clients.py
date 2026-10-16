@@ -1901,9 +1901,7 @@ def test_failed_initialization_keeps_capacity_until_blocked_close_finishes(store
         cache.shutdown()
 
 
-def test_expired_optimistic_cache_hit_cannot_build_without_capacity(
-    store, monkeypatch
-):
+def test_expired_optimistic_cache_hit_cannot_build_without_capacity(store, monkeypatch):
     read_root, identities = store
     built = []
     now = [0.0]
@@ -1953,9 +1951,7 @@ def test_expired_optimistic_cache_hit_cannot_build_without_capacity(
     assert wait_closed(built)
 
 
-def test_capacity_eviction_lock_does_not_renew_the_request_budget(
-    store, monkeypatch
-):
+def test_capacity_eviction_lock_does_not_renew_the_request_budget(store, monkeypatch):
     read_root, identities = store
     cache = pool_for(read_root, [], max_clients=1)
     assert cache._client_slots.acquire(blocking=False)
@@ -1980,7 +1976,7 @@ def test_capacity_eviction_lock_does_not_renew_the_request_budget(
             eviction_lock_held.set()
             release_eviction_lock.wait(2.0)
 
-    monkeypatch.setattr(cache, 'read_key', read_key_after_contention)
+    monkeypatch.setattr(cache, "read_key", read_key_after_contention)
     holder = threading.Thread(target=hold_eviction_lock)
     holder.start()
 
@@ -1992,9 +1988,7 @@ def test_capacity_eviction_lock_does_not_renew_the_request_budget(
                 pass
 
         elapsed = time.monotonic() - began
-        assert elapsed < 0.060, (
-            f'lease waited {elapsed:.3f}s for a 0.020s budget'
-        )
+        assert elapsed < 0.060, f"lease waited {elapsed:.3f}s for a 0.020s budget"
         assert eviction_lock_held.is_set()
         assert holder.is_alive()
     finally:

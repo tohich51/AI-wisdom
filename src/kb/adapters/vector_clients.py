@@ -847,9 +847,7 @@ class VectorClientCache:
                     # finalizer never runs, and every teardown after it waits
                     # out its whole timeout: one raised exception becomes a run
                     # that appears to hang.
-                    _logger.debug(
-                        "deferred %s release failed: %s", label, type(exc).__name__
-                    )
+                    _logger.debug("deferred %s release failed: %s", label, type(exc).__name__)
                 with self._holders_changed:
                     self._deferred -= 1
                     self._holders_changed.notify_all()
@@ -1228,9 +1226,7 @@ class VectorClientCache:
         # A factory failure leaves it to unwind; a constructed client transfers
         # that cleanup to its entry before budget validation or initialization.
         client = self._factory(url=key[0], api_key=secret, timeout=self._network_timeout)
-        entry = _Entry(
-            key=key, client=client, last_used=0.0, holds_slot=True
-        )
+        entry = _Entry(key=key, client=client, last_used=0.0, holds_slot=True)
         # The factory has returned, so transfer the one reservation now. The
         # popped stack follows this entry through validation, initialization,
         # cancellation, and close, and is run only after the client is gone.
@@ -1498,9 +1494,7 @@ class VectorClientCache:
                         # The entry takes over the permit this thread already
                         # holds, so the bound counts a client that is still
                         # being built.
-                        entry = self._build_locked(
-                            key, secret, deadline, reservation, closers
-                        )
+                        entry = self._build_locked(key, secret, deadline, reservation, closers)
                         self._entries[key] = entry
                     # Counted before eviction so the entry this call is about to
                     # use is not the one eviction drops.
