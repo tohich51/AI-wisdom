@@ -464,6 +464,9 @@ class VectorClientCache:
         self._clock = clock
         self._entries: dict[ClientKey, _Entry] = {}
         self._lock = threading.RLock()
+        # Holder ownership must outlive _entries.clear() during shutdown.
+        self._holders_changed = threading.Condition(self._lock)
+        self._live_holders: dict[int, int] = {}
         self._closed = False
         self._io = _IODispatcher(grace=cancel_grace)
         # A last resort for a process that exits without an explicit shutdown,
@@ -574,6 +577,7 @@ class VectorClientCache:
             raise TimeoutError(INDEX_DEADLINE_EXCEEDED)
 
         entry: _Entry | None = None
+        holder_owner = threading.get_ident()
         stop_io = False
         try:
             with self._lock:
@@ -609,6 +613,7 @@ class VectorClientCache:
                 # Counted before eviction so the entry this call is about to
                 # use is not the one eviction drops.
                 entry.holders += 1
+                self._live_holders[holder_owner] = self._live_holders.get(holder_owner, 0) + 1
                 self._evict_locked(now)
 
             try:
@@ -631,34 +636,52 @@ class VectorClientCache:
                     # pushed the pool past max_clients leave it over the bound
                     # until traffic picks up again.
                     self._evict_locked(self._clock())
-                    stop_io = self._closed and not self._entries
+                    # Keep ownership registered until all required closes finish.
+                    self._live_holders[holder_owner] -= 1
+                    if self._live_holders[holder_owner] == 0:
+                        del self._live_holders[holder_owner]
+                        self._holders_changed.notify_all()
+                    stop_io = self._closed and not self._live_holders
         finally:
             if stop_io:
                 self._io.stop()
             self._outstanding.release()
 
     def shutdown(self) -> None:
-        """Close every client this pool owns, then stop the I/O loop.
+        """Retire every client and stop the I/O loop when teardown is safe.
 
-        Deterministic by the time this returns: the clients are closed on the
-        loop that owns them, and the loop thread is joined, so nothing this
-        pool started is still running afterwards. Clients still in use are
-        retired and closed by the holder that releases them last, and that
-        last release is what stops the loop -- shutdown never closes under a
-        live call, and it never returns before one either.
+        Clients still in use are closed by the holder that releases them last.
+        Shutdown waits up to ``IO_JOIN_SECONDS`` for holders owned by other
+        threads; a holder calling shutdown in its own thread is reported
+        immediately instead of waiting on itself. If holders remain after the
+        bounded wait, shutdown reports the still-open work and leaves the loop
+        running. The last release then closes the retired client and stops the
+        loop, so shutdown never closes or stops it under a live call.
         """
         with self._lock:
             self._closed = True
             entries = list(self._entries.values())
             self._entries.clear()
-        outstanding = 0
-        for entry in entries:
-            if entry.holders:
-                entry.retired = True
-                outstanding += 1
-            else:
-                self._close(entry)
-        if not outstanding:
+            for entry in entries:
+                if entry.holders:
+                    entry.retired = True
+                else:
+                    self._close(entry)
+            same_thread = threading.get_ident() in self._live_holders
+            still_open = sum(self._live_holders.values())
+            if still_open and not same_thread:
+                self._holders_changed.wait_for(
+                    lambda: not self._live_holders,
+                    timeout=IO_JOIN_SECONDS,
+                )
+                still_open = sum(self._live_holders.values())
+            if still_open:
+                _logger.warning(
+                    "vector client shutdown incomplete: %d holder(s) still open; "
+                    "I/O loop remains running until they release",
+                    still_open,
+                )
+        if not still_open:
             self._io.stop()
 
     # ``close`` is the spelling the rest of the codebase uses for an owned
