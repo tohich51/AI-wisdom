@@ -133,6 +133,28 @@ def build_mcp(app, hosts):
         except Exception:
             raise ValueError("request_refused") from None
 
+    def call_detached(ctx, handler, *args, **kwargs):
+        """Same admission as ``call``, but the handler owns its own leases.
+
+        Identical authentication, identical scope check, identical failure
+        surface. The one difference is that no pooled connection is checked out
+        for the duration of the call, so a tool that makes external I/O does
+        not sit on a database connection while the network is busy. The
+        handler is told this by receiving ``None`` for the connection and
+        being handed the shared factory instead.
+        """
+        request = ctx.request_context.request
+        header = request.headers.get("authorization", "")
+        if not header.lower().startswith("bearer "):
+            raise ValueError("authentication_required")
+        identity = app.state.resolve_token(header[7:])
+        try:
+            require_scope(identity, HANDLER_SCOPES.get(handler.__name__))
+            principal = bearer_principal(identity)
+            return jsonable_encoder(handler(None, principal, *args, **kwargs))
+        except Exception:
+            raise ValueError("request_refused") from None
+
     from kb.mcp.research import install_tools
 
     install_tools(server, call)
@@ -242,7 +264,9 @@ def build_mcp(app, hosts):
         )
         if args.use_generation:
             raise ValueError("generation_is_not_retrieval")
-        return call(
+        # Detached: the search runs short SQL phases around its external call
+        # instead of holding one connection across the whole fan-out.
+        return call_detached(
             ctx,
             content.search_knowledge,
             args.query,
@@ -250,6 +274,7 @@ def build_mcp(app, hosts):
             args.limit,
             semantic=getattr(app.state, "semantic_search", None),
             source_ids=args.source_ids,
+            connections=app.state.db_connection,
         )
 
     @server.tool()

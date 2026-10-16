@@ -6,6 +6,7 @@ import psycopg
 import pytest
 
 from kb.access.policy import transaction_identity
+from kb.adapters.vector_clients import Deadline
 from kb.adapters.vector_reader import Candidate, IndexUnavailable
 from kb.catalog.content import search_knowledge
 from kb.retrieval import semantic_registry as registry
@@ -55,9 +56,13 @@ def current(provisioner, world, lib):
 class ReaderDouble:
     def __init__(self, build, action=lambda: None, items=None):
         self.build, self.action, self.items, self.calls = build, action, items, 0
+        self.deadlines = []
 
-    def find(self, identity, root, query, limit):
+    def find(self, identity, root, query, limit, *, deadline=None):
+        # ``deadline`` is part of the reader contract now: the search hands the
+        # shared budget to the call instead of the call choosing its own.
         self.calls += 1
+        self.deadlines.append(deadline)
         self.action()
         return (
             self.items
@@ -137,6 +142,10 @@ def test_semantic_hydrates_canonical_text_and_generation_is_idempotent(
     assert result["hits"][0]["retrieval_mode"] == "semantic"
     assert "resource_uri" not in result["hits"][0]
     assert reader.calls == 1
+    # The reader is handed the one shared budget rather than picking its own.
+    assert len(reader.deadlines) == 1
+    assert isinstance(reader.deadlines[0], Deadline)
+    assert not reader.deadlines[0].expired
 
 
 @pytest.mark.parametrize("operation", ["hash_null", "verified_null", "map_delete", "map_update"])
@@ -225,7 +234,7 @@ def test_forged_uri_is_not_hydrated(semantic_library, provisioner, world, gatewa
 
 def test_pending_index_uses_explicit_lexical_fallback(semantic_library, world, gateway):
     class NeverReader:
-        def find(self, *args):
+        def find(self, *args, **kwargs):
             raise AssertionError("No active index should be queried")
 
     result = search_knowledge(

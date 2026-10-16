@@ -84,6 +84,15 @@ def create_app() -> FastAPI:
             async with mcp_server.session_manager.run():
                 yield
         finally:
+            # The semantic service owns pooled index clients and the event
+            # loop that drives them. Nothing else in this process knows about
+            # either, so this is the one place they can be closed before the
+            # process goes away rather than at interpreter exit. Run in a
+            # thread because it joins a loop thread, and run first because
+            # closing it may still want the database lease this lifespan owns.
+            semantic = getattr(app.state, "semantic_search", None)
+            if semantic is not None:
+                await anyio.to_thread.run_sync(semantic.close)
             await anyio.to_thread.run_sync(http_client.close)
             pool.close()
 

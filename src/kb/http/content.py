@@ -157,22 +157,31 @@ def review_batch(library_id: UUID, body: workspace.ReviewBatch, conn: Db, me: Me
 @router.get("/search")
 def search(
     request: Request,
-    conn: Db,
     me: Me,
     q: str = Query(min_length=1, max_length=2000),
     library_id: UUID | None = None,
     limit: int = Query(default=10, ge=1, le=50),
     source_id: list[UUID] | None = Query(default=None, max_length=100),  # noqa: B008
 ):
+    """Search over every library the caller may read, HTTP and MCP alike.
+
+    This route deliberately does not take the ``Db`` lease. A semantic search
+    calls the vector provider, and holding a pooled connection for the length
+    of that call means the connection is idle for the whole network wait --
+    with five in the pool, a handful of concurrent searches starves every
+    other route. The shared connection factory is passed instead, and the
+    search runs its own short SQL phases around the external call.
+    """
     with mapped_errors():
         return content.search_knowledge(
-            conn,
+            None,
             me,
             q,
             [library_id] if library_id else None,
             limit,
             semantic=getattr(request.app.state, "semantic_search", None),
             source_ids=source_id,
+            connections=getattr(request.app.state, "db_connection", None),
         )
 
 

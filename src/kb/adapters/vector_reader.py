@@ -1,14 +1,38 @@
-"""Read-only OpenViking vector retrieval adapter."""
+"""Read-only OpenViking vector retrieval adapter.
+
+The validation and the response filter in this module are the security
+boundary: a resource root that does not match the current embedding profile
+never reaches the network, and nothing that comes back is trusted until it has
+been matched against that root. The accepted F also rebuilt an SDK client for
+every single call. That is what the shared, bounded pool in
+:mod:`kb.adapters.vector_clients` replaced, and the two changes are the same
+change: the pool is created here, from the same arguments the gateway already
+passes, so no caller outside this lease had to be edited to get it.
+
+Calls are made through the leased handle rather than on a raw client, so the
+request's own deadline is what bounds the network wait even when the pooled
+client it borrowed was built under a much larger budget by an earlier caller.
+"""
 
 import math
 import re
+import threading
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
-from openviking_sdk import SyncHTTPClient
+from openviking_sdk import AsyncHTTPClient
 
-from kb.adapters.secrets import read_credentials
+from kb.adapters.vector_clients import (
+    CANCEL_GRACE_SECONDS,
+    CLIENT_TTL_SECONDS,
+    MAX_CLIENTS,
+    MAX_OUTSTANDING,
+    NETWORK_TIMEOUT,
+    Deadline,
+    VectorClientCache,
+    VectorClientPoolClosed,
+)
 from kb.retrieval.embedding_profile import SELECTED_PROFILE
 
 
@@ -34,11 +58,64 @@ class OpenVikingReader:
         self,
         url: str,
         read_root: Path,
-        client_factory: Callable[..., SyncHTTPClient] = SyncHTTPClient,
+        client_factory: Callable[..., AsyncHTTPClient] = AsyncHTTPClient,
+        *,
+        clients: VectorClientCache | None = None,
+        network_timeout: float = NETWORK_TIMEOUT,
+        max_clients: int = MAX_CLIENTS,
+        ttl_seconds: float = CLIENT_TTL_SECONDS,
+        max_outstanding: int = MAX_OUTSTANDING,
+        cancel_grace: float = CANCEL_GRACE_SECONDS,
     ) -> None:
         self._url = url
         self._read_root = read_root
         self._client_factory = client_factory
+        self._network_timeout = network_timeout
+        self._max_clients = max_clients
+        self._ttl_seconds = ttl_seconds
+        self._max_outstanding = max_outstanding
+        self._cancel_grace = cancel_grace
+        self._clients = clients
+        # Set by close(). Read under _pool_lock, and that lock is also what
+        # close() takes, so a close and a first-use pool creation cannot both
+        # believe they got there first.
+        self._closed = False
+        self._pool_lock = threading.Lock()
+
+    @property
+    def pool(self) -> VectorClientCache:
+        """The shared client pool, created on first use.
+
+        Built lazily rather than in ``__init__`` so constructing a reader
+        opens nothing: the gateway builds one during lifespan start-up, and a
+        reader that is never used should not have initialised a client. Two
+        threads racing here produce one pool, not two, because the assignment
+        happens under the lock.
+        """
+        if self._closed:
+            raise VectorClientPoolClosed("vector reader is closed")
+        if self._clients is None:
+            with self._pool_lock:
+                # Re-read under the lock. close() takes the same lock, so if it
+                # has run, this refuses rather than building a pool that the
+                # gateway's completed shutdown does not own -- and that pool
+                # would then create an I/O loop and a credential executor of
+                # its own, after the shutdown that was supposed to have closed
+                # them had already returned.
+                if self._closed:
+                    raise VectorClientPoolClosed("vector reader is closed")
+                if self._clients is None:
+                    self._clients = VectorClientCache(
+                        self._url,
+                        self._read_root,
+                        self._client_factory,
+                        max_clients=self._max_clients,
+                        ttl_seconds=self._ttl_seconds,
+                        max_outstanding=self._max_outstanding,
+                        network_timeout=self._network_timeout,
+                        cancel_grace=self._cancel_grace,
+                    )
+        return self._clients
 
     def find(
         self,
@@ -46,7 +123,12 @@ class OpenVikingReader:
         resource_root: str,
         query: str,
         limit: int,
+        *,
+        deadline: Deadline | None = None,
     ) -> list[Candidate]:
+        # Validation stays outside the sanitising block: a malformed root or
+        # limit is a caller bug, not an index outage, and must not be reported
+        # as IndexUnavailable or the library would silently fall back.
         if (
             not isinstance(resource_root, str)
             or self._ROOT_PATTERN.fullmatch(resource_root) is None
@@ -56,17 +138,15 @@ class OpenVikingReader:
             raise ValueError("limit must be between 1 and 100")
 
         search_text = SELECTED_PROFILE.query_text(query)
-        client = None
         try:
-            try:
-                key = read_credentials(self._read_root, identity)
-                client = self._client_factory(
-                    url=self._url,
-                    api_key=key,
-                    timeout=45,
-                )
-                client.initialize()
-                payload = client.find(
+            # lease() reads the credential first, so an identity that has no
+            # key fails here without a client ever being built. It also bounds
+            # how many calls are outstanding and closes the client when the
+            # key changes, which is what makes rotation safe. The handle it
+            # yields is the only way to reach the client, and find() on it is
+            # bounded by the request's own remaining budget.
+            with self.pool.lease(identity, deadline) as leased:
+                payload = leased.find(
                     search_text,
                     target_uri=resource_root,
                     limit=limit,
@@ -76,9 +156,6 @@ class OpenVikingReader:
                         "read_content": False,
                     },
                 )
-            finally:
-                if client is not None:
-                    client.close()
 
             if not isinstance(payload, dict):
                 raise ValueError("invalid index response")
@@ -104,4 +181,27 @@ class OpenVikingReader:
                 candidates.append(FrozenCandidate(uri=uri, score=score))
             return candidates[:limit]
         except Exception:
+            # One sanitised failure for every reason: a provider error, a
+            # malformed payload, an expired budget. The caller treats all of
+            # them as "this library is not searchable right now" and keeps
+            # lexical retrieval, which is the honest answer in each case.
             raise IndexUnavailable("index_unavailable") from None
+
+    def close(self) -> None:
+        """Close the clients this reader owns. Safe to call more than once.
+
+        Deterministic: when this returns, every pooled client is closed and
+        the event loop that drove them has been stopped and joined. This is
+        what the gateway's lifespan shutdown calls, so a search in progress
+        at the end of the process cannot leave a request on the wire.
+
+        Marks the reader closed first, under the same lock that creates the
+        pool, so a close that runs before the first use is still a close. A
+        reader closed before it ever held a pool has nothing to shut down, but
+        it must not be able to grow one afterwards.
+        """
+        with self._pool_lock:
+            self._closed = True
+            clients = self._clients
+        if clients is not None:
+            clients.shutdown()

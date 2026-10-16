@@ -1,16 +1,58 @@
-"""Read-only vector candidates, with canonical PostgreSQL hydration and final ACL checks."""
+"""Read-only vector candidates, with canonical PostgreSQL hydration and final ACL checks.
 
+The shape of this module is the module's whole point. A semantic search is
+three things that must not be one long transaction: a short plan read, an
+external HTTP call, and a second read that has to see the ACL and the
+generation *as they are after* that call. Holding one pooled connection across
+the middle step is what the accepted F did -- the transport's request lease
+stayed checked out while up to twenty sequential provider calls ran inside it
+-- and with five connections in the pool that is a few concurrent searches
+away from starving every other route, while the database connection itself sat
+idle for the entire network wait.
+
+So when this service is given the shared connection factory it runs its own
+short SQL phases and holds nothing during the external I/O:
+
+    plan (phase 1) -> release -> external I/O -> hydrate/authorize (phase 2)
+
+Each phase re-establishes the transaction-local identity rather than trusting
+the previous one, which is the whole reason the identity is re-applied for
+every phase instead of once per request. When no factory is supplied -- the
+direct-call path used by tests and by any caller that already owns a lease --
+the handed connection is used for every phase, and the behaviour is what it
+always was.
+
+The authorization itself is unchanged by any of this. A plan is re-validated
+against the current generation before it is used, candidates are dropped unless
+the live generation, indexed revision, profile hash, dimension, verification
+stamp, statement hash and resource URI all still agree, and the final answer is
+read under a membership check that the request can only narrow.
+"""
+
+from contextlib import contextmanager
 from dataclasses import dataclass
 from uuid import UUID
 
 from psycopg.rows import dict_row
 
 from kb.access.policy import Principal, transaction_identity
+from kb.adapters.vector_clients import Deadline
 from kb.adapters.vector_reader import IndexUnavailable, OpenVikingReader
 from kb.catalog.content import attach_knowledge_provenance, lexical_search_knowledge
 from kb.retrieval.embedding_profile import SELECTED_PROFILE
 from kb.retrieval.ranking import reciprocal_rank_fusion
 from kb.retrieval.semantic_registry import sha256
+from kb.runtime_identity import identity_connection
+
+#: The upstream fan-out budget. A caller with more readable libraries than
+#: this still gets an answer; the libraries past the budget stay explicitly
+#: lexical and are reported as pending rather than silently dropped.
+LIBRARY_BUDGET = 20
+
+#: One budget for the whole search: the wait for a client, and the network
+#: call behind it. Set here rather than per call site so HTTP and MCP give the
+#: same answer for the same load.
+DEFAULT_DEADLINE_SECONDS = 15.0
 
 
 @dataclass(frozen=True)
@@ -62,30 +104,125 @@ def plans(conn, principal, scopes=None) -> dict[UUID, Plan]:
 
 
 class SemanticSearch:
-    def __init__(self, reader: OpenVikingReader):
+    def __init__(self, reader: OpenVikingReader, connections=None):
         self.reader = reader
+        # None means "the caller owns a lease and handed it to us"; anything
+        # else is the shared factory, and we take our own short phases.
+        self.connections = connections
 
-    def search(self, conn, principal: Principal, query, scopes=None, limit=10, *, source_ids=None):
-        initial = plans(conn, principal, scopes)
-        candidates = {}
-        attempted = {}
-        unavailable = set()
-        # Bound upstream fan-out. Libraries outside this budget remain explicitly lexical.
-        for plan in [p for p in initial.values() if p.usable][:20]:
+    @contextmanager
+    def _phase(self, conn, principal, connections):
+        """One SQL phase, with identity established for this phase only.
+
+        With the factory, this is a fresh lease that is released on the way
+        out, so nothing is held between phases. Without it, the handed
+        connection is reused and the identity is re-applied for each phase,
+        because transaction-local settings do not survive another transaction
+        on the same connection.
+        """
+        if connections is not None:
+            with identity_connection(connections, principal) as opened:
+                yield opened
+        else:
+            with transaction_identity(conn, principal):
+                yield conn
+
+    def _external(self, attempted, query, limit, source_ids, deadline) -> tuple[dict, set]:
+        """The external phase. No connection is held while this runs."""
+        candidates: dict = {}
+        unavailable: set = set()
+        planned = [p for p in attempted.values() if p.usable][:LIBRARY_BUDGET]
+        for index, plan in enumerate(planned):
             if plan.identity is None or plan.root is None:
                 continue
-            if plans(conn, principal, [plan.library_id]).get(plan.library_id) != plan:
-                continue
-            attempted[plan.library_id] = plan
+            if deadline is not None and deadline.expired:
+                # The budget is gone, so nothing further is started. A call
+                # that had already started is not left running: the reader
+                # bounds it by this same budget and cancels it at the wire,
+                # so it is this search's own work that stops here rather than
+                # the provider's. The libraries it never reached are reported
+                # as pending rather than counted as searched, because "we did
+                # not look" and "nothing there" are different answers.
+                unavailable.update(p.library_id for p in planned[index:])
+                break
             try:
                 candidates[plan.library_id] = self.reader.find(
                     plan.identity,
                     plan.root,
                     query,
                     100 if source_ids is not None else min(100, limit * 3),
+                    deadline=deadline,
                 )
             except IndexUnavailable:
                 unavailable.add(plan.library_id)
+        return candidates, unavailable
+
+    def search(
+        self,
+        conn,
+        principal: Principal,
+        query,
+        scopes=None,
+        limit=10,
+        *,
+        source_ids=None,
+        deadline: Deadline | None = None,
+        connections=None,
+    ):
+        if deadline is None:
+            deadline = Deadline(DEFAULT_DEADLINE_SECONDS)
+        # A factory passed for this call wins over one the service was built
+        # with, so a caller can detach a single search without reconfiguring
+        # the shared service.
+        factory = connections if connections is not None else self.connections
+
+        # -- phase 1: the plan, and its re-validation, in two short reads.
+        with self._phase(conn, principal, factory) as first:
+            initial = plans(first, principal, scopes)
+            budgeted = [p for p in initial.values() if p.usable][:LIBRARY_BUDGET]
+            readable = [p.library_id for p in budgeted if p.identity and p.root]
+            # One batched re-read for the whole budget instead of a query per
+            # library. A plan that moved between the first read and this one is
+            # dropped here, before any provider call is spent on it.
+            revalidated = plans(first, principal, readable) if readable else {}
+        attempted = {
+            plan.library_id: plan
+            for plan in budgeted
+            if plan.identity is not None
+            and plan.root is not None
+            and revalidated.get(plan.library_id) == plan
+        }
+
+        # -- the external phase, with nothing held.
+        candidates, unavailable = self._external(attempted, query, limit, source_ids, deadline)
+
+        # -- phase 2: current ACL and generation, hydration, final checks.
+        with self._phase(conn, principal, factory) as current:
+            return self._finish(
+                current,
+                principal,
+                query,
+                scopes,
+                limit,
+                source_ids=source_ids,
+                attempted=attempted,
+                candidates=candidates,
+                unavailable=unavailable,
+            )
+
+    def _finish(
+        self,
+        conn,
+        principal: Principal,
+        query,
+        scopes,
+        limit,
+        *,
+        source_ids,
+        attempted,
+        candidates,
+        unavailable,
+    ):
         fresh = plans(conn, principal, scopes)
         fallback = {
             lib
@@ -100,7 +237,7 @@ class SemanticSearch:
             scores = {item.uri: item.score for item in items}
             if not scores:
                 continue
-            with transaction_identity(conn, principal), conn.cursor(row_factory=dict_row) as cur:
+            with conn.cursor(row_factory=dict_row) as cur:
                 cur.execute(
                     "SELECT k.*,d.resource_uri FROM kb.index_document d "
                     "JOIN kb.knowledge k ON k.id=d.knowledge_id AND k.library_id=d.library_id "
@@ -149,7 +286,7 @@ class SemanticSearch:
                 or final[h["library_id"]] == attempted.get(h["library_id"])
             )
         ]
-        with transaction_identity(conn, principal), conn.cursor(row_factory=dict_row) as cur:
+        with conn.cursor(row_factory=dict_row) as cur:
             if hits:
                 cur.execute(
                     "SELECT k.*,l.generation AS live_revision,g.generation AS live_generation,"
@@ -242,3 +379,14 @@ class SemanticSearch:
             "pending_library_count": len(pending),
             "fallback_reason": "index_pending_or_unavailable" if pending else None,
         }
+
+    def close(self) -> None:
+        """Close the index clients this service owns.
+
+        The gateway lifespan calls this on shutdown, so the pooled clients and
+        the event loop that drove them are closed deterministically rather than
+        at interpreter exit. Idempotent, and it never lands on a call that is
+        still in flight: the pool retires anything a live search still holds
+        and closes it when that search releases it.
+        """
+        self.reader.close()
