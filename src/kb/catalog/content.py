@@ -20,7 +20,10 @@ from psycopg.rows import dict_row
 
 from kb.access.policy import AccessDenied, Principal, transaction_identity
 from kb.catalog.policies import require_export
-from kb.catalog.retrieval_events import record_retrieval
+from kb.catalog.retrieval_events import (
+    record_knowledge_retrievals,
+    record_retrieval,
+)
 from kb.runtime_identity import identity_connection
 from kb.vendor.book_to_skill.validate_skill import audit as audit_skill
 
@@ -546,21 +549,19 @@ def search_knowledge(
             transaction_identity(conn, principal),
             conn.cursor(row_factory=dict_row) as cursor,
         ):
-            result["retrieval_event_ids"] = [
-                record_retrieval(
-                    cursor, principal, item_kind="knowledge", item_id=UUID(str(hit["id"]))
-                )
-                for hit in result["hits"]
-            ]
+            result["retrieval_event_ids"] = record_knowledge_retrievals(
+                cursor,
+                principal,
+                item_ids=tuple(UUID(str(hit["id"])) for hit in result["hits"]),
+            )
     else:
         with identity_connection(factory, principal) as audit_conn:
             with audit_conn.cursor(row_factory=dict_row) as cursor:
-                result["retrieval_event_ids"] = [
-                    record_retrieval(
-                        cursor, principal, item_kind="knowledge", item_id=UUID(str(hit["id"]))
-                    )
-                    for hit in result["hits"]
-                ]
+                result["retrieval_event_ids"] = record_knowledge_retrievals(
+                    cursor,
+                    principal,
+                    item_ids=tuple(UUID(str(hit["id"])) for hit in result["hits"]),
+                )
     return result
 
 
