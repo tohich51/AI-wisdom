@@ -27,6 +27,7 @@ from uuid import uuid4
 import pytest
 from openviking_sdk import AsyncHTTPClient
 
+import kb.adapters.vector_clients as vector_clients
 from kb.adapters.secrets import FileSecretSink
 from kb.adapters.vector_clients import (
     Deadline,
@@ -995,7 +996,11 @@ def test_shutdown_accounts_for_an_acquisition_still_reading_its_credential(store
     assert entered.wait(5)
     worker.join(5)
     assert outcome == ["timeout"]
-    assert cache._outstanding_work() == 1, "shutdown must see the outstanding read"
+    # Charged twice, because two things are true at once: the acquisition still
+    # holds its slot and its registration, and the pool owns the read itself.
+    # They are handed back together by the same owner, which is the property
+    # that matters; the exact count is an implementation detail.
+    assert cache._outstanding_work() >= 1, "shutdown must see the outstanding read"
 
     stopper = threading.Event()
 
@@ -1018,15 +1023,29 @@ def test_a_close_is_counted_before_the_pool_lock_is_released(store):
     A close is chosen while the pool lock is held, so it has to be counted
     there too. Counting it after the unlock left a window in which a shutdown
     arriving in between saw every counter at zero and stopped the I/O loop
-    under a close that had been chosen but not yet started. Trying to hit that
-    interleaving with sleeps would be a flaky test for a contract, so the
-    contract is asserted directly: at the point the lock is still held, the
-    pool already counts the close.
+    under a close that had been chosen but not yet started.
+
+    The close blocks on an event, so the charge cannot drain away between the
+    registration and the assertion. Without that this test was measuring how
+    fast the closer thread happened to run, which is not the contract.
     """
     read_root, identities = store
     identity = identities[0]
     built = []
-    cache = pool_for(read_root, built)
+    release_close = threading.Event()
+
+    class BlockingClose(FakeClient):
+        async def close(self):
+            await asyncio.to_thread(release_close.wait, 5)
+            self.closed = True
+            self.closes += 1
+
+    def make(**kwargs):
+        client = BlockingClose(**kwargs)
+        built.append(client)
+        return client
+
+    cache = VectorClientCache(URL, read_root, make)
     with cache.lease(identity) as leased:
         leased.find("q", target_uri="x", limit=1)
 
@@ -1049,6 +1068,7 @@ def test_a_close_is_counted_before_the_pool_lock_is_released(store):
     assert observed.get("under_lock", 0) >= 1, (
         "a close chosen under the lock must be counted before it is released"
     )
+    release_close.set()
     assert wait_closed([built[0]])
     cache.shutdown()
 
@@ -1128,3 +1148,220 @@ def test_shutdown_does_not_stop_the_loop_under_a_close_in_flight(store):
     stopper.join(10)
     assert wait_closed([built[0]])
     assert wait_idle(cache)
+
+
+def test_a_close_that_refuses_to_stop_is_owned_until_it_really_ends(store, monkeypatch):
+    """B1-close-unfinished-ownership: a cancelled close is not a close.
+
+    A close that ignores its cancellation and stays unfinished through the
+    grace is still holding the socket. If the pool treats the refusal as a
+    finished close it will go on to stop the I/O loop underneath a coroutine
+    that is still running.
+    """
+    monkeypatch.setattr(vector_clients, "CLOSE_TIMEOUT_SECONDS", 0.05)
+    monkeypatch.setattr(vector_clients, "IO_JOIN_SECONDS", 0.05)
+    read_root, identities = store
+    identity = identities[0]
+    built = []
+
+    class DeafClose(FakeClient):
+        def __init__(self, **kwargs):
+            super().__init__(**kwargs)
+            self.close_started = threading.Event()
+            self.close_release = threading.Event()
+
+        async def close(self):
+            self.close_started.set()
+            try:
+                await asyncio.to_thread(self.close_release.wait, 5)
+            except asyncio.CancelledError:
+                # Refuses the cancellation outright, which is the case: a close
+                # that merely unwound on cancel would have finished, and this
+                # test would prove nothing.
+                await asyncio.to_thread(self.close_release.wait, 5)
+                raise
+            self.closed = True
+            self.closes += 1
+
+    def make(**kwargs):
+        client = DeafClose(**kwargs)
+        built.append(client)
+        return client
+
+    cache = VectorClientCache(URL, read_root, make, cancel_grace=0.05)
+    with cache.lease(identity) as leased:
+        leased.find("q", target_uri="x", limit=1)
+
+    # shutdown drops the idle entry, and its close is the one that refuses.
+    stopper = threading.Event()
+
+    def stop():
+        cache.shutdown()
+        stopper.set()
+
+    worker = threading.Thread(target=stop, daemon=True)
+    worker.start()
+    assert built[0].close_started.wait(5), "the close should have started"
+    assert stopper.wait(5), "shutdown should return having reported work outstanding"
+
+    # The refusal is still running, so it is still owned: not closed, counted,
+    # and the loop it is sitting on is still alive.
+    assert not built[0].closed, "a refused close must not be reported as closed"
+    assert cache._outstanding_work() >= 1, "an unfinished close must stay charged"
+    assert cache.io_loop_running, "the loop must outlive a close that has not stopped"
+
+    # The real unwind releases the charge and finalises the pool. It does not
+    # close the client: that coroutine was cancelled, so it re-raised instead of
+    # finishing, and a client dropped without being closed is the honest end
+    # state -- counted, not quietly forgotten.
+    built[0].close_release.set()
+    deadline = time.monotonic() + 5
+    while (cache.io_loop_running or cache._abandoned_closes == 0) and time.monotonic() < deadline:
+        time.sleep(0.005)
+    assert not built[0].closed, "a cancelled close is not a close"
+    assert cache._abandoned_closes == 1, "and it has to be visible, not silent"
+    assert wait_idle(cache)
+    assert cache._finalized
+
+
+def test_an_initialize_that_refuses_cancellation_keeps_its_charge(store):
+    """B1-init-unfinished-ownership: do not close a client mid-initialization.
+
+    A client whose initialize is still running is a client in the middle of
+    becoming one. Closing it now races that coroutine, and the client can end
+    up initialized after the only close meant to catch it. Its capacity has to
+    stay charged for the whole time, or the pool admits more work than its
+    bound allows while that initialize is still going.
+    """
+    read_root, identities = store
+    identity = identities[0]
+    built = []
+
+    class DeafInit(FakeClient):
+        def __init__(self, **kwargs):
+            super().__init__(**kwargs)
+            self.init_started = threading.Event()
+            self.init_release = threading.Event()
+            self.init_finished = threading.Event()
+
+        async def initialize(self):
+            self.init_started.set()
+            try:
+                await asyncio.to_thread(self.init_release.wait, 5)
+            except asyncio.CancelledError:
+                # Refuses, so the initialize is still running after its budget.
+                await asyncio.to_thread(self.init_release.wait, 5)
+                raise
+            finally:
+                self.init_finished.set()
+
+    def make(**kwargs):
+        client = DeafInit(**kwargs)
+        built.append(client)
+        return client
+
+    cache = VectorClientCache(URL, read_root, make, cancel_grace=0.05, max_outstanding=1)
+    with pytest.raises(TimeoutError):
+        with cache.lease(identity, Deadline(0.05)) as leased:
+            leased.find("q", target_uri="x", limit=1)
+
+    assert built[0].init_started.is_set(), "initialize must actually have begun"
+    assert not built[0].closed, "must not close a client that is still initializing"
+    assert cache._outstanding_work() >= 1, "the unfinished initialize stays charged"
+
+    # One slot, still held by the first acquisition, so a second caller is
+    # turned away rather than the pool quietly running one over its bound.
+    admitted = threading.Event()
+
+    def second():
+        try:
+            with cache.lease(identity, Deadline(0.05)):
+                admitted.set()
+        except TimeoutError:
+            pass
+
+    other = threading.Thread(target=second, daemon=True)
+    other.start()
+    other.join(5)
+    assert not admitted.is_set(), "capacity must be held while the initialize runs"
+
+    # The real unwind is what releases everything, and the close comes after it,
+    # never racing it.
+    built[0].init_release.set()
+    assert built[0].init_finished.wait(5)
+    assert wait_closed(built)
+    # Polled, not asserted once: the coroutine finishing and the owner handing
+    # its charge back are two different instants, and the second is the one
+    # being checked here.
+    deadline = time.monotonic() + 5
+    while cache._outstanding_work() and time.monotonic() < deadline:
+        time.sleep(0.005)
+    assert cache._outstanding_work() == 0, "the charge is released when it unwinds"
+    # This pool was never shut down, so the finalizer must not have run and the
+    # loop must still be there for the next request.
+    assert not cache._finalized
+    cache.shutdown()
+    assert wait_idle(cache)
+
+
+def test_work_finishing_after_shutdown_returns_finalises_the_whole_pool(store, monkeypatch):
+    """B1-late-shutdown-finalizer: one finalizer, and it stops everything.
+
+    When shutdown's bounded wait expires it says so and returns, and whatever
+    was still running gets to finish afterwards. That late completion has to
+    complete the teardown -- the I/O loop *and* the credential executor -- or
+    the pool is left half shut, with a worker alive until some later shutdown
+    or the interpreter.
+    """
+    monkeypatch.setattr(vector_clients, "IO_JOIN_SECONDS", 0.05)
+    read_root, identities = store
+    identity = identities[0]
+    built = []
+    cache = pool_for(read_root, built)
+
+    # Warm the pool first, so there is an I/O loop for shutdown to have to leave
+    # alone. A pool that never built a client has no loop, and asserting one is
+    # still running there would be asserting nothing.
+    with cache.lease(identity) as leased:
+        leased.find("q", target_uri="x", limit=1)
+    assert cache.io_loop_running
+
+    entered, release = threading.Event(), threading.Event()
+
+    def blocked_read(_identity):
+        entered.set()
+        release.wait(5)
+        return KEY, credential_revision(KEY)
+
+    cache.read_key = blocked_read
+    with pytest.raises(TimeoutError):
+        with cache.lease(identity, Deadline(0.05)):
+            pass
+    assert entered.wait(5), "the credential read should have started"
+
+    stopper = threading.Event()
+
+    def stop():
+        cache.shutdown()
+        stopper.set()
+
+    worker = threading.Thread(target=stop, daemon=True)
+    worker.start()
+    assert stopper.wait(5), "shutdown should return with work outstanding"
+    assert cache.io_loop_running, "shutdown must not stop under outstanding work"
+    assert not cache._finalized, "and must not claim to have finalised"
+
+    # The late completion. One owner releases the charge and the finalizer runs
+    # once, stopping the loop and the credential executor together.
+    release.set()
+    deadline = time.monotonic() + 5
+    while (cache.io_loop_running or cache._readers is not None) and time.monotonic() < deadline:
+        time.sleep(0.005)
+    assert not cache.io_loop_running, "the late completion must stop the I/O loop"
+    assert cache._readers is None, "and the credential executor with it"
+    assert cache._finalized
+
+    # And it is the same finalizer, not a second teardown: calling shutdown
+    # again is inert rather than a second stop.
+    cache.shutdown()
+    assert cache._finalized
