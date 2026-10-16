@@ -27,6 +27,19 @@ of the request that exchanged the code.
 Secrets at rest are digests. The cookie carries ``<session uuid>.<256-bit
 secret>``; the table keeps ``sha256(secret)``. A row therefore cannot be
 converted back into a cookie, and a wrong cookie costs 2^256 to guess.
+
+Leases
+------
+Every statement here runs on a lease, never on a connection the store owns.
+:meth:`SessionStore.use_shared_connections` points the store at the one
+connection factory the application already has, so a session read is a lease
+from the same pool as every other SQL phase instead of a fresh TCP connection
+and a fresh authentication handshake. The role is taken with ``SET LOCAL
+ROLE`` inside the lease's own transaction, so it reverts when the lease ends;
+``SET ROLE`` would outlive it, and a pooled connection that answers the next
+request as ``kb_app`` is a request that has lost the identity every policy
+decides on. The store does not cache a session, a permission or a connection
+beyond the block it is running: a resolve is a resolve, every time.
 """
 
 from __future__ import annotations
@@ -37,13 +50,14 @@ import datetime as dt
 import hashlib
 import hmac
 import secrets
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 from typing import Any, Final
 from uuid import UUID, uuid4
 
 from cryptography.fernet import Fernet, InvalidToken
 from psycopg import Connection
+from psycopg.pq import TransactionStatus
 from psycopg.rows import dict_row
 
 from kb.access.identity import VerifiedIdentity
@@ -89,6 +103,15 @@ class SessionIdentityIncomplete(Exception):
 
 class LoginTransactionInvalid(Exception):
     """Unknown, expired or already-consumed ``state``."""
+
+
+class SessionLeaseMisuse(Exception):
+    """A lease was asked for inside a transaction somebody else opened.
+
+    The gateway role is taken for the length of one lease. Taken inside
+    another transaction it would apply to the rest of that transaction, so the
+    store refuses rather than quietly downgrading whatever runs next.
+    """
 
 
 def _digest(value: str) -> bytes:
@@ -227,25 +250,99 @@ class SessionStore:
         self._idle = dt.timedelta(minutes=idle_minutes)
         self._absolute = dt.timedelta(hours=absolute_hours)
         self._login_ttl = dt.timedelta(minutes=login_ttl_minutes)
+        # Set once, at wiring time, by the single auth owner. Until then the
+        # store keeps opening its own connection, which is the behaviour it
+        # always had.
+        self._connections: Callable[[], Any] | None = None
 
     # -- plumbing -------------------------------------------------------
 
+    def use_shared_connections(self, factory: Callable[[], Any]) -> None:
+        """Take this store's leases from the application's connection factory.
+
+        ``factory`` is the callable context manager that returns
+        ``pool.connection()``: the one F established and the gateway
+        publishes. Calling this once, at wiring time, turns every session read
+        into one lease from the pool the rest of the application already uses,
+        instead of a connection opened, authenticated and closed per request.
+
+        It is deliberately not a constructor argument and deliberately not
+        called per request. The store is built in the gateway's wiring, and
+        the single auth owner is the one place that knows both objects. A
+        store that was never told keeps its own connection, which is what the
+        gateway-independent callers have always had.
+        """
+
+        if not callable(factory):
+            raise TypeError("connection factory must be callable")
+        self._connections = factory
+
     @contextlib.contextmanager
-    def _connection(self) -> Iterator[Connection[dict[str, Any]]]:
+    def _dedicated_connection(self) -> Iterator[Connection[dict[str, Any]]]:
+        """The unbound path: one private connection, opened and closed here."""
         conn: Connection[dict[str, Any]] = Connection.connect(
             self._dsn, autocommit=True, row_factory=dict_row
         )
         try:
-            if self._role:
-                # The gateway reads credential material as kb_app, the
-                # unprivileged role. Running the store as the table owner
-                # would prove nothing about the privilege model in 0003.
-                # The interpolated name is one of two literals chosen by the
-                # caller, never request input.
-                conn.execute(f"SET ROLE {self._role}")
             yield conn
         finally:
             conn.close()
+
+    @contextlib.contextmanager
+    def _as_gateway_role(self, conn: Any) -> Iterator[Any]:
+        """Run the block as kb_app, for the length of this lease only.
+
+        ``SET LOCAL`` inside a transaction, not ``SET ROLE``. The role
+        reverts at the commit, so a pooled connection goes back to the pool
+        answering as the role it connected with; a session-scoped ``SET
+        ROLE`` would leave the next request running with the privileges of
+        the previous one, which is the same hazard C06's transaction-local
+        identity GUCs exist to prevent.
+        """
+
+        if not self._role:
+            yield conn
+            return
+        if conn.info.transaction_status is not TransactionStatus.IDLE:
+            raise SessionLeaseMisuse("session_lease_inside_an_open_transaction")
+        with conn.transaction():
+            with conn.cursor() as cur:
+                # The gateway reads credential material as kb_app, the
+                # unprivileged role. Running the store as the table owner
+                # would prove nothing about the privilege model in 0003. The
+                # interpolated name is one of two literals chosen by the
+                # caller, never request input.
+                cur.execute(f"SET LOCAL ROLE {self._role}")
+            yield conn
+
+    @contextlib.contextmanager
+    def _connection(self) -> Iterator[Connection[dict[str, Any]]]:
+        """One lease, with this store's row shape and role, and nothing kept.
+
+        The lease belongs to whoever leased it: the pooled connection is
+        handed straight back when the block ends, and the store holds no
+        reference to it afterwards. Nothing here survives a return either --
+        no session, no principal, no permission.
+        """
+
+        if self._connections is None:
+            with self._dedicated_connection() as conn:
+                with self._as_gateway_role(conn):
+                    yield conn
+            return
+
+        with self._connections() as pooled:
+            # The shared pool hands out connections with the default row
+            # factory; these statements read by column name. That is a client
+            # side property, restored on the way out so the next borrower of
+            # this connection gets the pool's own shape back.
+            previous = pooled.row_factory
+            pooled.row_factory = dict_row
+            try:
+                with self._as_gateway_role(pooled):
+                    yield pooled
+            finally:
+                pooled.row_factory = previous
 
     # -- login transaction ----------------------------------------------
 

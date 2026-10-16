@@ -11,9 +11,11 @@ Four endpoints, and none of them accepts a caller-asserted identity:
 
 The identity of a request is the session cookie and nothing else. There is no
 ``X-User-Id``, no ``user_id`` form field and no header this module reads to
-decide who is calling. :func:`require_principal` is the only way a handler
-obtains a :class:`kb.access.policy.Principal`, and the only way to get one is
-to present a cookie that a callback minted.
+decide who is calling. :func:`require_session` is the only way a handler
+obtains the authenticated :class:`~kb.access.session.Session`, and
+:func:`require_principal` -- the same load, narrowed to a
+:class:`kb.access.policy.Principal` -- is the only way to get a principal. The
+only way to have either is to present a cookie that a callback minted.
 
 Cookie shape
 ------------
@@ -243,27 +245,30 @@ def create_auth_router(
     return router
 
 
-def require_principal(
+def require_session(
     store: SessionSource,
     settings: AuthSettings,
     clock: Callable[[], dt.datetime],
-) -> Callable[..., Principal]:
-    """Build the dependency that turns a cookie into a :class:`Principal`.
+) -> Callable[..., Session]:
+    """Build the dependency that turns a cookie into the live :class:`Session`.
 
-    Write methods additionally require the CSRF token. That check lives here
-    rather than in a decorator so that a new handler cannot forget it by
-    omission: the dependency is the only way to reach a ``Principal``, and the
-    session it returns is already the authenticated one.
+    This is the single point where a cookie becomes an authenticated session,
+    and it loads exactly once. Write methods additionally require the CSRF
+    token, checked against the digest of the session that was just loaded --
+    one statement answered both questions about one row, so there is no
+    snapshot in which the CSRF answer and the identity came from different
+    reads of the same session.
 
-    ``store`` is a :class:`SessionSource`; the only implementation is
-    :class:`kb.access.session.SessionStore`, and that is precisely why this
-    survives a gateway restart.
+    The check lives here rather than in a decorator so that a new handler
+    cannot forget it by omission. ``store`` is a :class:`SessionSource`; the
+    only implementation is :class:`kb.access.session.SessionStore`, and that
+    is precisely why this survives a gateway restart.
     """
 
     def dependency(
         request: Request,
         x_kb_csrf: str | None = Header(default=None, alias=CSRF_HEADER),
-    ) -> Principal:
+    ) -> Session:
         cookie = request.cookies.get(session_cookie_name(settings))
         try:
             session = store.load(cookie, now=clock())
@@ -280,7 +285,30 @@ def require_principal(
                 extra={"event": "csrf_rejected", "session_id": str(session.id)},
             )
             raise HTTPException(status_code=403, detail=_BODY_CSRF)
-        return session.to_principal()
+        return session
+
+    return dependency
+
+
+def require_principal(
+    store: SessionSource,
+    settings: AuthSettings,
+    clock: Callable[[], dt.datetime],
+) -> Callable[..., Principal]:
+    """Build the dependency that turns a cookie into a :class:`Principal`.
+
+    The same one load, narrowed to the principal a handler needs. A handler
+    that wants the session itself -- to build a verified identity, say --
+    calls :func:`require_session` instead of loading a second time.
+    """
+
+    session_dependency = require_session(store, settings, clock)
+
+    def dependency(
+        request: Request,
+        x_kb_csrf: str | None = Header(default=None, alias=CSRF_HEADER),
+    ) -> Principal:
+        return session_dependency(request, x_kb_csrf=x_kb_csrf).to_principal()
 
     return dependency
 
