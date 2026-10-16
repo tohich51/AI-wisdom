@@ -717,3 +717,272 @@ def test_the_gateway_lifespan_closes_cached_clients_and_stops_the_io_loop(
     assert pool.is_shutdown
     assert not pool.io_loop_running, "the I/O loop thread must be joined, not leaked"
     assert built[0].closes == 1
+
+
+def test_the_outstanding_slot_comes_back_after_an_ordinary_lease(store):
+    """The regression that matters most: one lease must not exhaust the pool.
+
+    A semaphore release hidden behind the failure path costs the pool its
+    second caller, and nothing notices until something needs real concurrency
+    -- which is exactly what a provider call is. The budget here is generous
+    so a leaked slot shows up as a failure rather than as a hung suite.
+    """
+    read_root, identities = store
+    identity = identities[0]
+    built = []
+    cache = pool_for(read_root, built, max_outstanding=1)
+
+    for _ in range(3):
+        with cache.lease(identity, Deadline(2.0)) as leased:
+            leased.find("q", target_uri="x", limit=1)
+
+    assert len(built) == 1, "three serial leases, one client"
+    cache.shutdown()
+
+
+def test_a_contended_pool_lock_does_not_spend_more_than_the_budget(store):
+    """The lock is where every caller queues; it is inside the budget now.
+
+    Another thread is holding the pool lock for far longer than this caller's
+    whole budget. The lease must come back as a timeout at its own deadline,
+    not when the lock happens to be released.
+    """
+    read_root, identities = store
+    built = []
+    cache = pool_for(read_root, built)
+    outcome = []
+    finished = threading.Event()
+
+    def acquire():
+        try:
+            with cache.lease(identities[0], Deadline(0.05)) as leased:
+                leased.find("q", target_uri="x", limit=1)
+            outcome.append("admitted")
+        except TimeoutError:
+            outcome.append("timeout")
+        finally:
+            finished.set()
+
+    with cache._lock:  # a second thread is inside the pool
+        worker = threading.Thread(target=acquire, daemon=True)
+        worker.start()
+        returned_early = finished.wait(1.0)
+        still_held = list(outcome)
+
+    worker.join(5)
+    assert returned_early, "the lease waited for the lock past its own budget"
+    assert still_held == ["timeout"]
+    assert not worker.is_alive()
+    cache.shutdown()
+
+
+def test_a_credential_read_that_overruns_keeps_its_slot_until_it_finishes(store):
+    """A read that outlives the budget is a timeout, and still owns its slot.
+
+    The caller is released at its own deadline and no client is built, because
+    starting SDK work after expiry is the thing the whole repair is about. The
+    read itself is not abandoned: it keeps the slot it was charged, so the
+    outstanding bound still counts it, and the slot comes back when it ends.
+    """
+    read_root, identities = store
+    identity = identities[0]
+    built = []
+    cache = pool_for(read_root, built, max_outstanding=1)
+    entered, release = threading.Event(), threading.Event()
+
+    def blocked_read(_identity):
+        entered.set()
+        release.wait(5)
+        return KEY, credential_revision(KEY)
+
+    cache.read_key = blocked_read
+    outcome = []
+
+    def acquire(budget):
+        try:
+            with cache.lease(identity, budget) as leased:
+                leased.find("q", target_uri="x", limit=1)
+            outcome.append("admitted")
+        except TimeoutError:
+            outcome.append("timeout")
+
+    first = threading.Thread(target=acquire, args=(Deadline(0.05),), daemon=True)
+    first.start()
+    assert entered.wait(5)
+    first.join(5)
+    assert outcome == ["timeout"]
+    assert built == [], "no client may be built after the budget expired"
+
+    # Admission, not completion, is the question: a second caller must be
+    # turned away while the first one's read still owns the only slot.
+    second_admitted = threading.Event()
+    second_done = threading.Event()
+
+    def acquire_again(budget, admitted):
+        try:
+            with cache.lease(identity, budget) as leased:
+                leased.find("q", target_uri="x", limit=1)
+            admitted.set()
+        except TimeoutError:
+            pass
+        second_done.set()
+
+    while_read = threading.Thread(
+        target=acquire_again, args=(Deadline(0.05), second_admitted), daemon=True
+    )
+    while_read.start()
+    assert second_done.wait(5)
+    assert not second_admitted.is_set(), "the retained read must still hold its only slot"
+    while_read.join(5)
+
+    # And the slot does come back, so the pool is not permanently one deep.
+    release.set()
+    after = threading.Event()
+    recovered = threading.Thread(target=acquire_again, args=(Deadline(5.0), after), daemon=True)
+    recovered.start()
+    recovered.join(10)
+    assert after.is_set(), "the slot must come back when the retained read finishes"
+    cache.shutdown()
+
+
+def test_a_slow_initialize_is_cancelled_at_the_deadline(store):
+    """Initialization is inside the budget, and cancellation is real.
+
+    A client whose initialization is not finished is not a usable client, so
+    it is closed rather than pooled, and the budget is what stops it -- not the
+    fixed close ceiling.
+    """
+    read_root, identities = store
+    identity = identities[0]
+    built = []
+    started, cancelled = threading.Event(), threading.Event()
+
+    class SlowInit(FakeClient):
+        async def initialize(self):
+            started.set()
+            try:
+                await asyncio.sleep(5)
+            except asyncio.CancelledError:
+                cancelled.set()
+                raise
+
+    def factory(**kwargs):
+        client = SlowInit(**kwargs)
+        built.append(client)
+        return client
+
+    cache = VectorClientCache(URL, read_root, factory, cancel_grace=1.0)
+    began = time.monotonic()
+    with pytest.raises(TimeoutError):
+        with cache.lease(identity, Deadline(0.05)) as leased:
+            leased.find("q", target_uri="x", limit=1)
+    elapsed = time.monotonic() - began
+
+    assert started.is_set(), "initialization must actually begin"
+    assert cancelled.is_set(), "a cancelled initialize must be told, not dropped"
+    assert elapsed < 2.0, elapsed
+    cache.shutdown()
+    assert built[0].closed, "a half-built client must be closed, not leaked"
+
+
+def test_a_close_in_progress_does_not_make_another_caller_wait_for_it(store, tmp_path):
+    """A close is this pool's housekeeping, and it is not the lock's business.
+
+    Rotating the credential makes this caller's own acquisition retire and
+    close the previous client. That close is deliberately slow, and an
+    unrelated caller arriving meanwhile must not be made to wait for it.
+    """
+    read_root, identities = store
+    first, second = identities[0], identities[1]
+    started, release = threading.Event(), threading.Event()
+
+    class SlowClose(FakeClient):
+        async def close(self):
+            started.set()
+            # The blocking wait is handed to a thread and awaited, so the event
+            # loop keeps turning. A close test that wedges the loop on purpose
+            # would be testing the wrong thing: the pool is right to time out
+            # against a loop that cannot answer.
+            await asyncio.to_thread(release.wait, 5)
+            self.closed = True
+            self.closes += 1
+
+    cache = VectorClientCache(URL, read_root, lambda **kwargs: SlowClose(**kwargs))
+    with cache.lease(first) as leased:
+        leased.find("q", target_uri="x", limit=1)
+
+    FileSecretSink(tmp_path / "store").write(first, ROTATED)
+    finished = threading.Event()
+
+    def rotate():
+        # A generous budget: what is being measured is the wait for the close,
+        # not the budget.
+        with cache.lease(first, Deadline(10.0)) as leased:
+            leased.find("q", target_uri="x", limit=1)
+        finished.set()
+
+    worker = threading.Thread(target=rotate, daemon=True)
+    worker.start()
+    assert started.wait(5), "the rotated-away client should be closing now"
+
+    began = time.monotonic()
+    with cache.lease(second, Deadline(2.0)) as leased:
+        leased.find("q", target_uri="x", limit=1)
+    waited = time.monotonic() - began
+    assert waited < 1.0, f"an unrelated close delayed a caller by {waited:.2f}s"
+
+    release.set()
+    assert finished.wait(5)
+    worker.join(5)
+    cache.shutdown()
+
+
+def test_shutdown_accounts_for_an_acquisition_still_reading_its_credential(store):
+    """An acquisition with no entry yet is still work the pool started.
+
+    Shutdown used to count holders only, so a credential read that outlived
+    its caller's budget was invisible to it: the loop would be stopped while
+    that read was still running.
+    """
+    read_root, identities = store
+    identity = identities[0]
+    built = []
+    cache = pool_for(read_root, built)
+    entered, release = threading.Event(), threading.Event()
+
+    def blocked_read(_identity):
+        entered.set()
+        release.wait(5)
+        return KEY, credential_revision(KEY)
+
+    cache.read_key = blocked_read
+    outcome = []
+
+    def acquire():
+        try:
+            with cache.lease(identity, Deadline(0.05)):
+                pass
+            outcome.append("admitted")
+        except TimeoutError:
+            outcome.append("timeout")
+
+    worker = threading.Thread(target=acquire, daemon=True)
+    worker.start()
+    assert entered.wait(5)
+    worker.join(5)
+    assert outcome == ["timeout"]
+    assert cache._outstanding_work() == 1, "shutdown must see the outstanding read"
+
+    stopper = threading.Event()
+
+    def stop():
+        cache.shutdown()
+        stopper.set()
+
+    reaper = threading.Thread(target=stop, daemon=True)
+    reaper.start()
+    release.set()
+    reaper.join(10)
+    assert stopper.is_set(), "shutdown did not return once the read ended"
+    assert not cache.io_loop_running
+    cache.shutdown()
