@@ -1,7 +1,22 @@
 'use strict';
 window.WisdomMap = (() => {
-  let epoch=0, controller, canvas, root, host;
-  const invalidate=()=> { epoch++; controller?.abort(); canvas?.destroy(); canvas=null; root?.replaceChildren(); };
+  let epoch=0, controller, canvas, root, host, similarityTimer;
+  const clearSimilarityTimer=()=> { const pending=similarityTimer; similarityTimer=null; if(pending) { clearTimeout(pending.id); pending.cancel(); } };
+  const invalidate=()=> { epoch++; clearSimilarityTimer(); controller?.abort(); canvas?.destroy(); canvas=null; root?.replaceChildren(); };
+  const waitForSimilarity=(ms,signal)=>new Promise((resolve,reject)=>{
+    let id;
+    const cancel=()=> {
+      if(similarityTimer?.id===id) similarityTimer=null;
+      clearTimeout(id); signal.removeEventListener('abort',cancel);
+      const error=new Error('Ожидание обновления отменено'); error.name='AbortError'; reject(error);
+    };
+    id=setTimeout(()=> {
+      if(similarityTimer?.id===id) similarityTimer=null;
+      signal.removeEventListener('abort',cancel); resolve();
+    },ms);
+    similarityTimer={id,cancel};
+    if(signal.aborted)cancel();else signal.addEventListener('abort',cancel,{once:true});
+  });
   async function mount(container, helpers, chosenId, chosenMode) {
     invalidate(); root=container; host=helpers; const generation=epoch, n=host.node;
     controller=new AbortController(); const valid=()=>generation===epoch;
@@ -14,13 +29,50 @@ window.WisdomMap = (() => {
     mode.value=chosenMode === 'semantic' ? 'semantic' : 'provenance';
     const controls=n('div',null,{class:'map-controls'}), content=n('div',null,{class:'card'}), list=n('div',null,{class:'map-list'});
     const details=n('aside',null,{class:'card map-details','aria-live':'polite'});
-    controls.append(n('label','Библиотека',{for:'map-library'}),library,n('label','Вид карты',{for:'map-mode'}),mode);
+    const similarityControl=n('span',null,{class:'map-similarity-control'});
+    const showSimilarity=n('input',null,{id:'map-similarity',type:'checkbox',checked:true,'aria-describedby':'map-similarity-status'});
+    const similarityStatus=n('span',null,{id:'map-similarity-status',class:'map-similarity-status','aria-live':'polite'});
+    similarityControl.hidden=mode.value!=='semantic';
+    similarityControl.append(n('label','Показывать близость понятий',{for:'map-similarity'}),showSimilarity,similarityStatus);
+    controls.append(n('label','Библиотека',{for:'map-library'}),library,n('label','Вид карты',{for:'map-mode'}),mode,similarityControl);
     const surface=n('div',null,{class:'map-surface',tabindex:0,'aria-label':'Граф знаний. Все узлы доступны в списке ниже.'});
     root.append(controls,content,details,list); content.append(surface);
-    let data, readSerial=0;
+    let data, readSerial=0, similarityPoll=0, similarityQueued=false, similarityNotice='', similarityRefreshButton;
+    const noConceptsNotice='В библиотеке нет доступных понятий.';
+    const cancelSimilarityPoll=()=> { similarityPoll++; clearSimilarityTimer(); similarityQueued=false; similarityNotice=''; };
     const endpoint=()=>'/api/graphs/'+mode.value+'?library_id='+library.value+'&limit=200';
+    const renderSimilarityState=()=> {
+      const semantic=mode.value==='semantic', similarity=data?.similarity;
+      similarityControl.hidden=!semantic;
+      if(!semantic) similarityStatus.replaceChildren();
+      else {
+        const ready=Number.isInteger(similarity?.ready)?similarity.ready:0;
+        const total=Number.isInteger(similarity?.total)?similarity.total:0;
+        let text='Близость понятий: ';
+        if(similarityQueued) text+='обновление в очереди; готово '+ready+'/'+total+'.';
+        else if(!similarity) text+='недоступна; готово 0/0 (состояние слоя не получено).';
+        else if(!similarity.available) text+='недоступна; готово '+ready+'/'+total+'. Причина: '+(similarity.reason||'не указана сервером')+'.';
+        else {
+          text+='готово '+ready+'/'+total+'.';
+          if(!Array.isArray(similarity.edges)||!similarity.edges.length) text+=' Пар выше порога нет.';
+          if(similarity.truncated) text+=' Показана часть слоя.';
+        }
+        if(similarityNotice) text+=' '+similarityNotice;
+        similarityStatus.replaceChildren(n('span',text+' Оценка — косинус сходства эмбеддингов, а не вероятность или доказательство.'));
+      }
+      if(!similarityRefreshButton) return;
+      similarityRefreshButton.hidden=!semantic;
+      const total=Number.isInteger(similarity?.total)?similarity.total:(data?.nodes||[]).filter(node=>node.kind==='concept'&&node.publication!=='withdrawn').length;
+      const noEligible=similarityNotice===noConceptsNotice||total<1;
+      similarityRefreshButton.disabled=!semantic||similarityQueued||!data?.capabilities?.can_create||noEligible;
+    };
     const act=fn=>async e=> { e?.preventDefault(); try { await fn(); } catch(error) {
-      if(valid() && error.name!=='AbortError') { canvas?.destroy();canvas=null;surface.replaceChildren();list.replaceChildren();details.replaceChildren();host.notify(error.message); }
+      if(valid() && error.name!=='AbortError') {
+        content.querySelector('.map-error')?.remove();
+        const failure=n('p','Не удалось обновить карту: '+error.message); failure.className='map-error map-summary'; content.prepend(failure);
+        if(!canvas && !surface.hasChildNodes()) surface.append(n('p','Карта сейчас недоступна. Попробуйте обновить её позже.'));
+        host.notify(error.message);
+      }
     }};
     const b=(text,fn)=>n('button',text,{type:'button',onclick:act(fn)});
     async function renderDetail(node) {
@@ -48,16 +100,23 @@ window.WisdomMap = (() => {
     async function review(entityId,entityKind,decision) {
       await host.post('/api/graphs/review',{entity_id:entityId,entity_kind:entityKind,decision}); await load();
     }
-    async function load() {
+    async function load(options={}) {
+      const preserveSimilarityPoll=options.preserveSimilarityPoll===true;
+      if(!preserveSimilarityPoll) cancelSimilarityPoll();
       const serial=++readSerial; details.replaceChildren();
       const fresh=await host.api(endpoint(),{signal:controller.signal}); if(!valid() || serial!==readSerial) return; data=fresh;
-      manual.hidden=mode.value!=='semantic' || !data.capabilities?.can_create; relationButton.hidden=mode.value!=='semantic' || !data.capabilities?.can_create;
+      content.querySelector('.map-error')?.remove();
+      const semantic=mode.value==='semantic';
+      manual.hidden=!semantic || !data.capabilities?.can_create;
+      relationButton.hidden=!semantic || !data.capabilities?.can_create;
+      renderSimilarityState();
       canvas?.destroy();canvas=null; surface.replaceChildren();list.replaceChildren(n('h2','Узлы и связи'));
       const status=n('p',(mode.value==='semantic'?'Понятия и направленные смысловые связи':'Источник → фрагмент → знание или правило → опыт → результат')+
         ' · '+data.nodes.length+' узлов · '+data.edges.length+' связей'+(data.truncated?' · Показана часть карты.':''));
       content.querySelector('.map-summary')?.remove();status.className='map-summary'; content.prepend(status);
       if(data.nodes.length>40) status.append(n('span',' Нажмите на узел или выберите его в списке, чтобы увидеть подробности.'));
-      if(mode.value==='semantic' && !data.similarity?.available) list.append(n('p','Связи построены по цитатам или добавлены вручную. Слой близости понятий по эмбеддингам пока недоступен.'));
+      if(mode.value==='semantic' && !data.similarity?.available)
+        list.append(n('p','Слой близости недоступен. '+(data.similarity?.reason?'Причина: '+data.similarity.reason+'.':'Причина не указана.')+' На карте остаются только типизированные связи; сходство не является доказательством.'));
       if(!data.nodes.length) {
         surface.append(n('p',mode.value==='semantic'?'Пока нет понятий и связей. Создайте сеть в Studio или добавьте понятие вручную.':'После загрузки источников здесь появится их происхождение.'));
         if(mode.value==='semantic') surface.append(b('Открыть Studio',()=>window.WisdomResearch.question('',[],library.value)));
@@ -65,7 +124,7 @@ window.WisdomMap = (() => {
         // Граф грузится лениво: библиотека нужна только здесь и только когда есть узлы.
         if(typeof window.WisdomGraphCanvas.ensureLibrary==='function') await window.WisdomGraphCanvas.ensureLibrary();
         if(!valid() || serial!==readSerial) return;
-        canvas=window.WisdomGraphCanvas.render(surface,data,mode.value,node=>act(()=>renderDetail(node))());
+        canvas=window.WisdomGraphCanvas.render(surface,data,mode.value,node=>act(()=>renderDetail(node))(),{showSimilarity:showSimilarity.checked});
       }
       const nodeList=window.WisdomList?window.WisdomList.create(host,{empty:'Узлов пока нет.',label:'Страницы списка узлов',
         renderItem:node=>b((types[node.kind]||node.kind)+' · '+node.label,()=>renderDetail(node))}):null;
@@ -82,8 +141,49 @@ window.WisdomMap = (() => {
       }
     }
     library.addEventListener('change',act(()=>mount(root,host,library.value,mode.value)));
-    mode.addEventListener('change',act(()=> {document.querySelectorAll('dialog[data-wisdom-private]').forEach(d=>d.close());return load();}));
-    controls.append(b('Обновить',load),b('Уместить граф',()=>canvas?.fit(30)),b('Приблизить',()=>canvas?.zoom(canvas.zoom()*1.2)),b('Отдалить',()=>canvas?.zoom(canvas.zoom()/1.2)),
+    mode.addEventListener('change',act(()=> {
+      document.querySelectorAll('dialog[data-wisdom-private]').forEach(d=>d.close());
+      const semantic=mode.value==='semantic';
+      similarityControl.hidden=!semantic;
+      if(similarityRefreshButton) { similarityRefreshButton.hidden=!semantic; similarityRefreshButton.disabled=true; }
+      if(!semantic) similarityStatus.replaceChildren();
+      return load();
+    }));
+    showSimilarity.addEventListener('change',act(load));
+    async function refreshSimilarity() {
+      if(mode.value!=='semantic' || !data?.capabilities?.can_create) return;
+      const total=Number.isInteger(data.similarity?.total)?data.similarity.total:
+        (data.nodes||[]).filter(node=>node.kind==='concept'&&node.publication!=='withdrawn').length;
+      if(total<1) return;
+      const selectedMode=mode.value, selectedLibrary=library.value, signal=controller.signal;
+      clearSimilarityTimer();
+      const operation=++similarityPoll;
+      const active=()=>valid()&&!signal.aborted&&operation===similarityPoll&&selectedMode===mode.value&&selectedLibrary===library.value;
+      similarityQueued=true; similarityNotice=''; renderSimilarityState();
+      try {
+        const result=await host.post('/api/graphs/similarity',{library_id:selectedLibrary});
+        if(!active()) return;
+        if(result?.status==='no_concepts') {
+          similarityNotice=noConceptsNotice;
+          await load({preserveSimilarityPoll:true});
+          return;
+        }
+        for(let attempt=0;attempt<20&&active();attempt+=1) {
+          await waitForSimilarity(3000,signal);
+          if(!active()) return;
+          await load({preserveSimilarityPoll:true});
+          const current=data?.similarity;
+          if(current?.available&&current.ready>=current.total) return;
+          if(current?.total===0) return;
+        }
+        if(active()) similarityNotice='После 20 проверок результат не готов; обновление можно повторить позже.';
+      } finally {
+        if(active()) { similarityQueued=false; renderSimilarityState(); }
+      }
+    }
+    similarityRefreshButton=b('Обновить близость',refreshSimilarity);
+    similarityRefreshButton.disabled=true;
+    controls.append(b('Обновить',load),similarityRefreshButton,b('Уместить граф',()=>canvas?.fit(30)),b('Приблизить',()=>canvas?.zoom(canvas.zoom()*1.2)),b('Отдалить',()=>canvas?.zoom(canvas.zoom()/1.2)),
       b('Скачать JSON',async()=> { const fresh=await host.api(endpoint(),{signal:controller.signal});if(valid())host.download('knowledge-graph.json',JSON.stringify(fresh,null,2),'application/json'); }),
       b('Скачать PNG',async()=> { await load(); if(!canvas)throw Error('В карте пока нет узлов.');const blob=await canvas.png({output:'blob-promise',bg:'#ffffff',full:true,scale:2});if(valid())host.downloadBlob('knowledge-graph.png',blob); }));
     const manual=b('Добавить понятие',()=>host.dialog('Понятие без источника',form=> {

@@ -29,7 +29,7 @@
     concept: '#0f766e', default: '#475569'
   };
 
-  api.render = function render(container, data, mode, onSelect) {
+  api.render = function render(container, data, mode, onSelect, options = {}) {
     if (!window.cytoscape) {
       throw new Error('Библиотека графа недоступна.');
     }
@@ -58,6 +58,29 @@
       }
     });
 
+    if (mode === 'semantic' && options.showSimilarity !== false &&
+        data && data.similarity && data.similarity.available) {
+      const similarityEdges = Array.isArray(data.similarity.edges)
+        ? data.similarity.edges : [];
+      similarityEdges.forEach((edge) => {
+        const source = String(edge.source);
+        const target = String(edge.target);
+        const score = edge.score;
+        if (source !== target && endpoints.has(source) && endpoints.has(target) &&
+            Number.isFinite(score) && score >= -1 && score <= 1) {
+          elements.push({
+            data: {
+              id: 'similarity:' + String(edge.id),
+              source: edge.source,
+              target: edge.target,
+              label: 'cos ' + score.toFixed(2)
+            },
+            classes: 'similarity'
+          });
+        }
+      });
+    }
+
     const graph = window.cytoscape({
       container: container,
       elements: elements,
@@ -85,6 +108,10 @@
           'text-background-padding': 1, 'text-outline-color': '#ffffff', 'text-outline-width': 2
         } },
         { selector: 'edge.hypothesis', style: { 'line-style': 'dashed' } },
+        { selector: 'edge.similarity', style: {
+          'line-style': 'dashed', 'line-color': '#0f766e',
+          'target-arrow-shape': 'none', label: 'data(label)'
+        } },
         { selector: 'node:selected', style: { 'border-color': '#111827', 'border-width': 3 } }
       ]
     });
