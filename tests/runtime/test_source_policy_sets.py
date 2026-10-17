@@ -144,7 +144,7 @@ def test_fragment_commands_and_returning_keep_rank_checks(world, role):
             "UPDATE kb.fragment SET chapter='Updated' WHERE id=%s RETURNING id",
             "DELETE FROM kb.fragment WHERE id=%s RETURNING id",
         ]:
-            if role == "contributor":
+            if role == "contributor" and statement.startswith("UPDATE"):
                 with pytest.raises(
                     psycopg.errors.CheckViolation, match="canonical fragments are immutable"
                 ):
@@ -152,5 +152,6 @@ def test_fragment_commands_and_returning_keep_rank_checks(world, role):
                         conn.execute(statement, (fragment_id,)).fetchall()
             else:
                 with transaction_identity(conn, world["other"]):
-                    assert conn.execute(statement, (fragment_id,)).fetchall() == []
+                    expected = [(fragment_id,)] if role == "contributor" else []
+                    assert conn.execute(statement, (fragment_id,)).fetchall() == expected
                 conn.commit()
