@@ -23,7 +23,47 @@ def test_stream_preload_uses_package_asset(tmp_path: Path, monkeypatch: pytest.M
     monkeypatch.setenv("KB_TEST_EXPECTED_PRELOAD", str(expected_preload))
     launcher = tmp_path / "synthetic-launcher"
     launcher.write_text(
-        f'#!{sys.executable}\nimport json\nimport os\nfrom pathlib import Path\nimport sys\n\noptions = os.environ.get("NODE_OPTIONS", "").split()\nrequires = [\n    option.removeprefix("--require=")\n    for option in options\n    if option.startswith("--require=")\n]\nif len(requires) != 1:\n    raise SystemExit("missing NODE_OPTIONS preload")\npreload = Path(requires[0])\nexpected = Path(os.environ["KB_TEST_EXPECTED_PRELOAD"])\nif preload.name != "subscription-proof.cjs" or preload != expected:\n    raise SystemExit("wrong NODE_OPTIONS preload")\nif not preload.is_file():\n    raise SystemExit("NODE_OPTIONS preload does not exist")\nif "--stream" not in sys.argv:\n    raise SystemExit("stream flag missing")\nmodel = sys.argv[sys.argv.index("--model") + 1]\nproof = {{\n    "model": model,\n    "stop_reason": "end_turn",\n    "message_stop": True,\n    "error": False,\n    "thinking_seen": True,\n}}\nsys.stderr.write(\n    "MMX_STREAM_PROOF=" + json.dumps(proof, separators=(",", ":")) + "\\n"\n)\nsys.stdout.write(\n    json.dumps(\n        {{"content": "synthetic completion from local launcher"}},\n        separators=(",", ":"),\n    )\n    + "\\n"\n)\n',
+        f"""#!{sys.executable}
+import json
+import os
+from pathlib import Path
+import sys
+
+options = os.environ.get("NODE_OPTIONS", "").split()
+requires = [
+    option.removeprefix("--require=")
+    for option in options
+    if option.startswith("--require=")
+]
+if len(requires) != 1:
+    raise SystemExit("missing NODE_OPTIONS preload")
+preload = Path(requires[0])
+expected = Path(os.environ["KB_TEST_EXPECTED_PRELOAD"])
+if preload.name != "subscription-proof.cjs" or preload != expected:
+    raise SystemExit("wrong NODE_OPTIONS preload")
+if not preload.is_file():
+    raise SystemExit("NODE_OPTIONS preload does not exist")
+if "--stream" not in sys.argv:
+    raise SystemExit("stream flag missing")
+model = sys.argv[sys.argv.index("--model") + 1]
+proof = {{
+    "model": model,
+    "stop_reason": "end_turn",
+    "message_stop": True,
+    "error": False,
+    "thinking_seen": True,
+}}
+sys.stderr.write(
+    "MMX_STREAM_PROOF=" + json.dumps(proof, separators=(",", ":")) + "\\n"
+)
+sys.stdout.write(
+    json.dumps(
+        {{"content": "synthetic completion from local launcher"}},
+        separators=(",", ":"),
+    )
+    + "\\n"
+)
+""",
         encoding="utf-8",
     )
     launcher.chmod(448)
