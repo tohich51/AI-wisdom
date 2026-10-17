@@ -159,7 +159,8 @@ def _normalise_vector(value: object, dimension: int = SELECTED_PROFILE.dimension
 def _validate_embedding_response(payload: object, expected: int) -> list[list[float]]:
     if not isinstance(payload, dict) or not isinstance(payload.get("data"), list):
         raise ValueError("malformed_embedding_response")
-    if "model" in payload and payload["model"] not in (
+    model = payload.get("model")
+    if not isinstance(model, str) or model not in (
         SELECTED_PROFILE.model,
         "Qwen/Qwen3-Embedding-8B",
     ):
@@ -318,10 +319,11 @@ def _embed_missing(
             payload = embedder(batch)
             batch_vectors = _validate_embedding_response(
                 {
+                    "model": SELECTED_PROFILE.model,
                     "data": [
                         {"index": index, "embedding": vector}
                         for index, vector in enumerate(payload)
-                    ]
+                    ],
                 }
                 if isinstance(payload, list)
                 else payload,

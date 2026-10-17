@@ -32,7 +32,7 @@ def test_secure_embedding_key_is_read_from_owner_home(monkeypatch):
         assert _read_embedding_key() == "synthetic-provider-key"
 
 
-def test_embedding_response_enforces_selected_model_when_present():
+def test_embedding_response_accepts_selected_model():
     vector = [1.0] + [0.0] * 4095
     selected = _validate_embedding_response(
         {
@@ -43,14 +43,24 @@ def test_embedding_response_enforces_selected_model_when_present():
     )
     assert selected[0][0] == pytest.approx(1.0)
 
+
+@pytest.mark.parametrize(
+    "model_payload",
+    [
+        {},
+        {"model": None},
+        {"model": "qwen/wrong-model"},
+    ],
+    ids=["missing", "null", "wrong-model"],
+)
+def test_embedding_response_rejects_missing_null_or_wrong_model(model_payload):
+    vector = [1.0] + [0.0] * 4095
+    payload = {
+        **model_payload,
+        "data": [{"index": 0, "embedding": vector}],
+    }
     with pytest.raises(ValueError, match="embedding_provider_model_mismatch"):
-        _validate_embedding_response(
-            {
-                "model": "qwen/wrong-model",
-                "data": [{"index": 0, "embedding": vector}],
-            },
-            1,
-        )
+        _validate_embedding_response(payload, 1)
 
 
 def test_embedding_response_accepts_exact_upstream_model():
@@ -70,12 +80,24 @@ def test_embedding_response_rejects_null_and_multidimensional_components(compone
     vector = [0.0] * 4096
     vector[0] = component
     with pytest.raises(ValueError, match="malformed_embedding_value"):
-        _validate_embedding_response({"data": [{"index": 0, "embedding": vector}]}, 1)
+        _validate_embedding_response(
+            {
+                "model": SELECTED_PROFILE.model,
+                "data": [{"index": 0, "embedding": vector}],
+            },
+            1,
+        )
 
 
 def test_embedding_response_rejects_zero_vector():
     with pytest.raises(ValueError, match="zero_embedding_vector"):
-        _validate_embedding_response({"data": [{"index": 0, "embedding": [0.0] * 4096}]}, 1)
+        _validate_embedding_response(
+            {
+                "model": SELECTED_PROFILE.model,
+                "data": [{"index": 0, "embedding": [0.0] * 4096}],
+            },
+            1,
+        )
 
 
 @pytest.mark.parametrize(
@@ -87,7 +109,13 @@ def test_embedding_response_rejects_nonfinite_values(component):
     vector = [0.0] * 4096
     vector[0] = component
     with pytest.raises(ValueError, match="malformed_embedding_value"):
-        _validate_embedding_response({"data": [{"index": 0, "embedding": vector}]}, 1)
+        _validate_embedding_response(
+            {
+                "model": SELECTED_PROFILE.model,
+                "data": [{"index": 0, "embedding": vector}],
+            },
+            1,
+        )
 
 
 def test_similarity_ranking_is_undirected_ordered_and_deterministic():
