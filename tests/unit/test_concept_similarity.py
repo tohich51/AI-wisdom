@@ -53,6 +53,18 @@ def test_embedding_response_enforces_selected_model_when_present():
         )
 
 
+def test_embedding_response_accepts_exact_upstream_model():
+    vector = [1.0] + [0.0] * 4095
+    upstream = _validate_embedding_response(
+        {
+            "model": "Qwen/Qwen3-Embedding-8B",
+            "data": [{"index": 0, "embedding": vector}],
+        },
+        1,
+    )
+    assert upstream[0][0] == pytest.approx(1.0)
+
+
 @pytest.mark.parametrize("component", [None, [[0.0]]])
 def test_embedding_response_rejects_null_and_multidimensional_components(component):
     vector = [0.0] * 4096

@@ -159,7 +159,10 @@ def _normalise_vector(value: object, dimension: int = SELECTED_PROFILE.dimension
 def _validate_embedding_response(payload: object, expected: int) -> list[list[float]]:
     if not isinstance(payload, dict) or not isinstance(payload.get("data"), list):
         raise ValueError("malformed_embedding_response")
-    if "model" in payload and payload["model"] != SELECTED_PROFILE.model:
+    if "model" in payload and payload["model"] not in (
+        SELECTED_PROFILE.model,
+        "Qwen/Qwen3-Embedding-8B",
+    ):
         raise ValueError("embedding_provider_model_mismatch")
     items = payload["data"]
     if len(items) != expected:
