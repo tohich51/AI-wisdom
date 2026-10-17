@@ -170,7 +170,7 @@ def _run_cli(
     child_environment.pop("KB_MODEL_RUNNER_TOKEN", None)
     if stream:
         child_environment["NODE_OPTIONS"] = "--require=" + str(
-            Path(__file__).with_name("subscription-proof.cjs")
+            Path(__file__).resolve().parents[1] / "subscription-proof.cjs"
         )
 
     try:

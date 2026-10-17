@@ -46,6 +46,25 @@ def _embedder(calls):
     return embed
 
 
+def _selection_embedder(calls):
+    specifications = [
+        ("A", (1.0, 0.0)),
+        ("B", (0.8, 0.6)),
+    ]
+    specifications.extend((f"Midpoint {index}", (0.9, 0.3)) for index in range(6))
+    vectors = {}
+    for label, pair in specifications:
+        vector = [0.0] * 4096
+        vector[0], vector[1] = pair
+        vectors[concept_text(label, f"Synthetic body for {label}.")] = vector
+
+    def embed(texts):
+        calls.append(tuple(texts))
+        return [vectors[text] for text in texts]
+
+    return embed
+
+
 def _cache_counts(conn, principal, library_id):
     with transaction_identity(conn, principal):
         embeddings = conn.execute(
@@ -162,6 +181,92 @@ def test_positive_rebuild_cache_hit_and_stale_revision_are_excluded(world):
         )
 
 
+def test_build_selection_supersedes_historical_top_three_edges(world):
+    with psycopg.connect(world["dsn"]) as conn:
+        concept_a = _concept(conn, world["principal"], world["lib"], "A")
+        concept_b = _concept(conn, world["principal"], world["lib"], "B")
+
+    calls = []
+    first = rebuild_similarity(
+        world["worker"], world["principal"], world["lib"], embedder=_selection_embedder(calls)
+    )
+    assert first["ready"] == 2 and first["edges"] == 1
+
+    def current_similarity():
+        with psycopg.connect(world["dsn"]) as conn:
+            return semantic.semantic_network(conn, world["principal"], world["lib"])["similarity"]
+
+    node_a = "concept:" + str(concept_a)
+    node_b = "concept:" + str(concept_b)
+    initial = current_similarity()
+    assert initial["available"] is True
+    assert any({edge["source"], edge["target"]} == {node_a, node_b} for edge in initial["edges"])
+
+    cached = rebuild_similarity(
+        world["worker"],
+        world["principal"],
+        world["lib"],
+        embedder=lambda _texts: pytest.fail("unchanged capture reached the embedder"),
+    )
+    assert cached["ready"] == 2
+
+    with psycopg.connect(world["dsn"]) as conn:
+        midpoint_ids = [
+            _concept(conn, world["principal"], world["lib"], f"Midpoint {index}")
+            for index in range(6)
+        ]
+
+    stale = current_similarity()
+    assert stale["available"] is False
+    assert stale["ready"] == 2 and stale["total"] == 8
+    assert stale["edges"] == []
+
+    calls_before_rebuild = len(calls)
+    rebuilt = rebuild_similarity(
+        world["worker"],
+        world["principal"],
+        world["lib"],
+        embedder=_selection_embedder(calls),
+    )
+    assert rebuilt["ready"] == 8 and rebuilt["edges"]
+    assert len(calls) == calls_before_rebuild + 1
+    assert set(calls[-1]) == {
+        concept_text(f"Midpoint {index}", f"Synthetic body for Midpoint {index}.")
+        for index in range(6)
+    }
+
+    final = current_similarity()
+    assert final["available"] is True
+    assert final["reason"] is None
+    assert final["ready"] == final["total"] == 8
+    assert all({edge["source"], edge["target"]} != {node_a, node_b} for edge in final["edges"])
+    midpoint_nodes = {"concept:" + str(concept_id) for concept_id in midpoint_ids}
+    for endpoint in (node_a, node_b):
+        incident = [edge for edge in final["edges"] if endpoint in {edge["source"], edge["target"]}]
+        assert len(incident) == 3
+        for edge in incident:
+            other = edge["target"] if edge["source"] == endpoint else edge["source"]
+            assert other in midpoint_nodes
+
+    ordered_pair = sorted((concept_a, concept_b), key=str)
+    with psycopg.connect(world["worker"]) as conn:
+        with transaction_identity(conn, world["principal"]):
+            historical_pair_cached = conn.execute(
+                """SELECT EXISTS(
+                     SELECT 1 FROM kb.concept_similarity
+                     WHERE library_id=%s AND profile_hash=%s
+                       AND source_concept=%s AND target_concept=%s
+                   )""",
+                (
+                    world["lib"],
+                    SELECTED_PROFILE.profile_hash,
+                    ordered_pair[0],
+                    ordered_pair[1],
+                ),
+            ).fetchone()[0]
+    assert historical_pair_cached is True
+
+
 def test_revocation_cloud_foreign_and_draft_acl_never_publish_derived_rows(world):
     with psycopg.connect(world["dsn"]) as conn:
         _concepts(conn, world["principal"], world["lib"], 3)
@@ -213,6 +318,20 @@ def test_revocation_cloud_foreign_and_draft_acl_never_publish_derived_rows(world
         assert other_graph["nodes"] == []
         assert other_graph["similarity"]["total"] == 0
         assert other_graph["similarity"]["edges"] == []
+        with transaction_identity(conn, world["principal"]):
+            owner_builds = conn.execute(
+                """SELECT count(*) FROM kb.concept_similarity_build
+                   WHERE library_id=%s""",
+                (world["lib"],),
+            ).fetchone()[0]
+        with transaction_identity(conn, world["other"]):
+            reader_builds = conn.execute(
+                """SELECT count(*) FROM kb.concept_similarity_build
+                   WHERE library_id=%s""",
+                (world["lib"],),
+            ).fetchone()[0]
+        assert owner_builds == 1
+        assert reader_builds == 0
 
 
 def test_provider_failure_and_malformed_later_batch_are_atomic(world):

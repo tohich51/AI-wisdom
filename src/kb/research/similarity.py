@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 import math
@@ -45,6 +46,16 @@ def concept_text(label: str, body: str) -> str:
 
 def concept_text_hash(label: str, body: str) -> str:
     return hashlib.sha256(concept_text(label, body).encode("utf-8")).hexdigest()
+
+
+def _visible_capture_fingerprint(concept_hashes) -> str:
+    payload = json.dumps(
+        sorted(
+            (str(concept_id), current_text_hash) for concept_id, current_text_hash in concept_hashes
+        ),
+        separators=(",", ":"),
+    )
+    return hashlib.sha256(payload.encode("ascii")).hexdigest()
 
 
 def _require_external_access(cur, principal, library_id: UUID) -> None:
@@ -246,51 +257,67 @@ def _read_embedding_key() -> str:
 def _openrouter_embeddings(texts: list[str], key: str, deadline: float) -> list[list[float]]:
     if not 1 <= len(texts) <= EMBED_BATCH_SIZE:
         raise ValueError("invalid_embedding_batch")
-    remaining = deadline - time.monotonic()
-    if remaining <= 0:
-        raise TimeoutError("embedding_deadline_exceeded")
-    timeout = httpx.Timeout(
-        timeout=remaining,
-        connect=min(5.0, remaining),
-        read=min(20.0, remaining),
-        write=min(10.0, remaining),
-        pool=min(5.0, remaining),
-    )
-    limits = httpx.Limits(max_connections=1, max_keepalive_connections=1)
-    body = bytearray()
-    with httpx.Client(
-        timeout=timeout, limits=limits, follow_redirects=False, trust_env=False
-    ) as client:
-        with client.stream(
-            "POST",
-            SELECTED_PROFILE.api_base + "/embeddings",
-            headers={"Authorization": f"Bearer {key}", "Accept": "application/json"},
-            json={
-                "model": SELECTED_PROFILE.model,
-                "input": texts,
-                "encoding_format": "float",
-                "dimensions": SELECTED_PROFILE.dimension,
-            },
-        ) as response:
-            if response.status_code != 200:
-                raise ValueError("embedding_provider_failed")
-            content_length = response.headers.get("content-length")
-            if content_length is not None:
-                if not content_length.isdigit() or int(content_length) > MAX_RESPONSE_BYTES:
-                    raise ValueError("embedding_response_too_large")
-            for chunk in response.iter_bytes(chunk_size=65536):
-                if len(body) + len(chunk) > MAX_RESPONSE_BYTES:
-                    raise ValueError("embedding_response_too_large")
-                body.extend(chunk)
-                if time.monotonic() >= deadline:
-                    raise TimeoutError("embedding_deadline_exceeded")
-    if time.monotonic() >= deadline:
-        raise TimeoutError("embedding_deadline_exceeded")
+
+    async def _request_embeddings() -> list[list[float]]:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise TimeoutError("embedding_deadline_exceeded")
+
+        async with asyncio.timeout(remaining):
+            timeout = httpx.Timeout(
+                timeout=remaining,
+                connect=min(5.0, remaining),
+                read=min(20.0, remaining),
+                write=min(10.0, remaining),
+                pool=min(5.0, remaining),
+            )
+            limits = httpx.Limits(max_connections=1, max_keepalive_connections=1)
+            body = bytearray()
+            async with httpx.AsyncClient(
+                timeout=timeout,
+                limits=limits,
+                follow_redirects=False,
+                trust_env=False,
+            ) as client:
+                async with client.stream(
+                    "POST",
+                    SELECTED_PROFILE.api_base + "/embeddings",
+                    headers={"Authorization": f"Bearer {key}", "Accept": "application/json"},
+                    json={
+                        "model": SELECTED_PROFILE.model,
+                        "input": texts,
+                        "encoding_format": "float",
+                        "dimensions": SELECTED_PROFILE.dimension,
+                    },
+                ) as response:
+                    if response.status_code != 200:
+                        raise ValueError("embedding_provider_failed")
+                    content_length = response.headers.get("content-length")
+                    if content_length is not None:
+                        if not content_length.isdigit() or int(content_length) > MAX_RESPONSE_BYTES:
+                            raise ValueError("embedding_response_too_large")
+                    async for chunk in response.aiter_bytes():
+                        if len(body) + len(chunk) > MAX_RESPONSE_BYTES:
+                            raise ValueError("embedding_response_too_large")
+                        body.extend(chunk)
+                        if time.monotonic() >= deadline:
+                            raise TimeoutError("embedding_deadline_exceeded")
+            if time.monotonic() >= deadline:
+                raise TimeoutError("embedding_deadline_exceeded")
+            try:
+                payload = json.loads(bytes(body))
+            except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+                raise ValueError("malformed_embedding_response") from exc
+            return _validate_embedding_response(payload, len(texts))
+
     try:
-        payload = json.loads(bytes(body))
-    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
-        raise ValueError("malformed_embedding_response") from exc
-    return _validate_embedding_response(payload, len(texts))
+        return asyncio.run(_request_embeddings())
+    except TimeoutError:
+        raise TimeoutError("embedding_deadline_exceeded") from None
+    except httpx.TimeoutException:
+        raise TimeoutError("embedding_provider_timeout") from None
+    except httpx.HTTPError:
+        raise RuntimeError("embedding_provider_unavailable") from None
 
 
 def _embed_missing(
@@ -450,6 +477,9 @@ def rebuild_similarity(dsn, principal, library_id, *, embedder=None) -> dict:
                     }
                     for row in concepts
                 ]
+                selection_hash = _visible_capture_fingerprint(
+                    (item["id"], item["text_hash"]) for item in captured
+                )
                 text_hashes = list(dict.fromkeys(item["text_hash"] for item in captured))
                 cached = _cached_vectors(cur, library_id, text_hashes)
             conn.commit()
@@ -468,7 +498,22 @@ def rebuild_similarity(dsn, principal, library_id, *, embedder=None) -> dict:
             edges = _rank_similarity(captured, vectors, SELECTED_PROFILE.profile_hash)
 
             with transaction_identity(conn, principal), conn.cursor(row_factory=dict_row) as cur:
-                _assert_capture_current(cur, principal, library_id, captured)
+                current_concepts = _visible_concepts(cur, principal, library_id)
+                current_capture = [
+                    (row["id"], concept_text_hash(row["label"], row["body"]))
+                    for row in current_concepts
+                ]
+                if _visible_capture_fingerprint(current_capture) != selection_hash:
+                    raise AccessDenied("forbidden")
+                current_by_id = {row["id"]: row for row in current_concepts}
+                for item in captured:
+                    row = current_by_id.get(item["id"])
+                    if (
+                        row is None
+                        or row["manifest"] != item["manifest"]
+                        or row["citations"] != item["citations"]
+                    ):
+                        raise AccessDenied("forbidden")
                 cur.executemany(
                     """INSERT INTO kb.concept_embedding(
                         concept_id,library_id,profile_hash,text_hash,embedding
@@ -504,6 +549,19 @@ def rebuild_similarity(dsn, principal, library_id, *, embedder=None) -> dict:
                         )
                         for edge in edges
                     ],
+                )
+                cur.execute(
+                    """INSERT INTO kb.concept_similarity_build(
+                        library_id,profile_hash,selection_hash,concept_ids,edge_ids
+                      ) VALUES(%s,%s,%s,%s::uuid[],%s::uuid[])
+                      ON CONFLICT(library_id,profile_hash,selection_hash) DO NOTHING""",
+                    (
+                        library_id,
+                        SELECTED_PROFILE.profile_hash,
+                        selection_hash,
+                        sorted((item["id"] for item in captured), key=str),
+                        sorted((edge["id"] for edge in edges), key=str),
+                    ),
                 )
             conn.commit()
             return {"status": "ready", "ready": len(captured), "edges": len(edges)}
@@ -590,6 +648,7 @@ def similarity_layer(
             "truncated": False,
         }
 
+    selection_hash = _visible_capture_fingerprint(node_hashes.items())
     wanted = [
         {"concept_id": str(concept_id), "text_hash": text_hash}
         for concept_id, text_hash in node_hashes.items()
@@ -605,12 +664,23 @@ def similarity_layer(
         (Jsonb(wanted), library_id, profile_hash),
     )
     ready_ids = {row["concept_id"] for row in cur.fetchall()}
+    cur.execute(
+        """SELECT b.edge_ids
+          FROM kb.concept_similarity_build b
+          WHERE b.library_id=%s AND b.profile_hash=%s
+            AND b.selection_hash=%s""",
+        (library_id, profile_hash, selection_hash),
+    )
+    build = cur.fetchone()
+
     edges: list[dict] = []
+    truncated = False
     edge_limit = min(max(limit, 1) * 3, 1500)
-    if ready_ids:
+    if build is not None and ready_ids:
         cur.execute(
             """SELECT s.id,s.source_concept,s.target_concept,s.score
-              FROM kb.concept_similarity s
+              FROM unnest(%s::uuid[]) AS selected(edge_id)
+              JOIN kb.concept_similarity s ON s.id=selected.edge_id
               JOIN jsonb_to_recordset(%s::jsonb)
                 AS wanted(concept_id uuid,text_hash text)
                 ON wanted.concept_id=s.source_concept
@@ -625,6 +695,7 @@ def similarity_layer(
               ORDER BY s.source_concept,s.target_concept
               LIMIT %s""",
             (
+                build["edge_ids"],
                 Jsonb(wanted),
                 Jsonb(wanted),
                 library_id,
@@ -646,11 +717,9 @@ def similarity_layer(
             for row in rows[:edge_limit]
         ]
         truncated = len(rows) > edge_limit
-    else:
-        truncated = False
 
     ready = len(ready_ids)
-    complete = ready == total
+    complete = build is not None and ready == total
     return {
         "available": complete,
         "reason": None if complete else "concept_similarity_cache_incomplete",
