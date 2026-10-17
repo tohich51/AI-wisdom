@@ -64,10 +64,6 @@ BEGIN
 END;
 $function$;
 
-REVOKE ALL ON FUNCTION kb.library_policy_allows(uuid, text) FROM PUBLIC;
-GRANT EXECUTE ON FUNCTION kb.library_policy_allows(uuid, text)
-    TO kb_app, kb_worker, kb_provisioner;
-
 CREATE OR REPLACE FUNCTION kb.effective_role(p_principal uuid, p_library uuid)
 RETURNS kb.library_role
 LANGUAGE plpgsql
