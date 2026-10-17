@@ -78,6 +78,7 @@ TOOL_HANDLER: dict[str, str] = {
     "draft_rule_from_research": "draft_rule_from_research",
     "get_knowledge_graph": "provenance_graph",
     "get_semantic_network": "semantic_network",
+    "refresh_concept_similarity": "enqueue_similarity",
     "create_semantic_concept": "create_concept",
     "create_semantic_relation": "create_relation",
     "review_semantic_relation": "review_semantic",
@@ -136,7 +137,7 @@ def test_registry_is_self_consistent():
 
 
 def test_contract_revision_is_declared():
-    assert CONTRACT_REVISION == "architecture-20261015-v1"
+    assert CONTRACT_REVISION == "architecture-20261015-v2"
 
 
 def test_operation_names_are_unique():

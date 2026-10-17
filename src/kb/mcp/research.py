@@ -6,7 +6,7 @@ from uuid import UUID
 from mcp.server.mcpserver import Context
 
 from kb.catalog import graphs
-from kb.research import notes, rule_handoff, runs, semantic
+from kb.research import notes, rule_handoff, runs, semantic, similarity
 from kb.research.generation import Kind, Predicate
 
 
@@ -72,6 +72,10 @@ def install_tools(server, call):
     @server.tool()
     def get_semantic_network(library_id: UUID, ctx: Context, limit: int = 200):
         return call(ctx, semantic.semantic_network, library_id, limit)
+
+    @server.tool()
+    def refresh_concept_similarity(library_id: UUID, ctx: Context):
+        return call(ctx, similarity.enqueue_similarity, library_id)
 
     @server.tool()
     def create_semantic_concept(

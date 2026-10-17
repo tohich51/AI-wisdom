@@ -13,10 +13,11 @@ from kb.contracts.research_tools import (
     ResearchArgs,
     ReviewArgs,
     SaveNoteArgs,
+    SimilarityArgs,
     UpdateNoteArgs,
 )
 from kb.http.libraries import Db, Me, mapped_errors
-from kb.research import notes, rule_handoff, runs, semantic
+from kb.research import notes, rule_handoff, runs, semantic, similarity
 
 
 def no_store(response: Response):
@@ -106,6 +107,12 @@ def provenance(
 def network(library_id: UUID, conn: Db, me: Me, limit: int = Query(default=200, ge=1, le=500)):
     with mapped_errors():
         return semantic.semantic_network(conn, me, library_id, limit)
+
+
+@router.post("/graphs/similarity", status_code=202)
+def similarity_refresh(body: SimilarityArgs, conn: Db, me: Me):
+    with mapped_errors():
+        return similarity.enqueue_similarity(conn, me, body.library_id)
 
 
 @router.post("/graphs/concepts", status_code=201)

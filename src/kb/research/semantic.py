@@ -72,6 +72,8 @@ def import_network(cur, principal, library_id, run_id, manifest, result):
 def semantic_network(conn, principal, library_id, limit=200):
     if not 1 <= limit <= 500:
         raise ValueError("invalid_graph_limit")
+    from kb.research.similarity import concept_text_hash, similarity_layer
+
     with transaction_identity(conn, principal), conn.cursor(row_factory=dict_row) as cur:
         access = _library(cur, principal, library_id)
         cur.execute(
@@ -108,6 +110,10 @@ def semantic_network(conn, principal, library_id, limit=200):
                 }
             )
         ids = [row["id"] for row in rows[:limit]]
+        node_hashes = {
+            row["id"]: concept_text_hash(row["label"], row["body"])
+            for row in rows[:limit]
+        }
         cur.execute(
             """SELECT * FROM kb.semantic_relation WHERE library_id=%s
                      AND publication<>'withdrawn' AND
@@ -142,6 +148,7 @@ def semantic_network(conn, principal, library_id, limit=200):
                     ),
                 }
             )
+        similarity = similarity_layer(cur, principal, library_id, node_hashes, limit)
         return {
             "nodes": nodes,
             "edges": edges,
@@ -151,7 +158,7 @@ def semantic_network(conn, principal, library_id, limit=200):
                 "can_create": access["rank"] >= 20,
                 "can_review": access["rank"] >= 30,
             },
-            "similarity": {"available": False, "reason": "concept_embedding_index_not_built"},
+            "similarity": similarity,
         }
 
 

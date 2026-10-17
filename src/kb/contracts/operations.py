@@ -36,7 +36,7 @@ from typing import Final
 #: Contract revision for the operation declarations below. Bump the patch part
 #: for a wording or docstring edit, the minor part when a declaration is added,
 #: and never silently change an existing (method, path, scope) triple.
-CONTRACT_REVISION: Final[str] = "architecture-20261015-v1"
+CONTRACT_REVISION: Final[str] = "architecture-20261015-v2"
 
 #: The canonical prefix. New clients use it; the schema is served from it.
 API_VERSION: Final[str] = "v1"
@@ -572,6 +572,15 @@ OPERATIONS: Final[tuple[Operation, ...]] = (
         "kb:read",
         "Build the semantic network for a library.",
         mcp_tool="get_semantic_network",
+    ),
+    _op(
+        "graphs.similarity.refresh",
+        "POST",
+        "/graphs/similarity",
+        _WRITE,
+        "kb:contribute",
+        "Queue a refresh of the derived concept similarity layer.",
+        mcp_tool="refresh_concept_similarity",
     ),
     _op(
         "graphs.concepts",

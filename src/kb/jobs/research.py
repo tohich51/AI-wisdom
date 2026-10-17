@@ -20,6 +20,31 @@ class AttemptInProgress(RuntimeError):
     """Redelivery waits until the previous bounded attempt lease has expired."""
 
 
+def register_similarity_task(app, dsn):
+    @app.task(
+        name="kb.research.similarity",
+        queue="ingestion",
+        retry=procrastinate.RetryStrategy(max_attempts=3, wait=60),
+    )
+    def process(library_id: str, principal_id: str, account_id: str, cloud_client: bool):
+        if type(cloud_client) is not bool:
+            raise ValueError("invalid_worker_identity")
+        from kb.research.similarity import rebuild_similarity
+
+        try:
+            rebuild_similarity(
+                dsn,
+                Principal(UUID(principal_id), UUID(account_id), cloud_client=cloud_client),
+                UUID(library_id),
+            )
+        except AccessDenied:
+            # Revocation is terminal for this trusted refresh; an explicit refresh
+            # after access is restored will capture a new immutable input set.
+            return {"status": "forbidden"}
+
+    return process
+
+
 def register_research_task(app, dsn):
     @app.task(
         name="kb.research",
@@ -35,6 +60,7 @@ def register_research_task(app, dsn):
             os.environ.get("KB_WORKER_TOKEN"),
         )
 
+    register_similarity_task(app, dsn)
     return process
 
 
@@ -63,6 +89,7 @@ def run_research(dsn, run_id, principal, runner_url, worker_token):
                 if claimed is None:
                     raise AttemptInProgress("attempt_in_progress")
                 fragments = []
+                imported_network = False
                 for pin in row["manifest"]["fragments"]:
                     frag = conn.execute(
                         "SELECT text FROM kb.fragment WHERE id=%s", (pin["fragment_id"],)
@@ -154,6 +181,7 @@ def run_research(dsn, run_id, principal, runner_url, worker_token):
                     import_network(
                         cur, principal, row["library_id"], run_id, row["manifest"], result
                     )
+                    imported_network = True
                 cur.execute(
                     """UPDATE kb.research_run SET status='done',result=%s,completed_at=now()
                       WHERE id=%s AND status='running' AND attempt_token=%s RETURNING id""",
@@ -161,6 +189,10 @@ def run_research(dsn, run_id, principal, runner_url, worker_token):
                 )
                 if cur.fetchone() is None:
                     raise AccessDenied("forbidden")
+                if imported_network:
+                    from kb.research.similarity import enqueue_similarity_on_transaction
+
+                    enqueue_similarity_on_transaction(cur, principal, row["library_id"])
         except AttemptInProgress:
             raise
         except AccessDenied:

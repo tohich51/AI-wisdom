@@ -57,6 +57,10 @@ class SemanticArgs(LibraryArgs):
     limit: int = Field(default=200, ge=1, le=500)
 
 
+class SimilarityArgs(LibraryArgs):
+    pass
+
+
 class ConceptArgs(LibraryArgs):
     label: str = Field(min_length=1, max_length=500)
     body: str = Field(min_length=1, max_length=2000)
@@ -89,6 +93,7 @@ RESEARCH_TOOLS: dict[str, type[BaseModel]] = {
     "draft_rule_from_research": DraftRuleArgs,
     "get_knowledge_graph": GraphArgs,
     "get_semantic_network": SemanticArgs,
+    "refresh_concept_similarity": SimilarityArgs,
     "create_semantic_concept": ConceptArgs,
     "create_semantic_relation": RelationArgs,
     "review_semantic_relation": ReviewArgs,

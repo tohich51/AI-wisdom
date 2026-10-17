@@ -28,6 +28,7 @@ HANDLER_SCOPES = {
     "get_note": "kb:read",
     "provenance_graph": "kb:read",
     "semantic_network": "kb:read",
+    "enqueue_similarity": "kb:contribute",
     "publish": "kb:contribute",
     "review_batch": "kb:contribute",
     "edit_knowledge": "kb:contribute",
