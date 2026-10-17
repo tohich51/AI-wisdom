@@ -111,8 +111,7 @@ def semantic_network(conn, principal, library_id, limit=200):
             )
         ids = [row["id"] for row in rows[:limit]]
         node_hashes = {
-            row["id"]: concept_text_hash(row["label"], row["body"])
-            for row in rows[:limit]
+            row["id"]: concept_text_hash(row["label"], row["body"]) for row in rows[:limit]
         }
         cur.execute(
             """SELECT * FROM kb.semantic_relation WHERE library_id=%s
