@@ -76,11 +76,19 @@ window.WisdomMap = (() => {
     }};
     const b=(text,fn)=>n('button',text,{type:'button',onclick:act(fn)});
     async function renderDetail(node) {
-      const selectedMode=mode.value,selectedLibrary=library.value,selection=++readSerial;
-      const fresh=await host.api(endpoint(),{signal:controller.signal});
-      if(!valid() || selection!==readSerial || selectedMode!==mode.value || selectedLibrary!==library.value) return;
-      node=fresh.nodes.find(value=>value.id===node.id);
-      if(!node) throw Error('Узел больше не доступен. Обновите карту.');
+      const selectedId=node.id,selectedMode=mode.value,selectedLibrary=library.value,selection=++readSerial;
+      const signal=controller.signal;
+      details.replaceChildren(n('p','Загрузка подробностей…'));
+      let freshNode;
+      if(selectedMode==='semantic') {
+        freshNode=await host.api('/api/graphs/concepts/'+encodeURIComponent(node.entity_id)+'?library_id='+encodeURIComponent(selectedLibrary),{signal});
+      } else {
+        const fresh=await host.api(endpoint(),{signal});
+        freshNode=fresh.nodes.find(value=>value.id===selectedId);
+      }
+      if(!valid() || signal.aborted || selection!==readSerial || selectedMode!==mode.value || selectedLibrary!==library.value) return;
+      if(freshNode?.id!==selectedId) throw Error('Узел больше не доступен. Обновите карту.');
+      node=freshNode;
       details.replaceChildren(n('h2',node.label),n('p',[types[node.kind]||node.kind,publication[node.publication]||node.publication,
         node.version_no?'Версия '+node.version_no:null].filter(Boolean).join(' · ')));
       if(node.body) details.append(n('p',node.body));

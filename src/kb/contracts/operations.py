@@ -574,6 +574,14 @@ OPERATIONS: Final[tuple[Operation, ...]] = (
         mcp_tool="get_semantic_network",
     ),
     _op(
+        "graphs.concept.read",
+        "GET",
+        "/graphs/concepts/{concept_id}",
+        _READ,
+        "kb:read",
+        "Read one semantic concept with freshly validated evidence.",
+    ),
+    _op(
         "graphs.similarity.refresh",
         "POST",
         "/graphs/similarity",

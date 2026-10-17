@@ -152,8 +152,7 @@ def capture_snapshot(
         }
 
 
-def _canonical(cur: Any, manifest: dict, fragment_id: UUID) -> tuple[dict, dict, dict]:
-    check_snapshot(cur, manifest)
+def _canonical_unchecked(cur: Any, manifest: dict, fragment_id: UUID) -> tuple[dict, dict, dict]:
     pin = next((v for v in manifest["fragments"] if v["fragment_id"] == str(fragment_id)), None)
     if pin is None:
         raise ValueError("invalid_citation")
@@ -169,6 +168,11 @@ def _canonical(cur: Any, manifest: dict, fragment_id: UUID) -> tuple[dict, dict,
     if row is None or _hash(row["text"]) != pin["text_hash"]:
         raise AccessDenied("forbidden")
     return row, pin, source
+
+
+def _canonical(cur: Any, manifest: dict, fragment_id: UUID) -> tuple[dict, dict, dict]:
+    check_snapshot(cur, manifest)
+    return _canonical_unchecked(cur, manifest, fragment_id)
 
 
 def _citation(row: dict, pin: dict, source: dict, start: int, end: int) -> dict:
@@ -216,28 +220,44 @@ def resolve_citation(cur: Any, manifest: dict, fragment_id: UUID, quote: str) ->
     return _citation(row, pin, source, start, start + len(quote))
 
 
+def _validate_citation_fields(citation: dict, row: dict, pin: dict, source: dict) -> dict:
+    start, end = citation["start"], citation["end"]
+    if type(start) is not int or type(end) is not int:
+        raise ValueError("invalid_citation")
+    if not pin["excerpt_start"] <= start < end <= pin["excerpt_end"]:
+        raise ValueError("invalid_citation")
+    canonical = _citation(row, pin, source, start, end)
+    for key in (
+        "id",
+        "source_id",
+        "source_version_id",
+        "content_hash",
+        "fragment_id",
+        "text_hash",
+        "start",
+        "end",
+        "quote",
+    ):
+        if citation.get(key) != canonical[key]:
+            raise ValueError("invalid_citation")
+    return canonical
+
+
 def validate_citation(cur: Any, manifest: dict, citation: dict) -> dict:
     try:
         row, pin, source = _canonical(cur, manifest, UUID(citation["fragment_id"]))
-        start, end = citation["start"], citation["end"]
-        if type(start) is not int or type(end) is not int:
-            raise ValueError("invalid_citation")
-        if not pin["excerpt_start"] <= start < end <= pin["excerpt_end"]:
-            raise ValueError("invalid_citation")
-        canonical = _citation(row, pin, source, start, end)
-        for key in (
-            "id",
-            "source_id",
-            "source_version_id",
-            "content_hash",
-            "fragment_id",
-            "text_hash",
-            "start",
-            "end",
-            "quote",
-        ):
-            if citation.get(key) != canonical[key]:
-                raise ValueError("invalid_citation")
-        return canonical
+        return _validate_citation_fields(citation, row, pin, source)
     except (KeyError, TypeError, StopIteration) as exc:
         raise ValueError("invalid_citation") from exc
+
+
+def validate_citations(cur: Any, manifest: dict, citations: list[dict]) -> list[dict]:
+    validated = []
+    for citation in citations:
+        try:
+            row, pin, source = _canonical_unchecked(cur, manifest, UUID(citation["fragment_id"]))
+            validated.append(_validate_citation_fields(citation, row, pin, source))
+        except (KeyError, TypeError, StopIteration) as exc:
+            raise ValueError("invalid_citation") from exc
+    check_snapshot(cur, manifest)
+    return validated

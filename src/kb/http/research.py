@@ -109,6 +109,12 @@ def network(library_id: UUID, conn: Db, me: Me, limit: int = Query(default=200, 
         return semantic.semantic_network(conn, me, library_id, limit)
 
 
+@router.get("/graphs/concepts/{concept_id}")
+def concept_detail(concept_id: UUID, library_id: UUID, conn: Db, me: Me):
+    with mapped_errors():
+        return semantic.get_concept(conn, me, library_id, concept_id)
+
+
 @router.post("/graphs/similarity", status_code=202)
 def similarity_refresh(body: SimilarityArgs, conn: Db, me: Me):
     with mapped_errors():

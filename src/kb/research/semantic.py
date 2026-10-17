@@ -7,7 +7,7 @@ from psycopg.rows import dict_row
 from psycopg.types.json import Jsonb
 
 from kb.access.policy import AccessDenied, transaction_identity
-from kb.research.grounding import check_snapshot, validate_citation
+from kb.research.grounding import check_snapshot, validate_citation, validate_citations
 from kb.research.runs import _library
 
 
@@ -69,6 +69,45 @@ def import_network(cur, principal, library_id, run_id, manifest, result):
         )
 
 
+def _concept_node(cur, row):
+    evidence = []
+    if row["manifest"] is not None:
+        evidence = validate_citations(cur, row["manifest"], row["citations"])
+    return {
+        "id": "concept:" + str(row["id"]),
+        "entity_id": row["id"],
+        "kind": "concept",
+        "label": row["label"],
+        "body": row["body"],
+        "library_id": row["library_id"],
+        "publication": row["publication"],
+        "origin": row["origin"],
+        "version_no": row["version_no"],
+        "evidence": evidence,
+        "basis": (
+            "manual_revision_with_inherited_sources"
+            if row["origin"] == "manual_revision"
+            else "source_grounded_draft"
+            if evidence
+            else "manual_without_evidence"
+        ),
+    }
+
+
+def get_concept(conn, principal, library_id, concept_id):
+    with transaction_identity(conn, principal), conn.cursor(row_factory=dict_row) as cur:
+        _library(cur, principal, library_id)
+        cur.execute(
+            "SELECT * FROM kb.semantic_concept WHERE id=%s AND library_id=%s "
+            "AND publication<>'withdrawn' LIMIT 1",
+            (concept_id, library_id),
+        )
+        row = cur.fetchone()
+        if row is None:
+            raise AccessDenied("forbidden")
+        return _concept_node(cur, row)
+
+
 def semantic_network(conn, principal, library_id, limit=200):
     if not 1 <= limit <= 500:
         raise ValueError("invalid_graph_limit")
@@ -82,33 +121,7 @@ def semantic_network(conn, principal, library_id, limit=200):
             (library_id, limit + 1),
         )
         rows = cur.fetchall()
-        nodes = []
-        for row in rows[:limit]:
-            evidence = []
-            if row["manifest"] is not None:
-                check_snapshot(cur, row["manifest"])
-                evidence = [validate_citation(cur, row["manifest"], c) for c in row["citations"]]
-            nodes.append(
-                {
-                    "id": "concept:" + str(row["id"]),
-                    "entity_id": row["id"],
-                    "kind": "concept",
-                    "label": row["label"],
-                    "body": row["body"],
-                    "library_id": row["library_id"],
-                    "publication": row["publication"],
-                    "origin": row["origin"],
-                    "version_no": row["version_no"],
-                    "evidence": evidence,
-                    "basis": (
-                        "manual_revision_with_inherited_sources"
-                        if row["origin"] == "manual_revision"
-                        else "source_grounded_draft"
-                        if evidence
-                        else "manual_without_evidence"
-                    ),
-                }
-            )
+        nodes = [_concept_node(cur, row) for row in rows[:limit]]
         ids = [row["id"] for row in rows[:limit]]
         node_hashes = {
             row["id"]: concept_text_hash(row["label"], row["body"]) for row in rows[:limit]
@@ -125,7 +138,7 @@ def semantic_network(conn, principal, library_id, limit=200):
         for row in rels[: limit * 3]:
             evidence = []
             if row["manifest"] is not None:
-                evidence = [validate_citation(cur, row["manifest"], c) for c in row["citations"]]
+                evidence = validate_citations(cur, row["manifest"], row["citations"])
             edges.append(
                 {
                     "id": "relation:" + str(row["id"]),
@@ -188,7 +201,7 @@ def create_concept(conn, principal, library_id, label, body, replaces=None):
         cur.execute(
             """INSERT INTO kb.semantic_concept(id,library_id,principal_id,lineage_id,version_no,
                      label,body,origin,manifest,citations) VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) 
-                     RETURNING id,publication,version_no""",
+            RETURNING id,publication,version_no""",
             (
                 ident,
                 library_id,
