@@ -57,7 +57,8 @@ def test_reused_prepared_connection_observes_policy_grant_and_membership_changes
         )
         assert role() == "reader"
         admin.execute(
-            "UPDATE kb.membership SET status='deactivated',deactivated_at=now(),deactivated_by=principal_id "
+            "UPDATE kb.membership SET status='deactivated',"
+            "deactivated_at=now(),deactivated_by=principal_id "
             "WHERE organisation_id=%s AND principal_id=%s",
             (actor.account_id, actor.principal_id),
         )
@@ -95,7 +96,8 @@ def test_policy_defaults_null_inputs_and_inactive_membership_across_organisation
         other_org = uuid4()
         admin.execute("INSERT INTO kb.organisation(id,name) VALUES(%s,'Fixture')", (other_org,))
         admin.execute(
-            "INSERT INTO kb.membership(organisation_id,principal_id,issuer,subject,status,deactivated_at,deactivated_by) "
+            "INSERT INTO kb.membership(organisation_id,principal_id,issuer,subject,status,"
+            "deactivated_at,deactivated_by) "
             "VALUES(%s,%s,'https://other.identity.test',%s,'deactivated',now(),%s)",
             (other_org, actor.principal_id, str(uuid4()), actor.principal_id),
         )
