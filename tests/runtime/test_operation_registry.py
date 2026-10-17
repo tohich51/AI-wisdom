@@ -137,7 +137,7 @@ def test_registry_is_self_consistent():
 
 
 def test_contract_revision_is_declared():
-    assert CONTRACT_REVISION == "architecture-20261015-v2"
+    assert CONTRACT_REVISION == "architecture-20261015-v3"
 
 
 def test_operation_names_are_unique():

@@ -36,7 +36,7 @@ from typing import Final
 #: Contract revision for the operation declarations below. Bump the patch part
 #: for a wording or docstring edit, the minor part when a declaration is added,
 #: and never silently change an existing (method, path, scope) triple.
-CONTRACT_REVISION: Final[str] = "architecture-20261015-v2"
+CONTRACT_REVISION: Final[str] = "architecture-20261015-v3"
 
 #: The canonical prefix. New clients use it; the schema is served from it.
 API_VERSION: Final[str] = "v1"
