@@ -15,6 +15,7 @@ from mcp.server.mcpserver import Context
 from mcp.server.transport_security import TransportSecuritySettings
 from mcp_types import CallToolResult, TextContent
 from pydantic import AnyHttpUrl, ValidationError
+from starlette.routing import Route
 
 from kb.access.bearer_policy import HANDLER_SCOPES, bearer_principal, require_scope
 from kb.catalog import (
@@ -470,7 +471,7 @@ def build_mcp(app, hosts):
     )
     # Supported action scopes are advertised without requiring every client
     # to hold all of them. The actual tool class is checked on each call.
-    child.routes[:0] = create_protected_resource_routes(
+    metadata_routes = create_protected_resource_routes(
         resource_url=AnyHttpUrl(resource),
         authorization_servers=[AnyHttpUrl(os.environ["KB_OIDC_ISSUER"])],
         scopes_supported=[
@@ -483,4 +484,15 @@ def build_mcp(app, hosts):
             "kb:export",
         ],
     )
+    canonical_route = metadata_routes[0]
+    metadata_root = "/.well-known/oauth-protected-resource"
+    if canonical_route.path != metadata_root:
+        metadata_routes.append(
+            Route(
+                metadata_root,
+                endpoint=canonical_route.endpoint,
+                methods=canonical_route.methods,
+            )
+        )
+    child.routes[:0] = metadata_routes
     return server, child
