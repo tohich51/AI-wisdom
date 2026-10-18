@@ -31,6 +31,14 @@ from psycopg import sql
 from pydantic import BaseModel, ConfigDict, Field
 
 from kb.access.policy import AccessDenied, Principal, transaction_identity
+from kb.catalog.idempotency import (
+    LIBRARY_CREATE,
+    find_create_operation,
+    hash_create_request,
+    lock_create_operation,
+    record_create_operation,
+    validate_idempotency_key,
+)
 from kb.contracts.entities import Grant, Library
 from kb.contracts.enums import LibraryKind, LibraryRole
 
@@ -224,6 +232,7 @@ class CreateLibrary(_Model):
     # readable by everyone invited. Coupling them is the bug this card exists
     # to prevent, not a validation rule.
     audience_scope: AudienceScope = "private"
+    idempotency_key: str | None = Field(default=None, min_length=1, max_length=200)
 
 
 def list_libraries(
@@ -300,6 +309,27 @@ def get_library(conn: psycopg.Connection, principal: Principal, library_id: UUID
     return _library_from_row(row) if row else None
 
 
+def _assert_fresh_library_replay_allowed(
+    cur: psycopg.Cursor, principal: Principal, library_id: UUID
+) -> None:
+    """Recheck the creator's manager right on the replay's current snapshot."""
+    if principal.generation_watermark < 1:
+        raise AccessDenied("forbidden")
+    # Forty is kb.role_rank('manager'). Returning the original entity is not a
+    # new mutation, but it must not become a way around a grant revocation that
+    # happened after the first response was lost.
+    cur.execute(
+        """SELECT 1
+           FROM kb.library l
+           WHERE l.id = %s
+             AND COALESCE(kb.role_rank(kb.effective_role(%s, l.id)), 0) >= 40
+             AND kb.membership_allows(%s)""",
+        (library_id, principal.principal_id, principal.principal_id),
+    )
+    if cur.fetchone() is None:
+        raise AccessDenied("forbidden")
+
+
 def create_library(conn: psycopg.Connection, principal: Principal, spec: CreateLibrary) -> Library:
     """Create a library and make its creator its manager.
 
@@ -312,8 +342,42 @@ def create_library(conn: psycopg.Connection, principal: Principal, spec: CreateL
     does not exist yet has no effective role for anybody, so the runtime role is
     refused. The function is SECURITY DEFINER for that single bootstrap and
     nothing else, and it forces the principal to be the authenticated caller.
+    Its grants and privileges are unchanged by operation idempotency.
+
+    With a key, the advisory lock serializes all attempts for this principal,
+    operation type, and key. The bootstrap insert and the operation receipt are
+    then committed by the same transaction. A keyless call retains the legacy
+    path exactly.
     """
+    key = validate_idempotency_key(spec.idempotency_key)
+    request_digest = (
+        hash_create_request(
+            LIBRARY_CREATE,
+            spec.model_dump(mode="json", exclude={"idempotency_key"}),
+        )
+        if key is not None
+        else None
+    )
+
     with transaction_identity(conn, principal), conn.cursor() as cur:
+        if key is not None:
+            lock_create_operation(cur, principal, LIBRARY_CREATE, key)
+            receipt = find_create_operation(cur, principal, LIBRARY_CREATE, key)
+            if receipt is not None:
+                if receipt.request_hash != request_digest:
+                    raise ValueError("idempotency_conflict")
+                _assert_fresh_library_replay_allowed(cur, principal, receipt.target_id)
+                cur.execute(
+                    sql.SQL("SELECT {} FROM kb.library l WHERE l.id = %s").format(
+                        sql.SQL(_LIB_COLUMNS)
+                    ),
+                    (receipt.target_id,),
+                )
+                replayed = cur.fetchone()
+                if replayed is None:
+                    raise AccessDenied("forbidden")
+                return _library_from_row(replayed)
+
         cur.execute(
             "SELECT kb.create_owned_library(%s, %s, %s::kb.library_kind, %s, %s)",
             (
@@ -325,8 +389,32 @@ def create_library(conn: psycopg.Connection, principal: Principal, spec: CreateL
             ),
         )
         row = cur.fetchone()
-    if row is None:  # pragma: no cover - the function always returns a row
-        raise RuntimeError("create_owned_library returned no id")
+        if row is None:  # pragma: no cover - the function always returns a row
+            raise RuntimeError("create_owned_library returned no id")
+
+        if key is not None:
+            assert request_digest is not None
+            record_create_operation(
+                cur,
+                principal,
+                LIBRARY_CREATE,
+                key,
+                request_digest,
+                row[0],
+            )
+            cur.execute(
+                sql.SQL("SELECT {} FROM kb.library l WHERE l.id = %s").format(
+                    sql.SQL(_LIB_COLUMNS)
+                ),
+                (row[0],),
+            )
+            created_row = cur.fetchone()
+            if created_row is None:  # pragma: no cover - bootstrap inserted it
+                raise RuntimeError(
+                    "library is invisible to its own creator immediately after create"
+                )
+            return _library_from_row(created_row)
+
     created = get_library(conn, principal, row[0])
     if created is None:  # pragma: no cover
         raise RuntimeError("library is invisible to its own creator immediately after create")

@@ -244,6 +244,57 @@ const restoreFocus = (target, routeToken) => queueMicrotask(() => {
   }
   router.focusHeading();
 });
+const createIdempotencyMemos = new Set();
+const clearCreateIdempotencyMemos = () => {
+  for (const memo of createIdempotencyMemos) memo.clear();
+};
+const createIdempotencyMemo = () => {
+  // Tab-local RAM only: no payload, signature or key is written to Web Storage.
+  const pending = new Map();
+  const signatureFor = (scope, payload) => {
+    const binding = identityCoordinates(identity);
+    if (!binding) return null;
+    return JSON.stringify([scope, binding.accountId, binding.principalId, payload]);
+  };
+  const memo = {
+    key(scope, payload) {
+      const signature = signatureFor(scope, payload);
+      if (!signature) throw new Error('Сервер не подтвердил аккаунт и principal. Проверьте вход повторно.');
+      const remembered = pending.get(signature);
+      if (remembered !== undefined) {
+        pending.delete(signature);
+        pending.set(signature, remembered);
+        return remembered;
+      }
+      if (pending.size >= 20) {
+        const oldest = pending.keys().next().value;
+        if (oldest !== undefined) pending.delete(oldest);
+      }
+      const key = uuid();
+      pending.set(signature, key);
+      return key;
+    },
+    settle(scope, payload, key, error = null) {
+      const signature = signatureFor(scope, payload);
+      if (!signature) {
+        pending.clear();
+        return;
+      }
+      const remembered = pending.get(signature);
+      if (remembered !== key) return;
+      // Only an outcome-unknown failure retains the key. Confirmed and
+      // definitive outcomes release it. Nothing here retries automatically.
+      if (error?.outcomeUnknown) {
+        pending.delete(signature);
+        pending.set(signature, remembered);
+      } else pending.delete(signature);
+    },
+    clear() { pending.clear(); }
+  };
+  createIdempotencyMemos.add(memo);
+  return memo;
+};
+const pendingCreateOperation = createIdempotencyMemo();
 const safe = (fn, onError) => {
   let pending = false;
   return async event => {
@@ -1134,7 +1185,18 @@ function ruleEditor(lib, rule) {
     for (const key of ['when_to_apply', 'expected_effect', 'verification']) body[key] ||= null;
     body.fragment_ids = evidence.selectedIds();
     if (!isCurrent()) return;
-    await post('/api/libraries/' + lib.id + '/rules' + (rule ? '?replaces=' + rule.id : ''), body);
+    const scope = 'create-rule:' + lib.id + ':' + (rule ? rule.id + ':' + rule.version_no : 'new');
+    const key = await pendingCreateOperation.key(scope, body);
+    try {
+      await post('/api/libraries/' + lib.id + '/rules' + (rule ? '?replaces=' + rule.id : ''), {
+        ...body,
+        idempotency_key: key
+      });
+    } catch (error) {
+      pendingCreateOperation.settle(scope, body, key, error);
+      throw error;
+    }
+    pendingCreateOperation.settle(scope, body, key);
     if (!isCurrent()) return;
     try {
       await openLibrary(lib);
@@ -1208,7 +1270,19 @@ byId('create-library').addEventListener('submit', safe(async event => {
   }
   data.organisation_id = identity.account_id;
   const project = data.kind === 'project'; if (project) delete data.kind;
-  const result = await post(project ? '/api/projects' : '/api/libraries', data);
+  let result;
+  const scope = project ? 'create-project' : 'create-library';
+  const key = await pendingCreateOperation.key(scope, data);
+  try {
+    result = await post(project ? '/api/projects' : '/api/libraries', {
+      ...data,
+      idempotency_key: key
+    });
+  } catch (error) {
+    pendingCreateOperation.settle(scope, data, key, error);
+    throw error;
+  }
+  pendingCreateOperation.settle(scope, data, key);
   form.reset();
   try {
     await ensureLibraries();
@@ -1471,6 +1545,7 @@ const refreshIdentity = async () => {
     if (!nextBinding) throw new Error('Сервер не подтвердил аккаунт и principal. Проверьте вход повторно.');
     identityChanged = Boolean(authenticatedIdentityBinding && !sameIdentity(authenticatedIdentityBinding, nextBinding));
     if (identityChanged) {
+      clearCreateIdempotencyMemos();
       window.WisdomForms.clearDrafts();
       expiredDraftContext = null;
     }
@@ -1590,6 +1665,7 @@ window.WisdomForms.configureContext(() => {
 window.WisdomData.onBeforeInvalidate(status => {
   freshIdentitySerial++;
   if (status === 401) {
+    clearCreateIdempotencyMemos();
     expiredDraftContext = draftContextInfo();
     window.WisdomForms.snapshotAll();
     window.WisdomForms.suspend();
@@ -1611,6 +1687,7 @@ window.WisdomData.onBeforeInvalidate(status => {
     return;
   }
   if (status === 403) {
+    clearCreateIdempotencyMemos();
     window.WisdomForms.clearDrafts();
     clearPrivateRoots();
     authorizedDraftBinding = null;
@@ -1631,6 +1708,7 @@ byId('check-login')?.addEventListener('click', () => {
 });
 byId('logout')?.addEventListener('click', () => {
   freshIdentitySerial++;
+  clearCreateIdempotencyMemos();
   window.WisdomForms.clearDrafts();
   clearPrivateRoots();
   window.WisdomResearch?.invalidate?.(true);

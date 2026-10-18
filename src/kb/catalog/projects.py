@@ -33,6 +33,14 @@ import psycopg
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from kb.access.policy import AccessDenied, Principal, transaction_identity
+from kb.catalog.idempotency import (
+    PROJECT_CREATE,
+    find_create_operation,
+    hash_create_request,
+    lock_create_operation,
+    record_create_operation,
+    validate_idempotency_key,
+)
 from kb.catalog.libraries import AudienceScope, CreateLibrary
 from kb.contracts.entities import Library, Locator, Provenance, Rule
 from kb.contracts.enums import LibraryKind, PublicationStatus
@@ -54,6 +62,7 @@ class CreateProject(_Model):
     audience_scope: AudienceScope = "private"
     # NULL stays NULL. A project with no description has none.
     description: str | None = Field(default=None, max_length=4000)
+    idempotency_key: str | None = Field(default=None, min_length=1, max_length=200)
 
 
 class ProjectDetail(_Model):
@@ -237,34 +246,93 @@ def _as_rule(row: tuple, actions: list[str]) -> Rule:
     )
 
 
+def _assert_fresh_project_replay_allowed(
+    cur: psycopg.Cursor, principal: Principal, project_id: UUID
+) -> None:
+    """Apply the library replay guard to the project's shared library id."""
+    if principal.generation_watermark < 1:
+        raise AccessDenied("forbidden")
+    cur.execute(
+        """SELECT 1
+           FROM kb.library l
+           WHERE l.id = %s
+             AND COALESCE(kb.role_rank(kb.effective_role(%s, l.id)), 0) >= 40
+             AND kb.membership_allows(%s)""",
+        (project_id, principal.principal_id, principal.principal_id),
+    )
+    if cur.fetchone() is None:
+        raise AccessDenied("forbidden")
+
+
 def create_project(
     conn: psycopg.Connection, principal: Principal, spec: CreateProject
 ) -> ProjectDetail:
     """Create a project as a library of kind 'project' plus its project row.
 
-    Two rows because the audience boundary is the *library* (PRODUCT-SPEC §4:
-    "Начальные типы — разные представления одного механизма хранения"), while
-    the manifest of requirements is project state. They share one id, so the
-    library role is the project role with no mapping table to keep in sync.
+    The library, its creator grant, the project row and an optional receipt are
+    one transaction. The nested library creation is deliberately keyless: a
+    project retry has its own operation type and must never create a second,
+    nested library receipt.
     """
     from kb.catalog.libraries import create_library
 
-    library = create_library(
-        conn,
-        principal,
-        CreateLibrary(
-            organisation_id=spec.organisation_id,
-            name=spec.name,
-            kind=LibraryKind.PROJECT,
-            audience_scope=spec.audience_scope,
-        ),
-    )
-    with transaction_identity(conn, principal), conn.cursor() as cur:
-        cur.execute(
-            "INSERT INTO kb.project (id, description) VALUES (%s, %s)",
-            (library.id, spec.description),
+    key = validate_idempotency_key(spec.idempotency_key)
+    request_digest = (
+        hash_create_request(
+            PROJECT_CREATE,
+            spec.model_dump(mode="json", exclude={"idempotency_key"}),
         )
-    return get_project(conn, principal, library.id)  # type: ignore[return-value]
+        if key is not None
+        else None
+    )
+    target_id: UUID | None = None
+
+    with transaction_identity(conn, principal):
+        if key is not None:
+            assert request_digest is not None
+            with conn.cursor() as cur:
+                lock_create_operation(cur, principal, PROJECT_CREATE, key)
+                receipt = find_create_operation(cur, principal, PROJECT_CREATE, key)
+                if receipt is not None:
+                    if receipt.request_hash != request_digest:
+                        raise ValueError("idempotency_conflict")
+                    _assert_fresh_project_replay_allowed(cur, principal, receipt.target_id)
+                    target_id = receipt.target_id
+
+        if target_id is None:
+            library = create_library(
+                conn,
+                principal,
+                CreateLibrary(
+                    organisation_id=spec.organisation_id,
+                    name=spec.name,
+                    kind=LibraryKind.PROJECT,
+                    audience_scope=spec.audience_scope,
+                    idempotency_key=None,
+                ),
+            )
+            with conn.cursor() as cur:
+                cur.execute(
+                    "INSERT INTO kb.project (id, description) VALUES (%s, %s)",
+                    (library.id, spec.description),
+                )
+                if key is not None:
+                    assert request_digest is not None
+                    record_create_operation(
+                        cur,
+                        principal,
+                        PROJECT_CREATE,
+                        key,
+                        request_digest,
+                        library.id,
+                    )
+            target_id = library.id
+
+    assert target_id is not None
+    result = get_project(conn, principal, target_id)
+    if result is None:
+        raise AccessDenied("forbidden")
+    return result
 
 
 def get_project(

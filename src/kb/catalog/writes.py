@@ -9,6 +9,14 @@ from psycopg.types.json import Jsonb
 from pydantic import BaseModel, ConfigDict, Field
 
 from kb.access.policy import AccessDenied, transaction_identity
+from kb.catalog.idempotency import (
+    RULE_CREATE,
+    find_create_operation,
+    hash_create_request,
+    lock_create_operation,
+    record_create_operation,
+    validate_idempotency_key,
+)
 from kb.catalog.retrieval_events import record_retrieval
 
 
@@ -23,10 +31,56 @@ class RuleInput(BaseModel):
     actions: list[str] = Field(default_factory=list, max_length=20)
     exceptions: list[str] = Field(default_factory=list, max_length=20)
     fragment_ids: list[UUID] = Field(default_factory=list, max_length=20)
+    idempotency_key: str | None = Field(default=None, min_length=1, max_length=200)
+
+
+def _assert_fresh_rule_replay_allowed(cur, principal, library_id: UUID) -> None:
+    """Require contributor authority now, not merely when the receipt was made."""
+    if principal.generation_watermark < 1:
+        raise AccessDenied("forbidden")
+    # Twenty is kb.role_rank('contributor'). The subsequent SELECT is still
+    # governed by normal rule RLS, so this predicate adds the mutation-authority
+    # check that a replay would otherwise skip.
+    cur.execute(
+        """SELECT 1
+           FROM kb.library l
+           WHERE l.id = %s
+             AND COALESCE(kb.role_rank(kb.effective_role(%s, l.id)), 0) >= 20
+             AND kb.membership_allows(%s)""",
+        (library_id, principal.principal_id, principal.principal_id),
+    )
+    if cur.fetchone() is None:
+        raise AccessDenied("forbidden")
 
 
 def create_rule(conn, principal, library_id, body: RuleInput, replaces: UUID | None = None):
+    key = validate_idempotency_key(body.idempotency_key)
+    request_payload = body.model_dump(mode="json", exclude={"idempotency_key"})
+    request_payload["library_id"] = str(library_id)
+    request_payload["replaces"] = str(replaces) if replaces is not None else None
+    request_digest = hash_create_request(RULE_CREATE, request_payload) if key is not None else None
+
     with transaction_identity(conn, principal), conn.cursor(row_factory=dict_row) as cur:
+        if key is not None:
+            # This lock precedes both receipt lookup and lineage/version
+            # allocation. A retry therefore either observes the committed
+            # receipt or performs the whole first attempt; it can never allocate
+            # a second replacement version.
+            lock_create_operation(cur, principal, RULE_CREATE, key)
+            receipt = find_create_operation(cur, principal, RULE_CREATE, key)
+            if receipt is not None:
+                if receipt.request_hash != request_digest:
+                    raise ValueError("idempotency_conflict")
+                _assert_fresh_rule_replay_allowed(cur, principal, library_id)
+                cur.execute(
+                    "SELECT * FROM kb.rule WHERE id=%s AND library_id=%s",
+                    (receipt.target_id, library_id),
+                )
+                replayed = cur.fetchone()
+                if replayed is None:
+                    raise AccessDenied("forbidden")
+                return dict(replayed)
+
         lineage, version = None, 1
         if replaces:
             cur.execute(
@@ -76,6 +130,16 @@ def create_rule(conn, principal, library_id, body: RuleInput, replaces: UUID | N
                 """INSERT INTO kb.rule_provenance(rule_id,source_id,fragment_id)
               VALUES(%s,%s,%s) ON CONFLICT DO NOTHING""",
                 (ident, row["source_id"], fragment),
+            )
+        if key is not None:
+            assert request_digest is not None
+            record_create_operation(
+                cur,
+                principal,
+                RULE_CREATE,
+                key,
+                request_digest,
+                ident,
             )
         return result
 
