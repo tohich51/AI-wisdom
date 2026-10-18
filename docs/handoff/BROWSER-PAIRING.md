@@ -36,3 +36,17 @@ actual same-realm Keycloak exchange, independent MiniMax and Sol source gates,
 fresh encrypted off-host backup plus same-copy restore, exact-image rollout,
 then actual owner MCP approval and rendered browser sign-in. TestClient/API
 evidence alone does not establish browser acceptance or 2–3 second cold loading.
+
+
+Admission is bounded under a database advisory lock across gateway replicas:
+64 new requests per minute and 128 unexpired rows in total. Completed/cancelled
+rows remain only until their original 120-second deadline. The gateway purges
+expired pairing state every 60 seconds and on creation. A transient cleanup
+failure emits a fixed warning and retries next interval; no credentials are
+logged. This bounds the feature's writes/storage and does not claim protection
+against every network denial-of-service scenario.
+
+For rollback to code predating scope ceilings, revoke only derived browser
+sessions (`authority_scopes IS NOT NULL`) and cancel pending pairings before
+starting the older image. Keep ordinary interactive sessions and additive DDL.
+Otherwise older code could ignore the new per-session scope restriction.

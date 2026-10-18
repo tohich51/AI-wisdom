@@ -35,8 +35,9 @@ from kb.domain.tiers import UsageState
 
 def test_original_and_research_studio_graph_tools_are_declared():
     assert set(MCP_TOOLS) == EXPECTED_TOOLS
-    assert len(MCP_TOOLS) == 34
+    assert len(MCP_TOOLS) == 35
     assert {
+        "approve_browser_login",
         "refresh_concept_similarity",
         "start_research",
         "research_status",

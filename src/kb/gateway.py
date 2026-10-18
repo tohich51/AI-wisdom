@@ -1,6 +1,8 @@
 """FastAPI application factory for the knowledge-base gateway."""
 
+import datetime as dt
 import hashlib
+import logging
 import os
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -43,6 +45,21 @@ def _database_not_ready() -> JSONResponse:
     )
 
 
+_PAIRING_PURGE_LOGGER = logging.getLogger(__name__)
+
+
+async def _purge_browser_pairings(app: FastAPI) -> None:
+    def purge() -> None:
+        app.state.session_store.purge_browser_pairings(now=dt.datetime.now(dt.UTC))
+
+    while True:
+        try:
+            await anyio.to_thread.run_sync(purge)
+        except Exception:
+            _PAIRING_PURGE_LOGGER.warning("browser_pairing_purge_failed")
+        await anyio.sleep(60)
+
+
 def create_app() -> FastAPI:
     _validate_semantic_configuration()
 
@@ -81,8 +98,13 @@ def create_app() -> FastAPI:
                         os.environ["KB_OPENVIKING_URL"], Path(os.environ["KB_READ_KEYS_ROOT"])
                     )
                 )
-            async with mcp_server.session_manager.run():
-                yield
+            async with anyio.create_task_group() as task_group:
+                task_group.start_soon(_purge_browser_pairings, app)
+                try:
+                    async with mcp_server.session_manager.run():
+                        yield
+                finally:
+                    task_group.cancel_scope.cancel()
         finally:
             # The semantic service owns pooled index clients and the event
             # loop that drives them. Nothing else in this process knows about

@@ -88,6 +88,10 @@ SUPPORTED_AUTHORITY_SCOPES: Final[frozenset[str]] = frozenset(
     {"kb:read", "kb:contribute", "kb:experience", "kb:export", "kb:admin"}
 )
 _BROWSER_PAIRING_TTL: Final = dt.timedelta(seconds=120)
+# ASCII "KBP_PAIR" in PostgreSQL's process-global advisory-lock keyspace.
+_BROWSER_PAIRING_ADVISORY_LOCK: Final[int] = 0x4B42505F50414952
+_BROWSER_PAIRING_RATE_LIMIT: Final[int] = 64
+_BROWSER_PAIRING_ROW_LIMIT: Final[int] = 128
 #: RFC 7636 §4.1 allows 43..128 characters. 64 random bytes -> 86 base64url
 #: characters, inside the window.
 _VERIFIER_BYTES: Final[int] = 64
@@ -108,6 +112,10 @@ class SessionIdentityIncomplete(Exception):
 
 class LoginTransactionInvalid(Exception):
     """Unknown, expired or already-consumed ``state``."""
+
+
+class BrowserPairingBusy(Exception):
+    """The bounded browser-pairing admission limit is currently reached."""
 
 
 class SessionLeaseMisuse(Exception):
@@ -847,11 +855,42 @@ class SessionStore:
         now = _aware_datetime(now, "now")
         if return_to is not None and not isinstance(return_to, str):
             raise ValueError("return_to_must_be_string_or_null")
-        pairing_id = uuid4()
-        nonce = new_nonce()
-        binding = new_browser_binding()
-        expires_at = now + _BROWSER_PAIRING_TTL
-        with self._connection() as conn, conn.cursor() as cur:
+        with self._connection() as conn, conn.transaction(), conn.cursor() as cur:
+            cur.execute(
+                "SELECT pg_advisory_xact_lock(%s)",
+                (_BROWSER_PAIRING_ADVISORY_LOCK,),
+            )
+            cur.execute(
+                """
+                DELETE FROM kb.browser_pairing
+                 WHERE expires_at <= %(now)s
+                """,
+                {"now": now},
+            )
+            cur.execute(
+                """
+                SELECT
+                    count(*) FILTER (
+                        WHERE created_at >= %(now)s - interval '60 seconds'
+                          AND created_at <= %(now)s
+                    ) AS recent_count,
+                    count(*) FILTER (WHERE expires_at > %(now)s) AS live_count
+                  FROM kb.browser_pairing
+                """,
+                {"now": now},
+            )
+            counts = cur.fetchone()
+            recent_count, live_count = counts["recent_count"], counts["live_count"]
+            if (
+                recent_count >= _BROWSER_PAIRING_RATE_LIMIT
+                or live_count >= _BROWSER_PAIRING_ROW_LIMIT
+            ):
+                raise BrowserPairingBusy
+
+            pairing_id = uuid4()
+            nonce = new_nonce()
+            binding = new_browser_binding()
+            expires_at = now + _BROWSER_PAIRING_TTL
             cur.execute(
                 """
                 INSERT INTO kb.browser_pairing (
@@ -1029,6 +1068,19 @@ class SessionStore:
             )
             return cur.rowcount == 1
 
+    def purge_browser_pairings(self, *, now: dt.datetime) -> int:
+        """Drop expired pairings while retaining every unexpired terminal row."""
+        now = _aware_datetime(now, "now")
+        with self._connection() as conn, conn.cursor() as cur:
+            cur.execute(
+                """
+                DELETE FROM kb.browser_pairing
+                 WHERE expires_at <= %(now)s
+                """,
+                {"now": now},
+            )
+            return cur.rowcount
+
     def purge(self, *, now: dt.datetime) -> int:
         """Drop rows that can no longer authenticate anything.
 
@@ -1045,7 +1097,9 @@ class SessionStore:
                 """,
                 {"now": now},
             )
-            return cur.rowcount
+            session_count = cur.rowcount
+        pairing_count = self.purge_browser_pairings(now=now)
+        return session_count + pairing_count
 
 
 def _split_cookie(cookie_value: str | None) -> tuple[UUID, str]:

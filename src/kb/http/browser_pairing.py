@@ -21,7 +21,7 @@ from starlette.concurrency import run_in_threadpool
 from kb.access.bearer_policy import bearer_principal, require_scope
 from kb.access.identity import MAX_TOKEN_CHARS, IdentityRejected
 from kb.access.policy import AccessDenied, Principal
-from kb.access.session import SessionMissing, SessionStore
+from kb.access.session import BrowserPairingBusy, SessionMissing, SessionStore
 from kb.http.auth_config import AuthSettings, safe_return_target
 from kb.http.auth_routes import session_cookie_name, set_session_cookies
 from kb.runtime_identity import assert_active_membership
@@ -238,6 +238,10 @@ def _build_auth_router(
 
         try:
             pairing = await run_in_threadpool(start)
+        except BrowserPairingBusy:
+            response = _error("browser_pairing_busy", 429)
+            response.headers["Retry-After"] = "60"
+            return response
         except _LiveSession:
             return _error("browser_login_session_exists", 409)
         response = _json_response(

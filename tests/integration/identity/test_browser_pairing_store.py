@@ -13,7 +13,7 @@ from psycopg.rows import dict_row
 from starlette.requests import Request
 
 from kb.access.identity import VerifiedIdentity
-from kb.access.session import CSRF_HEADER, SessionStore
+from kb.access.session import CSRF_HEADER, BrowserPairingBusy, SessionStore
 from kb.runtime_identity import create_resolver
 
 pytestmark = pytest.mark.integration
@@ -494,3 +494,28 @@ def test_resolver_refuses_every_operation_outside_derived_read_ceiling(
     with pytest.raises(HTTPException) as rejected:
         resolve(request)
     assert rejected.value.status_code == 403
+
+
+def test_pairing_admission_is_atomic_bounded_and_expired_rows_are_purged(make_store):
+    # Move beyond all earlier synthetic challenges in this shared fixture DB.
+    now = dt.datetime.now(UTC) + dt.timedelta(hours=1)
+    store = make_store("pairing-quota")
+    for _ in range(63):
+        store.begin_browser_pairing(return_to=None, now=now)
+    barrier = threading.Barrier(2)
+
+    def begin(index):
+        barrier.wait(timeout=10)
+        try:
+            make_store(f"pairing-quota-{index}").begin_browser_pairing(return_to=None, now=now)
+            return True
+        except BrowserPairingBusy:
+            return False
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        assert sorted(pool.map(begin, (0, 1))) == [False, True]
+    with pytest.raises(BrowserPairingBusy):
+        store.begin_browser_pairing(return_to=None, now=now)
+    assert store.purge_browser_pairings(now=now + dt.timedelta(seconds=119)) == 0
+    assert store.purge_browser_pairings(now=now + dt.timedelta(seconds=120)) == 64
+    assert store.begin_browser_pairing(return_to=None, now=now + dt.timedelta(seconds=120))
