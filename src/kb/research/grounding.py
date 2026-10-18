@@ -270,10 +270,10 @@ def validate_graph_citations(
 
     from psycopg.types.json import Jsonb
 
-    requests = {}
+    requests: dict[tuple[UUID, UUID, UUID], None] = {}
     occurrences = []
-    unique_manifests = {}
-    validated = [[] for _ in records]
+    unique_manifests: dict[str, dict] = {}
+    validated: list[list[dict]] = [[] for _ in records]
     try:
         for index, (manifest, citations) in enumerate(records):
             if manifest is None:
