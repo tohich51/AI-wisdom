@@ -22,6 +22,7 @@ const node = (tag, text, attrs = {}) => {
 window.WisdomForms.configure(node);
 document.querySelectorAll('main form').forEach(form => window.WisdomForms.enhance(form));
 let identity, selected, libraries = [], activeJob, libraryView = 0, sourceViewSerial = 0, sourceViewController, searchSerial = 0, searchController, latestClickTrigger = null;
+let jobPollEpoch = 0, jobPollOwner = null;
 let libraryReadSerial = 0, usesReadSerial = 0;
 let privateDialogInvalidators = new Set();
 let authenticatedIdentityBinding = null;
@@ -159,10 +160,15 @@ const SOURCE_PROCESSING_LABELS = new Map([
   ['failed', 'Ошибка обработки'],
   ['done', 'Готово']
 ]);
+const JOB_STATUS_LABELS = new Map([
+  ...SOURCE_PROCESSING_LABELS,
+  ['cancelled', 'Отменено']
+]);
 const visibleEnum = (labels, value, missing = 'не указан') => {
   const text = String(value ?? '');
   return labels.get(text) || (!text.trim() ? missing : 'Неизвестное значение (' + text + ')');
 };
+const jobStatusLabel = value => visibleEnum(JOB_STATUS_LABELS, value);
 const SOURCE_PAGE_SIZE = 200;
 const SOURCE_AUTO_SEARCH_PAGES = 3;
 const SOURCE_REQUEST_TIMEOUT_MS = 12000;
@@ -190,7 +196,19 @@ function cancelSourceView() {
   document.querySelectorAll('dialog[data-wisdom-source-view]').forEach(dialog => dialog.close());
   if (sourceViewController === active) sourceViewController = null;
 }
+const cancelJobPoll = () => {
+  const owner = jobPollOwner;
+  jobPollEpoch++;
+  if (owner) {
+    owner.controller.abort();
+    if (owner.timer !== null) clearTimeout(owner.timer);
+    owner.timer = null;
+  }
+  jobPollOwner = null;
+  activeJob = null;
+};
 const clearPrivateRoots = () => {
+  cancelJobPoll();
   invalidatePrivateDialogs();
   if (typeof window.WisdomCompletion?.invalidate === 'function') window.WisdomCompletion.invalidate();
   if (typeof window.WisdomResearch?.invalidate === 'function') window.WisdomResearch.invalidate();
@@ -404,10 +422,13 @@ const pagedList = (root, title, path, key, options) => {
 };
 // Адрес библиотеки не должен терять подраздел: /app/libraries/<id>/sources
 // остаётся собой и после перезагрузки, и после перерисовки того же экрана.
-const libraryRoute = (id, {replace = false} = {}) => {
+const libraryRouteTarget = id => {
   const here = String(location.pathname).match(/^\/app\/libraries\/([^/]+)\/(sources|knowledge|rules)$/);
   const section = here && here[1] === id ? here[2] : null;
-  const target = router.path('libraries', section ? [id, section] : [id]);
+  return router.path('libraries', section ? [id, section] : [id]);
+};
+const libraryRoute = (id, {replace = false} = {}) => {
+  const target = libraryRouteTarget(id);
   if (location.pathname + location.search === target) return;
   router.navigate(target, {replace});
 };
@@ -438,21 +459,121 @@ async function loadLibraries() {
 // делает только слой данных (кэш и объединение одинаковых чтений).
 const ensureLibraries = () => loadLibraries();
 const sourceProcessRequests = new Map();
-async function trackJob(id) {
-  activeJob = id;
-  const job = await api('/api/jobs/' + id);
-  const statusLabel=visibleEnum(SOURCE_PROCESSING_LABELS, job.status);
-  const doneText=job.chunks_done == null ? '' : ' · готово: '+job.chunks_done;
-  const totalText=job.chunks_total == null ? '' : ' · всего: '+job.chunks_total;
-  const errorText=job.error_code ? ' · код ошибки: '+job.error_code : '';
-  message('Состояние: '+statusLabel+doneText+totalText+errorText);
-  if (['done', 'partial', 'failed', 'needs_ocr', 'cancelled'].includes(job.status)) {
-    activeJob = null;
-    await openLibrary(selected);
-    message(job.status === 'done' ? 'Материал обработан. Проверьте черновики перед публикацией.' : 'Состояние: '+statusLabel+errorText+'. Можно продолжить; готовые части сохраняются.');
-  } else setTimeout(() => { if (activeJob === id) safe(() => trackJob(id))(); }, 3000);
+const captureJobPollContext = () => {
+  const binding = identityCoordinates(identity);
+  const libraryId = selected?.id == null ? '' : String(selected.id);
+  const routeToken = captureRouteToken();
+  const route = routeSnapshot();
+  const section = route?.params[1];
+  const onLibraryRoute = route?.name === 'libraries'
+    && route.params[0] === libraryId
+    && (route.params.length === 1
+      || (route.params.length === 2 && ['sources', 'knowledge', 'rules'].includes(section)));
+  if (!binding || !libraryId || routeToken == null || !onLibraryRoute) return null;
+  return Object.freeze({
+    accountId: binding.accountId,
+    principalId: binding.principalId,
+    libraryId,
+    libraryPath: route.route,
+    routeToken
+  });
+};
+const jobPollContextCurrent = context => {
+  const binding = identityCoordinates(identity);
+  return Boolean(
+    context && binding
+    && binding.accountId === context.accountId && binding.principalId === context.principalId
+    && String(selected?.id ?? '') === context.libraryId
+    && isRouteCurrent(context.routeToken) && location.pathname === context.libraryPath
+  );
+};
+async function trackJob(id, context) {
+  if (!jobPollContextCurrent(context))
+    throw new DOMException('Контекст отслеживания задания устарел.', 'AbortError');
+  cancelJobPoll();
+  if (!jobPollContextCurrent(context))
+    throw new DOMException('Контекст отслеживания задания устарел.', 'AbortError');
+  const jobId = String(id);
+  const controller = new AbortController();
+  const owner = {
+    epoch: jobPollEpoch,
+    id: jobId,
+    accountId: context.accountId,
+    principalId: context.principalId,
+    libraryId: context.libraryId,
+    libraryPath: context.libraryPath,
+    routeToken: context.routeToken,
+    context,
+    terminalPath: null,
+    terminalRouteToken: null,
+    controller,
+    timer: null,
+    phase: 'polling'
+  };
+  jobPollOwner = owner;
+  activeJob = jobId;
+  const current = () => {
+    const binding = identityCoordinates(identity);
+    const originalRoute = isRouteCurrent(owner.routeToken) && location.pathname === owner.libraryPath;
+    const terminalRoute = owner.phase === 'terminal'
+      && owner.terminalRouteToken !== null
+      && isRouteCurrent(owner.terminalRouteToken)
+      && location.pathname === owner.terminalPath;
+    return jobPollOwner === owner
+      && owner.epoch === jobPollEpoch
+      && !controller.signal.aborted
+      && binding?.accountId === owner.accountId
+      && binding?.principalId === owner.principalId
+      && String(selected?.id ?? '') === owner.libraryId
+      && (originalRoute || terminalRoute);
+  };
+  const requireCurrent = () => {
+    if (!current()) throw new DOMException('Отслеживание задания отменено.', 'AbortError');
+  };
+  try {
+    const job = await api('/api/jobs/' + jobId, {signal: controller.signal});
+    requireCurrent();
+    const statusLabel = jobStatusLabel(job.status);
+    const doneText = job.chunks_done == null ? '' : ' · готово: ' + job.chunks_done;
+    const totalText = job.chunks_total == null ? '' : ' · всего: ' + job.chunks_total;
+    const errorText = job.error_code ? ' · код ошибки: ' + job.error_code : '';
+    requireCurrent();
+    message('Состояние: ' + statusLabel + doneText + totalText + errorText);
+    requireCurrent();
+    if (['done', 'partial', 'failed', 'needs_ocr', 'cancelled'].includes(job.status)) {
+      requireCurrent();
+      const library = selected;
+      owner.phase = 'terminal';
+      owner.terminalPath = libraryRouteTarget(owner.libraryId);
+      const refresh = openLibrary(library, {guard: current});
+      const terminalToken = captureRouteToken();
+      if (terminalToken !== owner.routeToken && terminalToken != null) owner.terminalRouteToken = terminalToken;
+      requireCurrent();
+      await refresh;
+      requireCurrent();
+      message(job.status === 'done'
+        ? 'Материал обработан. Проверьте черновики перед публикацией.'
+        : 'Состояние: ' + statusLabel + errorText + '. Можно продолжить; готовые части сохраняются.');
+      cancelJobPoll();
+    } else {
+      requireCurrent();
+      owner.timer = setTimeout(() => {
+        owner.timer = null;
+        if (!current()) {
+          if (jobPollOwner === owner) cancelJobPoll();
+          return;
+        }
+        safe(() => trackJob(owner.id, owner.context))();
+      }, 3000);
+    }
+  } catch (error) {
+    if (!current()) throw new DOMException('Отслеживание задания отменено.', 'AbortError');
+    cancelJobPoll();
+    throw error;
+  }
 }
 async function processSource(id, extract, request = null, onJobConfirmed = null) {
+  const pollContext = captureJobPollContext();
   const requestKey = String(id) + '|' + (extract ? '1' : '0');
   const suppliedRequest = request && typeof request === 'object'
     ? request
@@ -486,7 +607,7 @@ async function processSource(id, extract, request = null, onJobConfirmed = null)
   pendingRequest.idempotency_key = null;
   suppliedRequest.idempotency_key = null;
   onJobConfirmed?.(pendingRequest.job_id);
-  await trackJob(pendingRequest.job_id);
+  await trackJob(pendingRequest.job_id, pollContext);
 }
 async function viewSource(id, options = {}) {
   sourceViewController?.abort();
@@ -1187,7 +1308,7 @@ window.WisdomForms.submit(searchForm, async event => {
   }
 });
 byId('logout').addEventListener('click', safe(async () => { await post('/auth/logout'); location.reload(); }));
-const featureHost={node,button,api,post,notify:message,confirm:confirmDialog,libraries:()=>libraries,currentLibrary:()=>selected,identity:()=>identity,
+const featureHost={node,button,api,post,notify:message,confirm:confirmDialog,libraries:()=>libraries,currentLibrary:()=>selected,identity:()=>identity,jobStatusLabel,
   routeToken:captureRouteToken,routeIsCurrent:isRouteCurrent,
   refreshLibrary:()=>selected?openLibrary(selected):Promise.resolve(),
   openSource:viewSource,
@@ -1304,8 +1425,9 @@ const initializeIdentity = () => {
   })();
   identityReady = pending;
   pending.catch(error => {
-    if (identityReady === pending) identityReady = null;
-    message(error.message);
+    if (identityReady !== pending) return;
+    identityReady = null;
+    if (error?.name !== 'AbortError') message(error.message);
   });
   return pending;
 };
@@ -1634,6 +1756,9 @@ function clearRouteFailure(target) {
 router.onChange((current, previous, error) => {
   const navigated = Boolean(previous && current && previous.token !== current.token);
   if (navigated && !error) {
+    if (jobPollOwner?.phase === 'terminal' && routeSnapshot()?.route === jobPollOwner.terminalPath)
+      jobPollOwner.terminalRouteToken = current.token;
+    else cancelJobPoll();
     authorizedDraftBinding = null;
     window.WisdomForms.refreshRecovery();
     invalidatePrivateDialogs();

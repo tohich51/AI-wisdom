@@ -93,7 +93,7 @@
     }
   }
 
-  async function fetchJson(path, options = {}, startGeneration = null) {
+  async function fetchJson(path, options = {}, startGeneration) {
     const headers = new Headers(options.headers);
     if (options.body && !(options.body instanceof FormData)) headers.set('Content-Type', 'application/json');
     const method = (options.method || 'GET').toUpperCase();
@@ -133,7 +133,7 @@
         // Отказ чтения, устаревшего к моменту ответа, не должен рушить экран,
         // который его заменил: повторная инвалидация стёрла бы свежий кэш
         // следующего экрана, а сообщение о доступе показалось бы не там.
-        if (startGeneration === null || startGeneration === generation) {
+        if (startGeneration === generation) {
           // 401 обязан снять пользовательские правки до закрытия private dialogs.
           // 403, наоборот, должен забыть их до любого закрытия или reload.
           notifyBeforeInvalidation(response.status);
@@ -181,12 +181,23 @@
   };
 
   async function api(path, options = {}) {
+    const started = generation;
     const method = (options.method || 'GET').toUpperCase();
+    const read = method === 'GET' || method === 'HEAD';
+    const rejectStaleRead = () => {
+      if (read && started !== generation) {
+        stats.staleDrops++;
+        throw new DOMException('Ответ чтения устарел.', 'AbortError');
+      }
+    };
+    const deliverRead = promise => withSignal(promise, options.signal).then(
+      value => { rejectStaleRead(); return value; },
+      error => { rejectStaleRead(); throw error; }
+    );
     const key = method === 'GET' && !options.noCache ? keyFor(path) : null;
     if (key !== null) {
       const hit = cache.get(key);
-      if (hit && Date.now() - hit.at < TTL) { stats.hits++; return withSignal(Promise.resolve(hit.value), options.signal); }
-      const started = generation;
+      if (hit && Date.now() - hit.at < TTL) { stats.hits++; return deliverRead(Promise.resolve(hit.value)); }
       let shared = inflight.get(key);
       // Присоединяться к чтению, начатому до последней инвалидации, нельзя:
       // вызывающий получил бы значение, предшествующее записи или отказу.
@@ -196,7 +207,7 @@
         stats.misses++;
         const request = fetchJson(path, {headers: options.headers}, started)
           .then(value => {
-            // В кэш попадает только ответ, начатый в текущем поколении.
+            // Кэш получает только текущее поколение; выдачу проверяет deliverRead.
             if (started === generation) cache.set(key, {value, at: Date.now(), scope: scopeOf(path)});
             return value;
           })
@@ -207,16 +218,18 @@
         inflight.set(key, request);
         shared = request;
       }
-      return withSignal(shared, options.signal);
+      return deliverRead(shared);
     }
     let value;
     try {
-      value = await fetchJson(path, options);
+      value = await fetchJson(path, options, started);
     } catch (error) {
+      rejectStaleRead();
       if (method !== 'GET' && method !== 'HEAD' && error?.outcomeUnknown)
         invalidate('ambiguous ' + method + ' ' + pathname(path));
       throw error;
     }
+    rejectStaleRead();
     if (method !== 'GET' && method !== 'HEAD') invalidate(method + ' ' + pathname(path));
     return value;
   }

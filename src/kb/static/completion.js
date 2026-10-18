@@ -123,18 +123,9 @@
       if (!current() || dataGeneration !== window.WisdomData.generation()) return;
       const list = el('div', null, {class: 'completion-grid'});
       if (!jobs.length) empty(list, 'Заданий пока нет. Они появятся после обработки источника.');
-      const statusLabels=new Map([
-        ['queued','В очереди'],
-        ['running','Обрабатывается'],
-        ['done','Готово'],
-        ['partial','Готово частично'],
-        ['failed','Ошибка обработки'],
-        ['needs_ocr','Требуется распознавание текста'],
-        ['cancelled','Отменено']
-      ]);
       const jobCard = job => {
         const box = card(job.title || 'Материал без названия');
-        const status=statusLabels.get(job.status) || ('неизвестный статус ('+String(job.status)+')');
+        const status = host.jobStatusLabel(job.status);
         box.append(el('p', 'Состояние: ' + status));
         const chunks=[];
         if (job.chunks_done != null) chunks.push('Готовые части: '+job.chunks_done);
