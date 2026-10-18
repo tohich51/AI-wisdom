@@ -46,7 +46,7 @@
     outcomeField.append(host.node('label', 'Какой именно результат', {for: outcomeSelect.id}), outcomeSelect);
     controls.append(useField, outcomeField);
 
-    const review = host.node('div', null, {class: 'completion-form', 'aria-live': 'polite'});
+    const review = host.node('div', null, {class: 'completion-form'});
     const reviewButton = host.button('Проверить выбранную копию', () => showReview());
     const publishButton = host.button('Опубликовать копию в проекте', () => publish());
     publishButton.disabled = true;
@@ -80,7 +80,7 @@
       reviewState = null;
       publishButton.disabled = true;
       reviewButton.disabled = posting;
-      review.querySelector('[data-shared-review]')?.remove();
+      review.querySelectorAll('[data-shared-review]').forEach(node => node.remove());
     }
     function selected() {
       const use = ownUses.find(item => item.id === useSelect.value);
@@ -121,7 +121,7 @@
         reviewButton.disabled = false;
         return;
       }
-      message.remove();
+      message.textContent = 'Проверка завершена. Выбранная копия готова к публикации.';
       const details = host.node('div', null, {class: 'completion-grid', 'data-shared-review': ''});
       details.append(host.node('p', 'Проверьте точную копию перед публикацией. Будущие исправления вашей личной записи останутся приватными, пока вы не опубликуете их отдельно.', {class: 'muted'}));
       appendFieldCard(details, 'Библиотека', latest.library.name || latest.library.title || latest.library.id);
