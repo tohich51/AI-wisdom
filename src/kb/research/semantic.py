@@ -7,7 +7,12 @@ from psycopg.rows import dict_row
 from psycopg.types.json import Jsonb
 
 from kb.access.policy import AccessDenied, transaction_identity
-from kb.research.grounding import check_snapshot, validate_citation, validate_citations
+from kb.research.grounding import (
+    check_snapshot,
+    validate_citation,
+    validate_citations,
+    validate_graph_citations,
+)
 from kb.research.runs import _library
 
 
@@ -69,10 +74,11 @@ def import_network(cur, principal, library_id, run_id, manifest, result):
         )
 
 
-def _concept_node(cur, row):
-    evidence = []
-    if row["manifest"] is not None:
-        evidence = validate_citations(cur, row["manifest"], row["citations"])
+def _concept_node(cur, row, evidence=None):
+    if evidence is None:
+        evidence = []
+        if row["manifest"] is not None:
+            evidence = validate_citations(cur, row["manifest"], row["citations"])
     return {
         "id": "concept:" + str(row["id"]),
         "entity_id": row["id"],
@@ -121,10 +127,10 @@ def semantic_network(conn, principal, library_id, limit=200):
             (library_id, limit + 1),
         )
         rows = cur.fetchall()
-        nodes = [_concept_node(cur, row) for row in rows[:limit]]
-        ids = [row["id"] for row in rows[:limit]]
+        selected_rows = rows[:limit]
+        ids = [row["id"] for row in selected_rows]
         node_hashes = {
-            row["id"]: concept_text_hash(row["label"], row["body"]) for row in rows[:limit]
+            row["id"]: concept_text_hash(row["label"], row["body"]) for row in selected_rows
         }
         cur.execute(
             """SELECT * FROM kb.semantic_relation WHERE library_id=%s
@@ -134,11 +140,18 @@ def semantic_network(conn, principal, library_id, limit=200):
             (library_id, ids, ids, limit * 3 + 1),
         )
         rels = cur.fetchall()
+        selected_rels = rels[: limit * 3]
+        similarity = similarity_layer(cur, principal, library_id, node_hashes, limit)
+
+        records = [(row["manifest"], row["citations"]) for row in selected_rows]
+        records.extend((row["manifest"], row["citations"]) for row in selected_rels)
+        prevalidated = validate_graph_citations(cur, records)
+        nodes = [
+            _concept_node(cur, row, evidence)
+            for row, evidence in zip(selected_rows, prevalidated[: len(selected_rows)], strict=True)
+        ]
         edges = []
-        for row in rels[: limit * 3]:
-            evidence = []
-            if row["manifest"] is not None:
-                evidence = validate_citations(cur, row["manifest"], row["citations"])
+        for row, evidence in zip(selected_rels, prevalidated[len(selected_rows) :], strict=True):
             edges.append(
                 {
                     "id": "relation:" + str(row["id"]),
@@ -160,7 +173,6 @@ def semantic_network(conn, principal, library_id, limit=200):
                     ),
                 }
             )
-        similarity = similarity_layer(cur, principal, library_id, node_hashes, limit)
         return {
             "nodes": nodes,
             "edges": edges,

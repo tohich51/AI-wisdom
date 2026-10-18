@@ -261,3 +261,96 @@ def validate_citations(cur: Any, manifest: dict, citations: list[dict]) -> list[
             raise ValueError("invalid_citation") from exc
     check_snapshot(cur, manifest)
     return validated
+
+
+def validate_graph_citations(
+    cur: Any, records: list[tuple[dict | None, list[dict]]]
+) -> list[list[dict]]:
+    import json
+
+    from psycopg.types.json import Jsonb
+
+    requests = {}
+    occurrences = []
+    unique_manifests = {}
+    validated = [[] for _ in records]
+    try:
+        for index, (manifest, citations) in enumerate(records):
+            if manifest is None:
+                continue
+            unique_manifests.setdefault(json.dumps(manifest, sort_keys=True), manifest)
+            for citation in citations:
+                fragment_id = UUID(citation["fragment_id"])
+                pin = next(
+                    (
+                        value
+                        for value in manifest["fragments"]
+                        if value["fragment_id"] == str(fragment_id)
+                    ),
+                    None,
+                )
+                if pin is None:
+                    raise ValueError("invalid_citation")
+                source = next(
+                    value for value in manifest["sources"] if value["source_id"] == pin["source_id"]
+                )
+                key = (
+                    UUID(pin["source_id"]),
+                    UUID(source["source_version_id"]),
+                    UUID(pin["fragment_id"]),
+                )
+                requests[key] = None
+                occurrences.append((index, citation, pin, source, key))
+    except (AttributeError, KeyError, StopIteration, TypeError) as exc:
+        raise ValueError("invalid_citation") from exc
+
+    keys = list(requests)
+    cur.execute(
+        """WITH requested AS (
+             SELECT DISTINCT source_id,source_version_id,fragment_id
+             FROM unnest(%s::uuid[],%s::uuid[],%s::uuid[])
+               AS u(source_id,source_version_id,fragment_id)
+           )
+           SELECT f.*,s.title,s.author,s.edition,s.publication_ref,s.content_hash,
+             v.id AS source_version_id
+           FROM requested r
+           JOIN kb.fragment f ON f.id=r.fragment_id AND f.source_id=r.source_id
+           JOIN kb.source s ON s.id=r.source_id AND s.publication<>'withdrawn'
+           JOIN kb.source_version v ON v.source_id=s.id AND v.id=r.source_version_id""",
+        (
+            [key[0] for key in keys],
+            [key[1] for key in keys],
+            [key[2] for key in keys],
+        ),
+    )
+    canonical = {}
+    for row in cur.fetchall():
+        key = (row["source_id"], row["source_version_id"], row["id"])
+        if key in canonical:
+            raise AccessDenied("forbidden")
+        canonical[key] = (row, _hash(row["text"]))
+    if set(canonical) != set(requests):
+        raise AccessDenied("forbidden")
+
+    try:
+        for index, citation, pin, source, key in occurrences:
+            row, digest = canonical[key]
+            if digest != pin["text_hash"]:
+                raise AccessDenied("forbidden")
+            validated[index].append(_validate_citation_fields(citation, row, pin, source))
+    except (AttributeError, KeyError, StopIteration, TypeError) as exc:
+        raise ValueError("invalid_citation") from exc
+
+    cur.execute(
+        """SELECT kb.can_read_manifest(item.manifest) AS allowed
+           FROM jsonb_array_elements(%s::jsonb) AS item(manifest)""",
+        (Jsonb(list(unique_manifests.values())),),
+    )
+    checks = cur.fetchall()
+    try:
+        allowed = [check["allowed"] if isinstance(check, dict) else check[0] for check in checks]
+    except (IndexError, KeyError, TypeError) as exc:
+        raise AccessDenied("forbidden") from exc
+    if len(allowed) != len(unique_manifests) or any(value is not True for value in allowed):
+        raise AccessDenied("forbidden")
+    return validated
