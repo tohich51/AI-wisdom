@@ -5,7 +5,7 @@ from typing import Literal
 from uuid import UUID
 
 from mcp.server.mcpserver import Context
-from mcp.types import CallToolResult, TextContent
+from mcp.types import CallToolResult, TextContent, ToolAnnotations
 
 from kb.catalog import graphs
 from kb.research import notes, rule_handoff, runs, semantic, similarity
@@ -71,7 +71,14 @@ def install_tools(server, call):
     ):
         return call(ctx, graphs.provenance_graph, library_id, source_ids, limit)
 
-    @server.tool()
+    @server.tool(
+        annotations=ToolAnnotations(
+            readOnlyHint=True,
+            destructiveHint=False,
+            idempotentHint=True,
+            openWorldHint=False,
+        )
+    )
     def get_semantic_network(library_id: UUID, ctx: Context, limit: int = 200):
         data = call(ctx, semantic.semantic_network, library_id, limit)
         return CallToolResult(
