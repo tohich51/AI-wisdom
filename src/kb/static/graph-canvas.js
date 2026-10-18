@@ -31,21 +31,36 @@
     }
     const computed = container && window.getComputedStyle
       ? window.getComputedStyle(container) : null;
-    const token = (name, fallback) => {
-      const value = computed ? computed.getPropertyValue(name).trim() : '';
-      return value || fallback;
+    const readPalette = () => {
+      const probe = document.createElement('span');
+      probe.style.cssText = 'position:fixed;width:0;height:0;visibility:hidden;pointer-events:none;forced-color-adjust:none';
+      probe.style.color = 'var(--ink)';
+      probe.style.backgroundColor = 'var(--surface)';
+      probe.style.borderColor = 'var(--accent)';
+      probe.style.textDecorationColor = 'var(--muted)';
+      probe.style.outlineColor = 'var(--line-strong)';
+      probe.style.caretColor = 'var(--focus)';
+      const host = container && container.isConnected ? container : document.body || document.documentElement;
+      host.append(probe);
+      const probeStyle = window.getComputedStyle(probe);
+      const resolved = property => probeStyle.getPropertyValue(property).trim();
+      const next = {
+        ink: resolved('color'),
+        surface: resolved('background-color'),
+        accent: resolved('border-top-color'),
+        muted: resolved('text-decoration-color'),
+        lineStrong: resolved('outline-color'),
+        focus: resolved('caret-color')
+      };
+      probe.remove();
+      return next;
     };
-    const palette = {
-      ink: token('--ink', '#111827'),
-      accent: token('--accent', '#2563eb'),
-      muted: token('--muted', '#6b7280'),
-      lineStrong: token('--line-strong', '#64748b'),
-      focus: token('--focus', '#111827')
-    };
-    const fills = { source: palette.accent, fragment: palette.muted,
-      knowledge: palette.ink, rule: palette.accent, use: palette.muted,
-      outcome: palette.focus, concept: palette.accent, default: palette.ink };
-    if (container && container.style) container.style.backgroundColor = '#ffffff';
+    let palette = readPalette();
+    const fillsFor = theme => ({ source: theme.accent, fragment: theme.muted,
+      knowledge: theme.ink, rule: theme.accent, use: theme.muted,
+      outcome: theme.focus, concept: theme.accent, default: theme.ink });
+    let fills = fillsFor(palette);
+    if (container && container.style) container.style.backgroundColor = palette.surface;
 
     const rows = Array.isArray(data && data.nodes) ? data.nodes : [];
     const overview = rows.length > 40;
@@ -107,27 +122,27 @@
           shape: 'ellipse', width: 30, height: 30,
           'background-color': node => fills[node.data('kind')] || fills.default,
           label: node => overview && node.data('kind') !== 'source' ? '' : node.data('label'),
-          color: palette.ink, 'font-size': 11,
+          color: () => palette.ink, 'font-size': 11,
           'font-family': 'Arial, sans-serif', 'text-wrap': 'wrap', 'text-max-width': '90px',
-          'text-background-color': '#ffffff', 'text-background-opacity': 1,
+          'text-background-color': () => palette.surface, 'text-background-opacity': 1,
           'text-background-padding': 1,
-          'text-outline-color': '#ffffff', 'text-outline-width': 2,
+          'text-outline-color': () => palette.surface, 'text-outline-width': 2,
           'text-valign': 'center', 'text-halign': 'center'
         } },
         { selector: 'edge', style: {
           'curve-style': 'bezier', 'target-arrow-shape': 'triangle', 'arrow-scale': 0.8,
-          'line-color': palette.lineStrong, 'target-arrow-color': palette.lineStrong, width: 1.25,
-          label: overview ? '' : 'data(label)', 'font-size': 11, 'color': palette.ink,
+          'line-color': () => palette.lineStrong, 'target-arrow-color': () => palette.lineStrong, width: 1.25,
+          label: overview ? '' : 'data(label)', 'font-size': 11, 'color': () => palette.ink,
           'text-rotation': 'autorotate',
-          'text-background-color': '#ffffff', 'text-background-opacity': 1,
-          'text-background-padding': 1, 'text-outline-color': '#ffffff', 'text-outline-width': 2
+          'text-background-color': () => palette.surface, 'text-background-opacity': 1,
+          'text-background-padding': 1, 'text-outline-color': () => palette.surface, 'text-outline-width': 2
         } },
         { selector: 'edge.hypothesis', style: { 'line-style': 'dashed' } },
         { selector: 'edge.similarity', style: {
-          'line-style': 'dashed', 'line-color': palette.accent,
+          'line-style': 'dashed', 'line-color': () => palette.accent,
           'target-arrow-shape': 'none', label: 'data(label)'
         } },
-        { selector: 'node:selected', style: { 'border-color': palette.focus, 'border-width': 3 } }
+        { selector: 'node:selected', style: { 'border-color': () => palette.focus, 'border-width': 3 } }
       ]
     });
 
@@ -138,6 +153,27 @@
     let resizeObserver = null;
     let lastWidth = 0;
     let lastHeight = 0;
+    let removeForcedColorsListener = null;
+    const forcedColors = typeof window.matchMedia === 'function'
+      ? window.matchMedia('(forced-colors: active)') : null;
+    const repaintTheme = () => {
+      if (destroyed) return;
+      palette = readPalette();
+      fills = fillsFor(palette);
+      if (container && container.style) container.style.backgroundColor = palette.surface;
+      graph.style().update();
+      graph.resize();
+    };
+    if (forcedColors) {
+      const handleForcedColorsChange = () => repaintTheme();
+      if (typeof forcedColors.addEventListener === 'function' && typeof forcedColors.removeEventListener === 'function') {
+        forcedColors.addEventListener('change', handleForcedColorsChange);
+        removeForcedColorsListener = () => forcedColors.removeEventListener('change', handleForcedColorsChange);
+      } else if (typeof forcedColors.addListener === 'function' && typeof forcedColors.removeListener === 'function') {
+        forcedColors.addListener(handleForcedColorsChange);
+        removeForcedColorsListener = () => forcedColors.removeListener(handleForcedColorsChange);
+      }
+    }
 
     const measureContainer = (knownStyle) => {
       const width = container.clientWidth;
@@ -194,7 +230,14 @@
         window.cancelAnimationFrame(resizeFrame);
         resizeFrame = null;
       }
-      if (resizeObserver) resizeObserver.disconnect();
+      if (resizeObserver) {
+        resizeObserver.disconnect();
+        resizeObserver = null;
+      }
+      if (removeForcedColorsListener) {
+        removeForcedColorsListener();
+        removeForcedColorsListener = null;
+      }
     };
 
     if (container && typeof window.ResizeObserver === 'function') {

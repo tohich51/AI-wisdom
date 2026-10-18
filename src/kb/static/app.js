@@ -76,10 +76,16 @@ const readableError = error => {
 const currentReturnFocus = () => document.activeElement instanceof HTMLElement && document.activeElement !== document.body
   ? document.activeElement
   : latestClickTrigger instanceof HTMLElement && latestClickTrigger.isConnected ? latestClickTrigger : null;
-const restoreFocus = target => queueMicrotask(() => {
-  if (target instanceof HTMLElement && target.isConnected && typeof target.focus === 'function' && !target.matches(':disabled')) {
+const restoreFocus = (target, routeToken) => queueMicrotask(() => {
+  if (!isRouteCurrent(routeToken)) return;
+  const active = document.activeElement;
+  if (active instanceof Element && active !== document.body && active !== document.documentElement &&
+      active !== target && active.isConnected) return;
+  if (target instanceof Element && target.isConnected && typeof target.focus === 'function' && !target.matches(':disabled')) {
     target.focus({preventScroll: true});
+    return;
   }
+  router.focusHeading();
 });
 const safe = (fn, onError) => {
   let pending = false;
@@ -159,7 +165,7 @@ function dialogForm(title, render, submit) {
   dialog.addEventListener('close', () => {
     controller.abort();
     dialog.remove();
-    if (isRouteCurrent(routeToken)) restoreFocus(returnFocus);
+    restoreFocus(returnFocus, routeToken);
   });
   if (!isRouteCurrent(routeToken)) return;
   document.body.append(dialog);
@@ -190,7 +196,7 @@ function confirmDialog({title = 'Подтверждение действия', d
     dialog.addEventListener('close', () => {
       if (!settled) { settled = true; resolve(false); }
       dialog.remove();
-      if (isRouteCurrent(routeToken)) restoreFocus(returnFocus);
+      restoreFocus(returnFocus, routeToken);
     });
     if (!isRouteCurrent(routeToken)) { finish(false); return; }
     document.body.append(dialog);
@@ -271,6 +277,7 @@ async function viewSource(id, options = {}) {
   const callerIsCurrent = typeof options.isCurrent === 'function' ? options.isCurrent : () => true;
   sourceViewController = controller;
   const isCurrent = () => callerIsCurrent() && selection === sourceViewSerial && !controller.signal.aborted;
+  const routeToken = captureRouteToken();
   const explicitReturnFocus = options.returnFocus instanceof Element ? options.returnFocus : null;
   const clickedReturnFocus = latestClickTrigger instanceof Element && latestClickTrigger.isConnected ? latestClickTrigger : null;
   const activeReturnFocus = document.activeElement instanceof Element ? document.activeElement : null;
@@ -499,7 +506,7 @@ async function viewSource(id, options = {}) {
     if (ownsView) sourceViewController = null;
     controller.abort();
     d.remove();
-    if (ownsView && returnFocus?.isConnected && typeof returnFocus.focus === 'function') returnFocus.focus({preventScroll: true});
+    if (ownsView) restoreFocus(returnFocus, routeToken);
   });
   if (!isCurrent()) {
     if (sourceViewController === controller) sourceViewController = null;
@@ -889,6 +896,7 @@ const featureHost={node,button,api,post,notify:message,confirm:confirmDialog,lib
   downloadBlob,dialog:dialogForm,navigateResearch:()=>router.navigate('research'),
   openRuleVersion:async(id,version)=>{
     const routeToken=captureRouteToken();
+    const returnFocus=currentReturnFocus();
     const rule=await api('/api/rules/'+id);
     if(!isRouteCurrent(routeToken))return;
     const controller=new AbortController();
@@ -899,7 +907,7 @@ const featureHost={node,button,api,post,notify:message,confirm:confirmDialog,lib
     for(const a of rule.actions||[])d.append(node('p',a.body||a));
     d.append(button('Закрыть',()=>d.close()));
     registerPrivateDialogInvalidator(d,()=>controller.abort());
-    d.addEventListener('close',()=>{controller.abort();d.remove();});
+    d.addEventListener('close',()=>{controller.abort();d.remove();restoreFocus(returnFocus,routeToken);});
     if(!isCurrent())return;
     document.body.append(d);
     if(!isCurrent()){d.remove();return;}

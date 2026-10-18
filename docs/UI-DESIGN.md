@@ -55,12 +55,13 @@ concept без evidence и скрыто при source filter; это не час
 
 - Application theme владеет `--ink`, `--accent`, `--muted`, `--line-strong`, `--focus`;
   canvas только читает их и не изменяет.
-- Для палитры один `getComputedStyle` используется на render; начальный размер переиспользует
-  его, а пустые значения получают фиксированные безопасные fallback.
+- Палитра разрешается через один невидимый DOM-элемент и computed style; системные
+  цвета передаются canvas как фактические значения. Forced-colors change обновляет палитру;
+  destroy удаляет слушатель. Начальный размер переиспользует computed style контейнера.
 - `accent` заполняет source, `muted` — fragment, `line-strong` — обычные связи,
   `focus` — выбранный узел, `ink` — текст графа. Все категории используют те же контрастные роли; тип также подписан в списке.
-- Длинные node labels имеют непрозрачную белую подложку; обычные edges — bezier,
-  node и edge labels также имеют непрозрачную белую подложку.
+- Длинные node labels имеют непрозрачную подложку роли surface; обычные edges — bezier,
+  node и edge labels также имеют непрозрачную подложку роли surface.
 - Нет regex/RGB-парсера, расчёта luminance или runtime contrast enforcement.
 - API, lazy-load, resize lifecycle и per-node callbacks сохранены.
 - Contrast acceptance рассчитывается отдельно по фактическим фиксированным значениям
