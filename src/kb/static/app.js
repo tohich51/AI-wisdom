@@ -265,7 +265,7 @@ const safe = (fn, onError) => {
     } catch (error) {
       if (error?.name === 'AbortError') return;
       if (onError) onError(error, event);
-      else if (event?.currentTarget instanceof HTMLFormElement) window.WisdomForms.formError(event.currentTarget, readableError(error));
+      else if (current instanceof HTMLFormElement) window.WisdomForms.formError(current, readableError(error));
       else message(readableError(error));
     } finally {
       pending = false;
