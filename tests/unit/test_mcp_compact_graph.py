@@ -1,9 +1,11 @@
+import asyncio
 import json
 from uuid import UUID
 
 import pytest
+from mcp.server.mcpserver import MCPServer
 from mcp.server.mcpserver.utilities.func_metadata import func_metadata
-from mcp.types import CallToolResult, TextContent
+from mcp.types import CallToolResult, TextContent, ToolAnnotations
 from pydantic_core import to_json
 
 from kb.mcp.research import install_tools
@@ -16,13 +18,58 @@ CANONICAL_CITATION_COUNT = 153
 class FakeServer:
     def __init__(self) -> None:
         self.tools: dict[str, object] = {}
+        self.tool_annotations: dict[str, ToolAnnotations | None] = {}
 
-    def tool(self):
+    def tool(self, *, annotations: ToolAnnotations | None = None):
         def register(function):
             self.tools[function.__name__] = function
+            self.tool_annotations[function.__name__] = annotations
             return function
 
         return register
+
+
+def test_sdk_catalog_exposes_truthful_semantic_read_annotations() -> None:
+    server = MCPServer("compact-graph-catalog")
+
+    def shared_call(*_args: object, **_kwargs: object) -> None:
+        raise AssertionError("catalog listing must not execute a tool")
+
+    install_tools(server, shared_call)
+    catalog = {tool.name: tool for tool in asyncio.run(server.list_tools())}
+    semantic_tool = catalog["get_semantic_network"]
+
+    assert semantic_tool.annotations is not None
+    assert semantic_tool.annotations.model_dump(
+        mode="json", by_alias=True, exclude_none=True
+    ) == {
+        "readOnlyHint": True,
+        "destructiveHint": False,
+        "idempotentHint": True,
+        "openWorldHint": False,
+    }
+    assert semantic_tool.input_schema == {
+        "properties": {
+            "library_id": {"format": "uuid", "title": "Library Id", "type": "string"},
+            "limit": {"default": 200, "title": "Limit", "type": "integer"},
+        },
+        "required": ["library_id"],
+        "title": "get_semantic_networkArguments",
+        "type": "object",
+    }
+    assert semantic_tool.input_schema["properties"]["limit"]["default"] == 200
+    assert semantic_tool.output_schema is None
+
+    for tool_name, catalog_tool in catalog.items():
+        if tool_name == "get_semantic_network":
+            continue
+        annotations = catalog_tool.annotations
+        annotation_json = (
+            annotations.model_dump(mode="json", by_alias=True, exclude_none=True)
+            if annotations is not None
+            else {}
+        )
+        assert annotation_json.get("readOnlyHint") is not True
 
 
 def _synthetic_graph(library_id: UUID, limit: int) -> dict[str, object]:
