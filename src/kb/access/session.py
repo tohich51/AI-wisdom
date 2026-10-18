@@ -59,6 +59,7 @@ from cryptography.fernet import Fernet, InvalidToken
 from psycopg import Connection
 from psycopg.pq import TransactionStatus
 from psycopg.rows import dict_row
+from psycopg.types.json import Jsonb
 
 from kb.access.identity import VerifiedIdentity
 from kb.access.logout import VerifiedLogout
@@ -83,6 +84,10 @@ _SECRET_BYTES: Final[int] = 32
 _CSRF_BYTES: Final[int] = 32
 _STATE_BYTES: Final[int] = 32
 _NONCE_BYTES: Final[int] = 16
+SUPPORTED_AUTHORITY_SCOPES: Final[frozenset[str]] = frozenset(
+    {"kb:read", "kb:contribute", "kb:experience", "kb:export", "kb:admin"}
+)
+_BROWSER_PAIRING_TTL: Final = dt.timedelta(seconds=120)
 #: RFC 7636 §4.1 allows 43..128 characters. 64 random bytes -> 86 base64url
 #: characters, inside the window.
 _VERIFIER_BYTES: Final[int] = 64
@@ -116,6 +121,135 @@ class SessionLeaseMisuse(Exception):
 
 def _digest(value: str) -> bytes:
     return hashlib.sha256(value.encode("utf-8")).digest()
+
+
+_IDENTITY_JSON_FIELDS: Final = frozenset(
+    {
+        "issuer",
+        "subject",
+        "principal_id",
+        "account_id",
+        "scopes",
+        "client_id",
+        "issued_at",
+        "expires_at",
+        "provider_session_id",
+    }
+)
+
+
+def _aware_datetime(value: Any, name: str) -> dt.datetime:
+    if not isinstance(value, dt.datetime) or value.tzinfo is None or value.utcoffset() is None:
+        raise ValueError(f"{name}_must_be_timezone_aware")
+    return value
+
+
+def _credential_cap(now: dt.datetime, value: dt.datetime | None) -> dt.datetime:
+    if value is None:
+        raise ValueError("derived_session_requires_credential_expiry")
+    cap = _aware_datetime(value, "credential_expires_at")
+    if cap <= now:
+        raise ValueError("credential_expiry_already_elapsed")
+    return cap
+
+
+def _validate_authority_scopes(
+    value: frozenset[str], identity: VerifiedIdentity | None = None
+) -> frozenset[str]:
+    if not isinstance(value, frozenset):
+        raise ValueError("authority_scopes_must_be_a_frozenset")
+    if not value or not value <= SUPPORTED_AUTHORITY_SCOPES or "kb:read" not in value:
+        raise ValueError("invalid_authority_scope_ceiling")
+    if identity is not None:
+        identity_scopes = identity.scopes
+        if not isinstance(identity_scopes, frozenset) or any(
+            not isinstance(scope, str) for scope in identity_scopes
+        ):
+            raise ValueError("invalid_identity_scopes")
+        if not value <= identity_scopes:
+            raise ValueError("authority_scope_exceeds_verified_identity")
+    return value
+
+
+def _serialise_identity(identity: VerifiedIdentity, *, now: dt.datetime) -> dict[str, Any]:
+    if not isinstance(identity, VerifiedIdentity):
+        raise ValueError("pairing_identity_must_be_verified")
+    if not isinstance(identity.principal_id, UUID):
+        raise ValueError("pairing_principal_invalid")
+    if not isinstance(identity.account_id, UUID):
+        raise ValueError("pairing_account_required")
+    for field in ("issuer", "subject"):
+        value = getattr(identity, field)
+        if not isinstance(value, str) or not value.strip():
+            raise ValueError(f"pairing_{field}_invalid")
+    if not isinstance(identity.scopes, frozenset) or any(
+        not isinstance(scope, str) for scope in identity.scopes
+    ):
+        raise ValueError("pairing_scopes_invalid")
+    for field in ("client_id", "provider_session_id"):
+        value = getattr(identity, field)
+        if value is not None and (not isinstance(value, str) or not value.strip()):
+            raise ValueError(f"pairing_{field}_invalid")
+    issued_at = _aware_datetime(identity.issued_at, "pairing_issued_at")
+    expires_at = _aware_datetime(identity.expires_at, "pairing_expires_at")
+    if expires_at <= issued_at or expires_at <= now:
+        raise ValueError("pairing_identity_expired_or_inverted")
+    return {
+        "issuer": identity.issuer,
+        "subject": identity.subject,
+        "principal_id": str(identity.principal_id),
+        "account_id": str(identity.account_id),
+        "scopes": sorted(identity.scopes),
+        "client_id": identity.client_id,
+        "issued_at": issued_at.isoformat(),
+        "expires_at": expires_at.isoformat(),
+        "provider_session_id": identity.provider_session_id,
+    }
+
+
+def _identity_from_json(payload: Any) -> VerifiedIdentity:
+    try:
+        if not isinstance(payload, dict) or set(payload) != _IDENTITY_JSON_FIELDS:
+            raise ValueError
+        for field in ("issuer", "subject"):
+            if not isinstance(payload[field], str) or not payload[field].strip():
+                raise ValueError
+        principal_id = UUID(payload["principal_id"])
+        account_id = UUID(payload["account_id"])
+        raw_scopes = payload["scopes"]
+        if (
+            not isinstance(raw_scopes, list)
+            or any(not isinstance(scope, str) for scope in raw_scopes)
+            or len(raw_scopes) != len(set(raw_scopes))
+        ):
+            raise ValueError
+        for field in ("client_id", "provider_session_id"):
+            value = payload[field]
+            if value is not None and (not isinstance(value, str) or not value.strip()):
+                raise ValueError
+        issued_at = dt.datetime.fromisoformat(payload["issued_at"])
+        expires_at = dt.datetime.fromisoformat(payload["expires_at"])
+        if (
+            issued_at.tzinfo is None
+            or issued_at.utcoffset() is None
+            or expires_at.tzinfo is None
+            or expires_at.utcoffset() is None
+            or expires_at <= issued_at
+        ):
+            raise ValueError
+        return VerifiedIdentity(
+            issuer=payload["issuer"],
+            subject=payload["subject"],
+            principal_id=principal_id,
+            account_id=account_id,
+            scopes=frozenset(raw_scopes),
+            issued_at=issued_at,
+            expires_at=expires_at,
+            provider_session_id=payload["provider_session_id"],
+            client_id=payload["client_id"],
+        )
+    except (AttributeError, TypeError, ValueError) as exc:
+        raise SessionIdentityIncomplete("browser_pairing_identity_invalid") from exc
 
 
 def new_state() -> str:
@@ -188,6 +322,23 @@ class LoginTransaction:
 
 
 @dataclass(frozen=True)
+class BrowserPairingRequest:
+    id: UUID
+    nonce: str
+    binding: str
+    expires_at: dt.datetime
+
+
+@dataclass(frozen=True)
+class BrowserPairingApproval:
+    identity: VerifiedIdentity
+    authority_scopes: frozenset[str]
+    authority_cloud_client: bool
+    credential_expires_at: dt.datetime
+    return_to: str | None
+
+
+@dataclass(frozen=True)
 class Session:
     id: UUID
     principal_id: UUID
@@ -199,6 +350,8 @@ class Session:
     last_seen_at: dt.datetime
     idle_expires_at: dt.datetime
     absolute_expires_at: dt.datetime
+    authority_scopes: frozenset[str] | None = None
+    authority_cloud_client: bool = False
 
     def to_principal(self) -> Principal:
         """The C06 :class:`Principal` this session asserts.
@@ -213,6 +366,7 @@ class Session:
             principal_id=self.principal_id,
             account_id=self.account_id,
             generation_watermark=1,
+            cloud_client=self.authority_cloud_client,
         )
 
 
@@ -547,10 +701,33 @@ class SessionStore:
             )
             return cur.rowcount
 
-    def create_session(self, identity: VerifiedIdentity, *, now: dt.datetime) -> IssuedSession:
+    def create_session(
+        self,
+        identity: VerifiedIdentity,
+        *,
+        now: dt.datetime,
+        authority_scopes: frozenset[str] | None = None,
+        authority_cloud_client: bool = False,
+        credential_expires_at: dt.datetime | None = None,
+    ) -> IssuedSession:
+        if type(authority_cloud_client) is not bool:
+            raise ValueError("authority_cloud_client_must_be_boolean")
+        scopes: frozenset[str] | None = None
+        credential_cap: dt.datetime | None = None
+        if authority_scopes is not None:
+            now = _aware_datetime(now, "now")
+            scopes = _validate_authority_scopes(authority_scopes, identity)
+            credential_cap = min(_credential_cap(now, credential_expires_at), identity.expires_at)
+
         session_id = uuid4()
         cookie_secret = secrets.token_urlsafe(_SECRET_BYTES)
         csrf_token = secrets.token_urlsafe(_CSRF_BYTES)
+        idle_expires_at = now + self._idle
+        absolute_expires_at = now + self._absolute
+        if credential_cap is not None:
+            idle_expires_at = min(idle_expires_at, credential_cap)
+            absolute_expires_at = min(absolute_expires_at, credential_cap)
+
         with self._connection() as conn, conn.transaction(), conn.cursor() as cur:
             self._guard_provider_session(cur, identity)
             cur.execute(
@@ -559,11 +736,13 @@ class SessionStore:
                     id, secret_hash, csrf_token_hash, principal_id, account_id,
                     issuer, subject, provider_session_id,
                     idle_expires_at, absolute_expires_at, created_by_instance,
-                    created_at, last_seen_at
+                    created_at, last_seen_at, authority_scopes,
+                    authority_cloud_client
                 ) VALUES (
                     %(id)s, %(secret_hash)s, %(csrf_hash)s, %(principal_id)s, %(account_id)s,
                     %(issuer)s, %(subject)s, %(provider_session_id)s,
-                    %(idle)s, %(absolute)s, %(instance)s, %(now)s, %(now)s
+                    %(idle)s, %(absolute)s, %(instance)s, %(now)s, %(now)s,
+                    %(authority_scopes)s, %(authority_cloud_client)s
                 )
                 RETURNING id, created_at, idle_expires_at, absolute_expires_at
                 """,
@@ -576,10 +755,12 @@ class SessionStore:
                     "issuer": identity.issuer,
                     "subject": identity.subject,
                     "provider_session_id": identity.provider_session_id,
-                    "idle": now + self._idle,
-                    "absolute": now + self._absolute,
+                    "idle": idle_expires_at,
+                    "absolute": absolute_expires_at,
                     "instance": self.instance_id,
                     "now": now,
+                    "authority_scopes": sorted(scopes) if scopes is not None else None,
+                    "authority_cloud_client": authority_cloud_client,
                 },
             )
             row = cur.fetchone()
@@ -595,6 +776,8 @@ class SessionStore:
             last_seen_at=row["created_at"],
             idle_expires_at=row["idle_expires_at"],
             absolute_expires_at=row["absolute_expires_at"],
+            authority_scopes=scopes,
+            authority_cloud_client=authority_cloud_client,
         )
         return IssuedSession(
             session=session,
@@ -627,7 +810,8 @@ class SessionStore:
                    AND %(now)s < absolute_expires_at
                 RETURNING id, principal_id, account_id, issuer, subject,
                           csrf_token_hash, created_at, last_seen_at,
-                          idle_expires_at, absolute_expires_at
+                          idle_expires_at, absolute_expires_at,
+                          authority_scopes, authority_cloud_client
                 """,
                 {
                     "id": session_id,
@@ -651,7 +835,187 @@ class SessionStore:
             last_seen_at=row["last_seen_at"],
             idle_expires_at=row["idle_expires_at"],
             absolute_expires_at=row["absolute_expires_at"],
+            authority_scopes=(
+                frozenset(row["authority_scopes"]) if row["authority_scopes"] is not None else None
+            ),
+            authority_cloud_client=row["authority_cloud_client"],
         )
+
+    def begin_browser_pairing(
+        self, *, return_to: str | None, now: dt.datetime
+    ) -> BrowserPairingRequest:
+        now = _aware_datetime(now, "now")
+        if return_to is not None and not isinstance(return_to, str):
+            raise ValueError("return_to_must_be_string_or_null")
+        pairing_id = uuid4()
+        nonce = new_nonce()
+        binding = new_browser_binding()
+        expires_at = now + _BROWSER_PAIRING_TTL
+        with self._connection() as conn, conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO kb.browser_pairing (
+                    id, binding_hash, nonce_hash, return_to, created_at, expires_at
+                ) VALUES (
+                    %(id)s, %(binding_hash)s, %(nonce_hash)s, %(return_to)s,
+                    %(created_at)s, %(expires_at)s
+                )
+                """,
+                {
+                    "id": pairing_id,
+                    "binding_hash": _digest(binding),
+                    "nonce_hash": _digest(nonce),
+                    "return_to": return_to,
+                    "created_at": now,
+                    "expires_at": expires_at,
+                },
+            )
+        return BrowserPairingRequest(
+            id=pairing_id,
+            nonce=nonce,
+            binding=binding,
+            expires_at=expires_at,
+        )
+
+    def approve_browser_pairing(
+        self,
+        pairing_id: UUID,
+        nonce: str,
+        identity: VerifiedIdentity,
+        *,
+        authority_scopes: frozenset[str],
+        authority_cloud_client: bool,
+        credential_expires_at: dt.datetime,
+        now: dt.datetime,
+    ) -> bool:
+        now = _aware_datetime(now, "now")
+        identity_payload = _serialise_identity(identity, now=now)
+        scopes = _validate_authority_scopes(authority_scopes, identity)
+        credential_cap = min(_credential_cap(now, credential_expires_at), identity.expires_at)
+        if type(authority_cloud_client) is not bool:
+            raise ValueError("authority_cloud_client_must_be_boolean")
+
+        with self._connection() as conn, conn.cursor() as cur:
+            cur.execute(
+                """
+                UPDATE kb.browser_pairing
+                   SET approved_at = %(now)s,
+                       approved_identity = %(identity)s,
+                       authority_scopes = %(scopes)s,
+                       authority_cloud_client = %(cloud_client)s,
+                       credential_expires_at = LEAST(
+                           %(credential_expires_at)s,
+                           %(identity_expires_at)s
+                       )
+                 WHERE id = %(id)s
+                   AND nonce_hash = %(nonce_hash)s
+                   AND approved_at IS NULL
+                   AND consumed_at IS NULL
+                   AND cancelled_at IS NULL
+                   AND %(now)s < expires_at
+                """,
+                {
+                    "id": pairing_id,
+                    "nonce_hash": _digest(nonce),
+                    "identity": Jsonb(identity_payload),
+                    "scopes": sorted(scopes),
+                    "cloud_client": authority_cloud_client,
+                    "credential_expires_at": credential_cap,
+                    "identity_expires_at": identity.expires_at,
+                    "now": now,
+                },
+            )
+            return cur.rowcount == 1
+
+    def consume_browser_pairing(
+        self, pairing_id: UUID, nonce: str, *, binding: str, now: dt.datetime
+    ) -> BrowserPairingApproval | None:
+        now = _aware_datetime(now, "now")
+        try:
+            with self._connection() as conn, conn.transaction(), conn.cursor() as cur:
+                cur.execute(
+                    """
+                    UPDATE kb.browser_pairing
+                       SET consumed_at = %(now)s
+                     WHERE id = %(id)s
+                       AND binding_hash = %(binding_hash)s
+                       AND nonce_hash = %(nonce_hash)s
+                       AND approved_at IS NOT NULL
+                       AND consumed_at IS NULL
+                       AND cancelled_at IS NULL
+                       AND %(now)s < expires_at
+                       AND %(now)s < credential_expires_at
+                    RETURNING approved_identity, authority_scopes,
+                              authority_cloud_client, credential_expires_at,
+                              return_to
+                    """,
+                    {
+                        "id": pairing_id,
+                        "binding_hash": _digest(binding),
+                        "nonce_hash": _digest(nonce),
+                        "now": now,
+                    },
+                )
+                row = cur.fetchone()
+                if row is None:
+                    return None
+
+                identity = _identity_from_json(row["approved_identity"])
+                try:
+                    scopes = _validate_authority_scopes(frozenset(row["authority_scopes"]))
+                    credential_expires_at = _credential_cap(now, row["credential_expires_at"])
+                    if not scopes <= identity.scopes:
+                        raise ValueError
+                    if type(row["authority_cloud_client"]) is not bool:
+                        raise ValueError
+                    if identity.expires_at <= now or credential_expires_at > identity.expires_at:
+                        raise ValueError
+                    return_to = row["return_to"]
+                    if return_to is not None and not isinstance(return_to, str):
+                        raise ValueError
+                except (TypeError, ValueError) as exc:
+                    raise SessionIdentityIncomplete("browser_pairing_approval_invalid") from exc
+
+                self._guard_provider_session(cur, identity)
+        except SessionIdentityIncomplete:
+            return None
+
+        return BrowserPairingApproval(
+            identity=identity,
+            authority_scopes=scopes,
+            authority_cloud_client=row["authority_cloud_client"],
+            credential_expires_at=credential_expires_at,
+            return_to=return_to,
+        )
+
+    def cancel_browser_pairing(self, pairing_id: UUID, *, binding: str, now: dt.datetime) -> bool:
+        now = _aware_datetime(now, "now")
+        with self._connection() as conn, conn.cursor() as cur:
+            cur.execute(
+                """
+                UPDATE kb.browser_pairing
+                   SET cancelled_at = %(now)s
+                 WHERE id = %(id)s
+                   AND binding_hash = %(binding_hash)s
+                   AND consumed_at IS NULL
+                   AND cancelled_at IS NULL
+                """,
+                {
+                    "id": pairing_id,
+                    "binding_hash": _digest(binding),
+                    "now": now,
+                },
+            )
+            return cur.rowcount == 1
+
+    def cancel_browser_pairings(self, *, binding: str, now: dt.datetime) -> None:
+        """Logout cancels only pending authorizations bound to this browser."""
+        with self._connection() as conn, conn.cursor() as cur:
+            cur.execute(
+                "UPDATE kb.browser_pairing SET cancelled_at=%s "
+                "WHERE binding_hash=%s AND consumed_at IS NULL AND cancelled_at IS NULL",
+                (now, _digest(binding)),
+            )
 
     def revoke(self, session_id: UUID, *, reason: str, now: dt.datetime) -> bool:
         with self._connection() as conn, conn.cursor() as cur:

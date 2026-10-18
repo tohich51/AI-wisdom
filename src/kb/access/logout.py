@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import datetime as dt
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any
 
 import jwt
@@ -85,16 +85,41 @@ class VerifiedLogout:
 
 class LogoutVerifier:
     def __init__(
-        self, settings: IdentitySettings, verifier: TokenVerifier, max_age_seconds: int = 300
+        self,
+        settings: IdentitySettings,
+        verifier: TokenVerifier,
+        max_age_seconds: int = 300,
+        *,
+        additional_client_ids: tuple[str, ...] = (),
     ) -> None:
         if max_age_seconds < 1:
             raise ValueError("logout token age must be positive")
         self._settings = settings
+        if len(additional_client_ids) > 16 or any(
+            not isinstance(client, str) or not client for client in additional_client_ids
+        ):
+            raise ValueError("invalid additional logout clients")
+        self._logout_settings = (
+            settings,
+            *(
+                replace(settings, audience=client, client_id=client)
+                for client in dict.fromkeys(additional_client_ids)
+                if client != settings.client_id
+            ),
+        )
         self._verifier = verifier
         self._max_age = max_age_seconds
 
     def verify(self, token: str, *, now: dt.datetime) -> VerifiedLogout:
-        claims = decode_logout_token(token, self._settings, self._verifier)
+        for selected in self._logout_settings:
+            try:
+                claims = decode_logout_token(token, selected, self._verifier)
+                break
+            except IdentityRejected as error:
+                if str(error) != "audience_mismatch":
+                    raise
+        else:
+            raise IdentityRejected("audience_mismatch")
         issued, expires = claims["iat"], claims["exp"]
         if type(issued) is not int or type(expires) is not int:
             raise IdentityRejected("invalid_logout_time")
@@ -127,7 +152,7 @@ class LogoutVerifier:
             raise IdentityRejected("invalid_logout_time") from None
         return VerifiedLogout(
             issuer=self._settings.issuer,
-            audience=self._settings.client_id,
+            audience=selected.client_id,
             session_id=sid,
             subject=subject,
             jti=jti,

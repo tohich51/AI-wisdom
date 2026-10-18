@@ -38,9 +38,10 @@ from kb.contracts.operations import (
 
 # Import order matters only for readability, but the set of routers is the
 # route inventory: it was the same six routers mounted under /api before v1.
-from kb.http import content, libraries, members, projects, research, uploads
+from kb.http import browser_pairing, content, libraries, members, projects, research, uploads
 
 ROUTERS: tuple[APIRouter, ...] = (
+    browser_pairing.approval_router,
     libraries.router,
     projects.router,
     members.router,

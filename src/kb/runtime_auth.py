@@ -18,6 +18,7 @@ from kb.http.auth_config import AuthSettings
 from kb.http.auth_flow import AuthorizationCodeFlow
 from kb.http.auth_routes import create_auth_router
 from kb.http.backchannel import create_backchannel_router
+from kb.http.browser_pairing import install_browser_pairing
 from kb.runtime_identity import ConnectionFactory, create_resolver
 
 
@@ -71,7 +72,11 @@ def install_auth(
     )
     app.include_router(
         create_backchannel_router(
-            verifier=LogoutVerifier(coordinates(settings.client_id, settings.client_id), browser),
+            verifier=LogoutVerifier(
+                coordinates(settings.client_id, settings.client_id),
+                browser,
+                additional_client_ids=tuple(os.environ.get("KB_MCP_LOCAL_CLIENT_IDS", "").split()),
+            ),
             store=store,
             clock=lambda: dt.datetime.now(dt.UTC),
         )
@@ -83,6 +88,7 @@ def install_auth(
     app.state.auth_settings = settings
     app.state.browser_verifier = browser
     app.state.bearer_verifier = bearer
+    install_browser_pairing(app, store, settings, http_client, browser)
     app.dependency_overrides[libraries.current_principal] = resolve
 
     def verified_identity(request: Request) -> VerifiedIdentity:

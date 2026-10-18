@@ -105,7 +105,13 @@ def set_session_cookies(response: Response, issued: IssuedSession, settings: Aut
     every request. The cookie's own expiry is a convenience for the browser,
     not the authority.
     """
-    max_age = int(settings.session_absolute_hours * 3600)
+    max_age = max(
+        0,
+        min(
+            int(settings.session_absolute_hours * 3600),
+            int((issued.session.absolute_expires_at - issued.session.created_at).total_seconds()),
+        ),
+    )
     response.set_cookie(
         session_cookie_name(settings),
         issued.cookie_value,
@@ -147,6 +153,14 @@ def create_auth_router(
     clock: Callable[[], dt.datetime],
 ) -> APIRouter:
     """Build the router. One router per gateway process."""
+
+    def cancel_agent_pairing(request: Request, response: Response) -> None:
+        name = "__Host-kb_agent_binding" if settings.cookie_secure else "kb_agent_binding"
+        binding = request.cookies.get(name)
+        cancel = getattr(store, "cancel_browser_pairings", None)
+        if binding and callable(cancel):
+            cancel(binding=binding, now=clock())
+        response.delete_cookie(name, path="/")
 
     def load_session(request: Request) -> Session:
         return store.load(request.cookies.get(session_cookie_name(settings)), now=clock())
@@ -200,6 +214,7 @@ def create_auth_router(
             # and it must not need a CSRF token that no session exists to
             # issue. There is nothing to protect: no cookie, no rows touched.
             response = JSONResponse({"status": "signed_out"}, status_code=200)
+            cancel_agent_pairing(request, response)
             clear_session_cookies(response, settings)
             return response
         if request.method.upper() in CSRF_PROTECTED_METHODS and not csrf_matches(
@@ -212,6 +227,7 @@ def create_auth_router(
             return JSONResponse(_BODY_CSRF, status_code=403)
         flow.logout(session, now=clock())
         response = JSONResponse({"status": "signed_out"}, status_code=200)
+        cancel_agent_pairing(request, response)
         clear_session_cookies(response, settings)
         return response
 

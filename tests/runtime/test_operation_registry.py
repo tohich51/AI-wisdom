@@ -48,6 +48,7 @@ from kb.http.router import (
 # the same, and that mapping is exactly what a reviewer must be able to read
 # rather than infer. Adding a tool means adding a row here.
 TOOL_HANDLER: dict[str, str] = {
+    "approve_browser_login": "approve_browser_login",
     "list_libraries": "list_libraries",
     "search_knowledge": "search_knowledge",
     "read_source": "read_source",

@@ -11,6 +11,7 @@ from kb.contracts.operations import (
 )
 
 HANDLER_SCOPES = {
+    "approve_browser_login": "kb:read",
     "list_libraries": "kb:read",
     "search_knowledge": "kb:read",
     "read_source": "kb:read",
@@ -84,6 +85,9 @@ def api_scope_path(path: str) -> str:
 
 
 def http_scope(method: str, path: str) -> str:
+    operation = operation_for(method, path)
+    if operation is not None:
+        return operation.scope
     path = api_scope_path(path)
     if "/orgs/" in path:
         return "kb:admin"  # Administrative MCP is intentionally absent in v1.

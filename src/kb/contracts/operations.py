@@ -153,6 +153,15 @@ _WRITE = Effect.WRITE
 
 #: The whole registry. Order is documentation order, not dispatch order.
 OPERATIONS: Final[tuple[Operation, ...]] = (
+    _op(
+        "auth.browser.approve",
+        "POST",
+        "/browser-logins/{pairing_id}/approve",
+        _WRITE,
+        "kb:read",
+        "Approve one bound browser login as the same verified user.",
+        mcp_tool="approve_browser_login",
+    ),
     # ------------------------------------------------------------ libraries
     _op(
         "libraries.list",

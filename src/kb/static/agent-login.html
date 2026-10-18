@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang='ru'>
+<head>
+  <meta charset='utf-8'>
+  <meta name='viewport' content='width=device-width, initial-scale=1'>
+  <title>Вход через Codex</title>
+  <link rel='stylesheet' href='/static/style.css'>
+  <script src='/static/agent-login.js' defer></script>
+</head>
+<body>
+  <main>
+    <section class='card' aria-labelledby='agent-login-title'>
+      <h1 id='agent-login-title'>Вход через Codex</h1>
+      <p>Подтвердите вход, чтобы открыть эту страницу в Codex.</p>
+      <p id='agent-status' role='status' aria-live='polite'>Начинаем безопасный вход…</p>
+      <dl id='agent-approval' hidden aria-label='Параметры ожидающего входа'>
+        <div>
+          <dt>Запрос</dt>
+          <dd><code id='agent-request-id'></code></dd>
+        </div>
+        <div>
+          <dt>Истекает</dt>
+          <dd><time id='agent-request-expiry'></time></dd>
+        </div>
+      </dl>
+      <button id='agent-cancel' type='button' disabled>Отменить вход</button>
+      <p class='agent-login-note'>Права и срок действия наследуются от текущей авторизации Codex. Пароль не сохраняется.</p>
+      <noscript>Для входа необходимо включить JavaScript.</noscript>
+    </section>
+  </main>
+</body>
+</html>

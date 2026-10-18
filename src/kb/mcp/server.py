@@ -30,6 +30,7 @@ from kb.catalog import (
 from kb.contracts.enums import LibraryKind
 from kb.contracts.mcp_tools import (
     MCP_TOOLS,
+    ApproveBrowserLoginArgs,
     EditKnowledgeArgs,
     ExperienceSummaryArgs,
     ExportSkillArgs,
@@ -158,6 +159,24 @@ def build_mcp(app, hosts):
     from kb.mcp.research import install_tools
 
     install_tools(server, call)
+
+    @server.tool()
+    def approve_browser_login(pairing_id: UUID, nonce: str, origin: str, ctx: Context):
+        """Approve a one-use browser challenge using this authenticated human session."""
+        args = ApproveBrowserLoginArgs(pairing_id=pairing_id, nonce=nonce, origin=origin)
+        request = ctx.request_context.request
+        if request is None:
+            raise ValueError("authentication_required")
+        authorization = request.headers.get("authorization", "")
+        parts = authorization.split()
+        if len(parts) != 2 or parts[0].lower() != "bearer":
+            raise ValueError("authentication_required")
+        try:
+            return app.state.approve_browser_login(
+                parts[1], args.pairing_id, args.nonce, args.origin
+            )
+        except Exception:
+            raise ValueError("request_refused") from None
 
     @server.tool()
     def list_jobs(ctx: Context, library_id: UUID | None = None):

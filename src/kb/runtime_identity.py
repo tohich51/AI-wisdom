@@ -104,6 +104,32 @@ def _raise_service_unavailable() -> NoReturn:
     raise HTTPException(status_code=503, detail="Service Unavailable") from None
 
 
+def assert_active_membership(
+    connections: ConnectionFactory,
+    identity: VerifiedIdentity,
+    principal: Principal,
+) -> None:
+    try:
+        with connections() as connection:
+            with transaction_identity(connection, principal):
+                with connection.cursor() as cursor:
+                    cursor.execute(
+                        _MEMBERSHIP_SQL,
+                        (
+                            str(identity.account_id),
+                            str(identity.principal_id),
+                            identity.issuer,
+                            identity.subject,
+                        ),
+                    )
+                    is_member = cursor.fetchone() is not None
+    except Exception:
+        _raise_service_unavailable()
+
+    if not is_member:
+        _raise_forbidden()
+
+
 def _header_values(headers: Any, name: str) -> list[Any]:
     getlist = getattr(headers, "getlist", None)
     if callable(getlist):
@@ -178,25 +204,7 @@ def create_resolver(
         lease_from(connections)
 
     def admit(identity: VerifiedIdentity, principal: Principal) -> None:
-        try:
-            with connections() as connection:
-                with transaction_identity(connection, principal):
-                    with connection.cursor() as cursor:
-                        cursor.execute(
-                            _MEMBERSHIP_SQL,
-                            (
-                                str(identity.account_id),
-                                str(identity.principal_id),
-                                identity.issuer,
-                                identity.subject,
-                            ),
-                        )
-                        is_member = cursor.fetchone() is not None
-        except Exception:
-            _raise_service_unavailable()
-
-        if not is_member:
-            _raise_forbidden()
+        assert_active_membership(connections, identity, principal)
 
     def resolve_token(token: str) -> VerifiedIdentity:
         if not isinstance(token, str) or not token.strip():
@@ -276,7 +284,11 @@ def create_resolver(
                 subject=session.subject,
                 principal_id=session.principal_id,
                 account_id=session.account_id,
-                scopes=frozenset(),
+                scopes=(
+                    session.authority_scopes
+                    if session.authority_scopes is not None
+                    else frozenset()
+                ),
                 issued_at=session.created_at,
                 expires_at=session.absolute_expires_at,
             )
@@ -294,6 +306,12 @@ def create_resolver(
             or identity.account_id != principal.account_id
         ):
             _raise_unauthorized()
+
+        if session.authority_scopes is not None:
+            try:
+                require_scope(identity, scope_for_request(request.method, request.url.path))
+            except PermissionError:
+                _raise_forbidden()
 
         if not _is_pending_browser_invitation_accept(request, principal.account_id):
             admit(identity, principal)

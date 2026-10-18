@@ -30,6 +30,12 @@ class ToolArgs(BaseModel):
 
 
 # 1 ---------------------------------------------------------------- list
+class ApproveBrowserLoginArgs(ToolArgs):
+    pairing_id: UUID
+    nonce: str = Field(min_length=16, max_length=256)
+    origin: str = Field(min_length=1, max_length=2048)
+
+
 class ListLibrariesArgs(ToolArgs):
     include_kinds: (
         list[Literal["reference", "brand", "project", "playbook", "experience"]] | None
@@ -202,6 +208,7 @@ class EditKnowledgeArgs(ToolArgs):
 
 
 MCP_TOOLS: dict[str, tuple[type[BaseModel], type[BaseModel] | None]] = {
+    "approve_browser_login": (ApproveBrowserLoginArgs, None),
     "list_libraries": (ListLibrariesArgs, ListLibrariesResult),
     "search_knowledge": (SearchKnowledgeArgs, SearchKnowledgeResult),
     "read_source": (ReadSourceArgs, Source),
@@ -228,6 +235,7 @@ MCP_TOOLS.update({name: (args, None) for name, args in RESEARCH_TOOLS.items()})
 
 EXPECTED_TOOLS: frozenset[str] = frozenset(
     {
+        "approve_browser_login",
         "list_libraries",
         "search_knowledge",
         "read_source",

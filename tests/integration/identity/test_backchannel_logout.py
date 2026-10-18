@@ -241,3 +241,23 @@ def test_http_valid_replay_unknown_sid_and_malformed_requests(
             store.load(issued.cookie_value, now=now)
         unknown = signing_keys["current"].sign(claims(provider, now))
         assert client.post(path, data={"logout_token": unknown}).status_code == 200
+
+
+def test_configured_local_mcp_logout_preserves_signature_and_audience_checks(
+    identity_settings, verifier, provider, signing_keys
+):
+    now = dt.datetime.now(dt.UTC)
+    check = LogoutVerifier(identity_settings, verifier, additional_client_ids=("kb-mcp",))
+    payload = claims(provider, now)
+    payload["aud"] = "kb-mcp"
+    result = check.verify(signing_keys["current"].sign(payload), now=now)
+    assert result.audience == "kb-mcp"
+    assert result.session_id == payload["sid"]
+    for audience in ("unrelated-client", "kb-minimax-cloud"):
+        payload["aud"] = audience
+        with pytest.raises(IdentityRejected):
+            check.verify(signing_keys["current"].sign(payload), now=now)
+    payload["aud"] = "kb-mcp"
+    forged = signing_keys["attacker"].sign(payload, headers={"kid": signing_keys["current"].kid})
+    with pytest.raises(IdentityRejected):
+        check.verify(forged, now=now)
