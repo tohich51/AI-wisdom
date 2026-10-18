@@ -40,9 +40,7 @@ def test_sdk_catalog_exposes_truthful_semantic_read_annotations() -> None:
     semantic_tool = catalog["get_semantic_network"]
 
     assert semantic_tool.annotations is not None
-    assert semantic_tool.annotations.model_dump(
-        mode="json", by_alias=True, exclude_none=True
-    ) == {
+    assert semantic_tool.annotations.model_dump(mode="json", by_alias=True, exclude_none=True) == {
         "readOnlyHint": True,
         "destructiveHint": False,
         "idempotentHint": True,
