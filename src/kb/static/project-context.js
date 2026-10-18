@@ -1,6 +1,7 @@
 'use strict';
 (() => {
   const mountIds = new WeakMap();
+  const operationIds = new Map();
   const layers = ['brand', 'project', 'general'];
   const layerLabels = {brand: 'Бренд', project: 'Проект', general: 'Общий слой'};
   const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -100,6 +101,11 @@
 
     const heading = element(host, 'h2', 'Контекст проекта');
     area.append(heading, contextArea);
+    const operationId = operation => {
+      const key = library.id + ':' + operation;
+      if (!operationIds.has(key)) operationIds.set(key, crypto.randomUUID());
+      return operationIds.get(key);
+    };
 
     if (canCurate) {
       const availableLibraries = (host.libraries?.() || []).filter(item => item?.id);
@@ -110,6 +116,7 @@
       const linkCard = element(host, 'article', null, {class: 'card completion-card'});
       linkCard.append(element(host, 'h3', 'Добавить библиотеку в проект'));
       const linkForm = element(host, 'form', null, {class: 'completion-form'});
+      linkForm.dataset.draftKey = 'project:' + library.id + ':link:' + operationId('link');
       const linkLibrary = addField(host, linkForm, 'Библиотека', 'library_id', 'select');
       option(host, linkLibrary, 'Выберите библиотеку');
       for (const item of linkLibraries) {
@@ -126,9 +133,8 @@
         linkRequired.dataset.projectDisabled = 'true';
         linkSubmit.dataset.projectDisabled = 'true';
       }
-      linkForm.addEventListener('submit', async event => {
-        event.preventDefault();
-        if (!isCurrent() || !linkForm.reportValidity()) return;
+      window.WisdomForms.submit(linkForm, async () => {
+        if (!isCurrent()) return;
         linkSubmit.disabled = true; clearFormMessage(linkForm);
         try {
           await host.post('/api/projects/' + encodeURIComponent(library.id) + '/libraries', {
@@ -151,6 +157,7 @@
       const pinCard = element(host, 'article', null, {class: 'card completion-card'});
       pinCard.append(element(host, 'h3', 'Закрепить версию правила'));
       const pinForm = element(host, 'form', null, {class: 'completion-form'});
+      pinForm.dataset.draftKey = 'project:' + library.id + ':rule-pin:' + operationId('rule-pin');
       const sourceLibrary = addField(host, pinForm, 'Библиотека с правилом', 'source_library_id', 'select');
       option(host, sourceLibrary, 'Выберите библиотеку');
       for (const item of pinLibraries) option(host, sourceLibrary, text(item.name) || 'Библиотека без названия', item.id);
@@ -209,9 +216,8 @@
           host.notify(safeError(error));
         }
       });
-      pinForm.addEventListener('submit', async event => {
-        event.preventDefault();
-        if (!isCurrent() || !pinForm.reportValidity()) return;
+      window.WisdomForms.submit(pinForm, async () => {
+        if (!isCurrent()) return;
         const rule = ruleOptions.get(ruleSelect.value);
         if (!rule) { setFormMessage(host, pinForm, 'Выберите опубликованную версию правила.'); return; }
         const priorityValue = Number(priority.value);

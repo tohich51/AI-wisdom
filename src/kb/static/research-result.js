@@ -9,16 +9,43 @@
     const citations = Array.isArray(r.citations) ? r.citations : [];
     const root = actions.node('section', '');
     container.replaceChildren(root);
-    const n = (tag, value) => actions.node(tag, str(value));
+    const n = (tag, value, attrs = {}) => actions.node(tag, str(value), attrs);
     const button = (label, fn) => actions.button(str(label), async event => {
       try { await fn(event); } catch (error) { actions.notify(str(error && error.message || 'Не удалось выполнить действие.')); }
     });
-    const citation = id => citations.find(c => str(c.id) === str(id));
+    const citationRecords = new Map();
+    const ambiguousCitationIds = new Set();
+    citations.forEach((meta, index) => {
+      if (!meta || typeof meta.id !== 'string' || !meta.id.trim()) return;
+      const id = meta.id;
+      if (ambiguousCitationIds.has(id)) return;
+      if (citationRecords.has(id)) {
+        citationRecords.delete(id);
+        ambiguousCitationIds.add(id);
+      } else {
+        citationRecords.set(id, { meta: meta, index: index + 1 });
+      }
+    });
+    const citation = id => {
+      if (typeof id !== 'string' || !id.trim() || ambiguousCitationIds.has(id)) return null;
+      const record = citationRecords.get(id);
+      return record ? record.meta : null;
+    };
+    const citationControl = id => {
+      const meta = citation(id);
+      if (!meta) return n('span', 'Цитата недоступна');
+      const record = citationRecords.get(id);
+      const title = typeof meta.title === 'string' && meta.title.trim()
+        ? meta.title.trim() : 'Без названия';
+      const identity = `Цитата ${record.index}: ${title}`;
+      const control = button(identity, () => actions.citation(id));
+      control.setAttribute('aria-label', identity);
+      return control;
+    };
     const cite = item => {
       const box = n('div', '');
       for (const id of Array.isArray(item.citation_ids) ? item.citation_ids : []) {
-        const meta = citation(id);
-        box.append(button((meta && meta.title) || 'Цитата', () => actions.citation(id)));
+        box.append(citationControl(id));
       }
       return box;
     };
@@ -36,13 +63,25 @@
     }
     if (!items.length) { root.append(n('p', 'Нет данных для отображения.')); return; }
     if (k === 'comparison') {
-      const scroll = n('div', ''); scroll.style.overflowX = 'auto';
+      const scroll = n('div', '', {
+        class: 'research-table-scroll', tabindex: '0', role: 'region',
+        'aria-label': 'Сравнение источников и выводов'
+      });
+      scroll.style.overflowX = 'auto';
+      scroll.style.maxWidth = '100%';
+      scroll.style.overscrollBehaviorInline = 'contain';
       const table = n('table', ''), head = n('thead', ''), header = n('tr', '');
-      for (const label of ['Критерий', 'Источник', 'Вывод', 'Цитаты']) header.append(n('th', label));
-      head.append(header); table.append(head);
+      const caption = n('caption', 'Сравнение источников и выводов. Если таблица не помещается, прокрутите эту область по горизонтали.');
+      for (const label of ['Критерий', 'Источник', 'Вывод', 'Цитаты']) header.append(n('th', label, { scope: 'col' }));
+      head.append(header); table.append(caption, head);
       const body = n('tbody', '');
       for (const item of items) {
-        const row = n('tr', ''), meta = citations.find(c => str(c.source_id) === str(item.source_id));
+        const sourceId = typeof item.source_id === 'string' && item.source_id.trim()
+          ? item.source_id : '';
+        const meta = sourceId
+          ? citations.find(c => c && typeof c.source_id === 'string' && c.source_id === sourceId)
+          : null;
+        const row = n('tr', '');
         const refs=n('td','');refs.append(cite(item));
         row.append(n('td', item.heading), n('td', (meta && meta.title) || "Источник"), n('td', item.text), refs); body.append(row);
       }
@@ -73,7 +112,9 @@
       for (const [i, item] of items.entries()) {
         const row = n('article', ''), heading = str(item.heading);
         row.style.marginLeft = `${Math.min(depth(i), 5) * 0.75}rem`; row.style.borderLeft = '2px solid #888'; row.style.paddingLeft = '.5rem';
-        const ids = [...new Set((Array.isArray(item.citation_ids) ? item.citation_ids : []).map(citation).filter(Boolean).map(c => c.source_id).filter(v => v != null))];
+        const ids = [...new Set((Array.isArray(item.citation_ids) ? item.citation_ids : [])
+          .map(citation).filter(Boolean).map(c => c.source_id)
+          .filter(value => typeof value === 'string' && value.trim()))];
         row.append(button(heading || 'Понятие', () => actions.question('Что означает ' + heading + '?', ids)), n('p', item.text), cite(item)); rows.append(row);
       }
       root.append(rows);
@@ -83,9 +124,14 @@
       root.append(concepts);
       const list = n('ul', '');
       for (const rel of Array.isArray(r.relations) ? r.relations : []) {
-        if (!Number.isInteger(rel.from_item) || !Number.isInteger(rel.to_item) || rel.from_item < 0 || rel.from_item >= items.length || rel.to_item < 0 || rel.to_item >= items.length) continue;
+        if (!rel || !Number.isInteger(rel.from_item) || !Number.isInteger(rel.to_item) || rel.from_item < 0 || rel.from_item >= items.length || rel.to_item < 0 || rel.to_item >= items.length) continue;
         const from = str(items[rel.from_item].heading), to = str(items[rel.to_item].heading), line = `${from} → ${to} — ${({supports:"поддерживает",part_of:"часть",used_for:"используется для",contradicts:"противоречит"})[rel.predicate] || str(rel.predicate)}`;
-        list.append(n('li', rel.hypothesis ? 'Гипотеза: ' + line : line));
+        const evidenceIds = Array.isArray(rel.citation_ids) ? rel.citation_ids : [];
+        const entry = n('li', '');
+        entry.append(n('span', line), n('p', rel.hypothesis ? 'Гипотеза' : 'Направленная связь'));
+        if (evidenceIds.length) entry.append(cite({ citation_ids: evidenceIds }));
+        else entry.append(n('p', 'Доказательства не указаны: эта направленная связь не подтверждена.', { class: 'muted' }));
+        list.append(entry);
       }
       root.append(n('h3', 'Связи'), list);
     } else if (k === 'faq' || k === 'faqs') {

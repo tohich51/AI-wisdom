@@ -58,6 +58,13 @@
     return 'root';
   };
   const invalidationHooks = new Set();
+  const beforeInvalidationHooks = new Set();
+  const notifyBeforeInvalidation = status => {
+    for (const hook of beforeInvalidationHooks) {
+      try { hook(status); } catch (_) { /* private UI не должен блокировать отказ */ }
+    }
+  };
+
 
   // Инвалидация двигает поколение и убирает и кэш, и ожидающие чтения. Раньше
   // ожидающие чтения выживали: их ответы возвращали устаревшее или уже отозванное
@@ -76,7 +83,10 @@
     for (const hook of invalidationHooks) { try { hook('access'); } catch (_) { /* экран мог быть уже закрыт */ } }
     if (typeof window.WisdomResearch?.invalidate === 'function') window.WisdomResearch.invalidate();
     if (typeof window.WisdomMap?.invalidate === 'function') window.WisdomMap.invalidate();
-    document.querySelectorAll('dialog[data-wisdom-private]').forEach(dialog => dialog.close());
+    document.querySelectorAll('dialog[data-wisdom-private]').forEach(dialog => {
+      try { if (dialog.open) dialog.close(); } catch (_) { /* удаление всё равно требуется */ }
+      dialog.remove();
+    });
     if (status === 401) {
       const login = document.querySelector('.login'); if (login) login.hidden = false;
       const logout = document.getElementById('logout'); if (logout) logout.hidden = true;
@@ -92,13 +102,37 @@
       if (cookie) headers.set('X-KB-CSRF', decodeURIComponent(cookie.slice(8)));
     }
     stats.requests++;
-    const response = await fetch(path, {...options, method, headers, credentials: 'same-origin'});
+    const mutation = method !== 'GET' && method !== 'HEAD';
+    const requestError = (text, kind, cause = null) => {
+      const error = new Error(text);
+      error.name = kind;
+      error.outcomeUnknown = mutation && kind === 'AmbiguousRequestError';
+      if (cause) error.cause = cause;
+      return error;
+    };
+    const ambiguousMessage = 'Сервер не подтвердил результат изменения. Проверьте состояние объекта перед повторной отправкой; автоматический повтор не выполнялся.';
+    let response;
+    try {
+      response = await fetch(path, {...options, method, headers, credentials: 'same-origin'});
+    } catch (error) {
+      if (error?.name === 'AbortError') throw error;
+      throw requestError(
+        mutation
+          ? 'Нет подтверждения связи с сервером. Результат изменения неизвестен. Проверьте состояние объекта перед повторной отправкой; автоматический повтор не выполнялся.'
+          : 'Нет связи с сервером. Проверьте подключение и повторите запрос.',
+        mutation ? 'AmbiguousRequestError' : 'NetworkError',
+        error
+      );
+    }
     if (!response.ok) {
       if (response.status === 401 || response.status === 403) {
         // Отказ чтения, устаревшего к моменту ответа, не должен рушить экран,
         // который его заменил: повторная инвалидация стёрла бы свежий кэш
         // следующего экрана, а сообщение о доступе показалось бы не там.
         if (startGeneration === null || startGeneration === generation) {
+          // 401 обязан снять пользовательские правки до закрытия private dialogs.
+          // 403, наоборот, должен забыть их до любого закрытия или reload.
+          notifyBeforeInvalidation(response.status);
           invalidate('denied'); deny(response.status);
         } else {
           stats.staleDrops++;
@@ -107,10 +141,25 @@
       if (response.status === 401) throw Error('Войдите в свой аккаунт через кнопку «Войти».');
       if (response.status === 403) throw Error('Для этого действия недостаточно прав.');
       if (response.status === 429) throw Error('Очередь обработки заполнена. Повторите позже; готовые материалы остаются доступны.');
+      if (mutation && (response.status === 408 || response.status === 425 || response.status >= 500))
+        throw requestError(ambiguousMessage, 'AmbiguousRequestError');
       const data = await response.json().catch(() => ({}));
-      throw Error(typeof data.detail === 'string' ? data.detail : 'Запрос не выполнен. Проверьте данные.');
+      throw Error(typeof data.detail === 'string' ? data.detail : 'Запрос отклонён. Проверьте введённые данные и состояние ресурса.');
     }
-    return response.status === 204 ? null : response.json();
+    if (response.status === 204) return null;
+    try {
+      const value = await response.json();
+      return value;
+    } catch (error) {
+      if (error?.name === 'AbortError') throw error;
+      throw requestError(
+        mutation
+          ? 'Сервер вернул некорректный ответ и не подтвердил результат изменения. Проверьте состояние объекта перед повторной отправкой; автоматический повтор не выполнялся.'
+          : 'Сервер вернул некорректный ответ. Повторите запрос.',
+        mutation ? 'AmbiguousRequestError' : 'NetworkError',
+        error
+      );
+    }
   }
 
   const withSignal = (promise, signal) => {
@@ -153,7 +202,14 @@
       }
       return withSignal(shared, options.signal);
     }
-    const value = await fetchJson(path, options);
+    let value;
+    try {
+      value = await fetchJson(path, options);
+    } catch (error) {
+      if (method !== 'GET' && method !== 'HEAD' && error?.outcomeUnknown)
+        invalidate('ambiguous ' + method + ' ' + pathname(path));
+      throw error;
+    }
     if (method !== 'GET' && method !== 'HEAD') invalidate(method + ' ' + pathname(path));
     return value;
   }
@@ -166,6 +222,7 @@
     invalidate,
     onMessage(sink) { sinks.add(sink); return () => sinks.delete(sink); },
     onInvalidate(hook) { invalidationHooks.add(hook); return () => invalidationHooks.delete(hook); },
+    onBeforeInvalidate(hook) { beforeInvalidationHooks.add(hook); return () => beforeInvalidationHooks.delete(hook); },
     scopeOf,
     generation: () => generation,
     cache: {

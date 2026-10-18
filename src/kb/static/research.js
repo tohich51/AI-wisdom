@@ -123,20 +123,25 @@ window.WisdomResearch = (() => {
       const runId=currentRun, serial=runSerial, noteId=currentNote, editEpoch=epoch;
       let editableNote=note;
       const ownsSelection=()=>valid() && editEpoch===epoch && runId===currentRun && serial===runSerial && noteId===currentNote;
-      host.dialog('Изменить заметку',form=>formFields(form,[['title','Название',editableNote.title,'input'],['comment','Комментарий',editableNote.comment]]),async (data,{isCurrent})=> {
+      host.dialog('Изменить заметку',form=>{
+        form.dataset.draftKey = uuid.test(String(editableNote.id || '')) ? 'note:' + editableNote.id : '';
+        formFields(form,[['title','Название',editableNote.title,'input'],['comment','Комментарий',editableNote.comment]]);
+      },async (data,{isCurrent})=> {
+        if(!isCurrent()||!ownsSelection())return;
+        const saved=await fetchPost('/api/notes/'+editableNote.id,{title:data.get('title'),comment:data.get('comment'),revision:editableNote.revision},'PATCH');
+        if (!isCurrent()||!ownsSelection()) return;
+        editableNote=saved.note;
         try {
-          if(!isCurrent()||!ownsSelection())return;
-          const saved=await fetchPost('/api/notes/'+editableNote.id,{title:data.get('title'),comment:data.get('comment'),revision:editableNote.revision},'PATCH');
-          if (!isCurrent()||!ownsSelection()) return;
-          editableNote=saved.note;
           renderNote(editableNote);
           await refreshLists({id:runId,serial});
-          if (!isCurrent()||!ownsSelection()) return;
-          host.notify('Заметка сохранена.');
         } catch (error) {
           if (!isCurrent()||!ownsSelection()) return;
-          throw error;
+          const detail=error?.message?': '+error.message:'';
+          host.notify('Заметка сохранена, но обновление интерфейса не завершилось'+detail+'. Обновите страницу.');
+          return;
         }
+        if (!isCurrent()||!ownsSelection()) return;
+        host.notify('Заметка сохранена.');
       });
     }
     async function showRun(id,noteId=null) {
@@ -175,18 +180,31 @@ window.WisdomResearch = (() => {
       const actions=n('div',null,{class:'actions'}); result.append(actions);
       const actionRunId=id, actionRunSerial=runSerial;
       const actionCurrent=()=>valid()&&actionRunId===currentRun&&actionRunSerial===runSerial;
-      actions.append(b('Сохранить заметку',()=>host.dialog('Новая заметка',form=>formFields(form,[['title','Название',run.result.title,'input'],['comment','Личный комментарий','']]),async (data,{isCurrent})=> {
+      actions.append(b('Сохранить заметку',()=>host.dialog('Новая заметка',form=>{
+        form.dataset.draftKey = uuid.test(String(actionRunId || '')) ? 'note:new:run:' + actionRunId : '';
+        formFields(form,[['title','Название',run.result.title,'input'],['comment','Личный комментарий','']]);
+      },async (data,{isCurrent})=> {
         if(!isCurrent()||!actionCurrent())return;
         await fetchPost('/api/notes',{run_id:actionRunId,title:data.get('title'),comment:data.get('comment')});
         if(!isCurrent()||!actionCurrent())return;
-        await refreshLists({id:actionRunId,serial:actionRunSerial});
+        try {
+          await refreshLists({id:actionRunId,serial:actionRunSerial});
+        } catch (error) {
+          if(!isCurrent()||!actionCurrent())return;
+          const detail=error?.message?': '+error.message:'';
+          host.notify('Заметка сохранена, но список не обновился'+detail+'. Обновите страницу.');
+          return;
+        }
         if(!isCurrent()||!actionCurrent())return;
         host.notify('Заметка сохранена в базе.');
       })),b('Скачать Markdown',async()=> {
         if(!actionCurrent())return;
         const doc=await request('/api/research/'+actionRunId+'/markdown');
         if(actionCurrent())host.download(doc.filename,doc.markdown,'text/markdown');
-      }),b('Создать черновик правила',()=>host.dialog('Черновик правила',form=>formFields(form,[['title','Название',run.result.title,'input'],['when_to_apply','Когда применять',''],['expected_effect','Ожидаемый результат','']]),async (data,{isCurrent})=> {
+      }),b('Создать черновик правила',()=>host.dialog('Черновик правила',form=>{
+        form.dataset.draftKey = uuid.test(String(actionRunId || '')) ? 'rule-from-run:' + actionRunId : '';
+        formFields(form,[['title','Название',run.result.title,'input'],['when_to_apply','Когда применять',''],['expected_effect','Ожидаемый результат','']]);
+      },async (data,{isCurrent})=> {
         if(!isCurrent()||!actionCurrent())return;
         await fetchPost('/api/research/'+actionRunId+'/draft-rule',{run_id:actionRunId,title:data.get('title'),when_to_apply:data.get('when_to_apply'),expected_effect:data.get('expected_effect')});
         if(!isCurrent()||!actionCurrent())return;
@@ -194,24 +212,29 @@ window.WisdomResearch = (() => {
       })));
       return finishTerminal();
     }
-    async function start(kind,query) {
+    async function start(kind,queryValue) {
       if (!selected.size || selected.size>10) throw Error('Выберите от 1 до 10 готовых источников.');
       if (kind==='comparison' && selected.size<2) throw Error('Для сравнения нужны минимум два источника.');
-      if (kind==='research' && !query.trim()) throw Error('Напишите вопрос.');
+      if (kind==='research' && !queryValue.trim()) {
+        window.WisdomForms.showErrors(ask, [{control: query, message: 'Напишите вопрос.', active: () => !query.value.trim()}]);
+        query.focus();
+        return;
+      }
       submit.disabled=generate.disabled=true;
       try {
-        const fingerprint=JSON.stringify({library_id:libId,source_ids:[...selected].sort(),kind,query});
+        const fingerprint=JSON.stringify({library_id:libId,source_ids:[...selected].sort(),kind,query:queryValue});
         if(!operation || operation.fingerprint!==fingerprint) operation={fingerprint,key:crypto.randomUUID()};
-        const job=await fetchPost('/api/research',{library_id:libId,source_ids:[...selected],kind,query,idempotency_key:operation.key});
+        const job=await fetchPost('/api/research',{library_id:libId,source_ids:[...selected],kind,query:queryValue,idempotency_key:operation.key});
         operation=null;
         await showRun(job.run_id); await refreshLists();
       } finally { if (valid()) submit.disabled=generate.disabled=!canGenerate; }
     }
     let canGenerate=false;
-    const ask=n('form',null,{class:'card'}), query=n('textarea',null,{id:'research-query',maxlength:2000,rows:4});
+    const ask=n('form',null,{class:'card'}), query=n('textarea',null,{id:'research-query',maxlength:2000,rows:4,required:true});
+    ask.dataset.draftKey = uuid.test(String(libId || '')) ? 'research:' + libId + ':ask' : '';
     query.value=pending?.query || ''; ask.append(n('h2','Исследование'),n('label','Вопрос по выбранным источникам',{for:'research-query'}),query);
     const submit=n('button','Исследовать',{type:'submit',disabled:true}); ask.append(submit); work.prepend(ask);
-    ask.addEventListener('submit',action(()=>start('research',query.value)));
+    window.WisdomForms.submit(ask,()=>start('research',query.value));
     studio.append(n('h2','Studio'),n('p','Создайте полезный формат из тех же источников.'));
     const format=n('select',null,{id:'studio-format'});
     for (const [kind,label] of Object.entries(labels).filter(([kind])=>kind!=='research')) format.append(n('option',label,{value:kind}));
@@ -237,6 +260,7 @@ window.WisdomResearch = (() => {
       if (openRunId) await showRun(openRunId);
     } catch (error) { if (valid() && error.name!=='AbortError') { result.replaceChildren(); host.notify(error.message); } }
   }
+  const uuid=/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
   const labels={research:'Исследование',summary:'Краткое содержание',faq:'Вопросы и ответы',comparison:'Сравнение',checklist:'Чек-лист',flashcards:'Карточки',topic:'Карта тем',network:'Семантическая сеть'};
   const statusLabel=value=>({queued:'В очереди',running:'Генерация',done:'Готово',failed:'Ошибка'}[value]||value);
   return {mount,invalidate,question,configure:helpers=>{host=helpers;}};

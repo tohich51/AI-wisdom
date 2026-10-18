@@ -19,8 +19,15 @@ const node = (tag, text, attrs = {}) => {
   }
   return n;
 };
+window.WisdomForms.configure(node);
+document.querySelectorAll('main form').forEach(form => window.WisdomForms.enhance(form));
 let identity, selected, libraries = [], activeJob, libraryView = 0, sourceViewSerial = 0, sourceViewController, searchSerial = 0, searchController, latestClickTrigger = null;
 let privateDialogInvalidators = new Set();
+let authenticatedIdentityBinding = null;
+let authorizedDraftBinding = null;
+let freshIdentitySerial = 0;
+let expiredDraftContext = null;
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const captureRouteToken = () => router.current()?.token;
 const isRouteCurrent = token => router.current()?.token === token;
 const registerPrivateDialogInvalidator = (dialog, invalidate) => {
@@ -35,24 +42,99 @@ const invalidatePrivateDialogs = () => {
     try { entry.invalidate(); } catch (_) { /* закрытие диалога не должно блокировать переход */ }
   }
   document.querySelectorAll('dialog[data-wisdom-private]').forEach(dialog => {
-    if (dialog.open) dialog.close();
-    else dialog.remove();
+    try { if (dialog.open) dialog.close(); } catch (_) { /* удаление ниже обязательно */ }
+    dialog.remove();
   });
 };
+const identityCoordinates = value => {
+  const accountId = value?.account_id;
+  const principalId = value?.principal_id;
+  if (accountId === null || accountId === undefined || principalId === null || principalId === undefined) return null;
+  return {accountId: String(accountId), principalId: String(principalId)};
+};
+const sameIdentity = (left, right) => Boolean(
+  left && right && left.accountId === right.accountId && left.principalId === right.principalId
+);
+const routeSnapshot = () => {
+  const current = router.current();
+  if (!current || !current.name || !Array.isArray(current.params)) return null;
+  const name = String(current.name);
+  const params = current.params.map(value => String(value));
+  const query = new URLSearchParams(current.query || '').toString();
+  const expectedPath = router.path(name, params).split('?')[0];
+  let samePath = expectedPath === location.pathname;
+  if (!samePath) {
+    try { samePath = decodeURIComponent(expectedPath) === decodeURIComponent(location.pathname); }
+    catch (_) { samePath = false; }
+  }
+  return samePath ? {name, params, query, route: location.pathname} : null;
+};
+const sameRouteSnapshot = (left, right) => Boolean(
+  left && right && (left.name ?? left.routeName) === (right.name ?? right.routeName) && left.route === right.route &&
+  left.query === right.query && JSON.stringify(left.params) === JSON.stringify(right.params)
+);
+const sameDraftContext = (left, right) => Boolean(
+  left && right && left.accountId === right.accountId && left.principalId === right.principalId &&
+  sameRouteSnapshot(left, right) && left.libraryId === right.libraryId && left.projectId === right.projectId
+);
+const draftContextInfo = (binding = identityCoordinates(identity)) => {
+  if (!binding) return null;
+  const current = routeSnapshot();
+  if (!current) return null;
+  const query = new URLSearchParams(current.query);
+  const chooserLibrary = (workspaceId, controlId) => {
+    const workspace = byId(workspaceId), control = byId(controlId);
+    if (!(control instanceof HTMLSelectElement) || !workspace?.contains(control)) return '';
+    return String(control.value || '');
+  };
+  let libraryId = '';
+  if (current.name === 'libraries' && current.params[0]) libraryId = String(current.params[0]);
+  else if (current.name === 'context' && current.params[0]) libraryId = String(current.params[0]);
+  else if (current.name === 'maps') {
+    const selected = chooserLibrary('maps-workspace', 'map-library');
+    const requested = String(query.get('library') || '');
+    if (requested && selected && requested !== selected) return null;
+    libraryId = requested || selected;
+    if (!libraryId) return null;
+  } else if (current.name === 'research') {
+    const selected = chooserLibrary('research-workspace', 'research-library');
+    if (!selected) return null;
+    const requested = String(query.get('library') || '');
+    if (requested && requested !== selected) return null;
+    libraryId = selected;
+  }
+  const scopedLibrary = libraryId ? libraries.find(item => String(item?.id || '') === libraryId) : null;
+  const projectId = libraryId && (current.name === 'context' || (current.name === 'libraries' && scopedLibrary?.kind === 'project'))
+    ? libraryId : '';
+  return {
+    accountId: binding.accountId,
+    principalId: binding.principalId,
+    routeName: current.name,
+    params: current.params,
+    query: current.query,
+    route: current.route,
+    libraryId,
+    projectId
+  };
+};
+
 const SOURCE_PAGE_SIZE = 200;
 const SOURCE_AUTO_SEARCH_PAGES = 3;
 const SOURCE_REQUEST_TIMEOUT_MS = 12000;
 const message = text => { byId('status').textContent = text; };
 window.WisdomData.onMessage(message);
-window.WisdomData.onInvalidate(() => {
+window.WisdomData.onInvalidate(reason => {
+  if (reason === 'access' || reason === 'denied') sourceProcessRequests.clear();
   cancelSourceView();
   searchSerial++;
   searchController?.abort();
   searchController = null;
+  const ambiguousMutation = String(reason || '').startsWith('ambiguous ');
   const form = byId('search');
-  if (form instanceof HTMLFormElement) form.reset();
+  if (!ambiguousMutation && form instanceof HTMLFormElement) form.reset();
+  const queryValue = form instanceof HTMLFormElement ? form.elements.namedItem('q')?.value : '';
   const clear = form?.querySelector('[data-wisdom-clear-search]');
-  if (clear) clear.hidden = true;
+  if (clear) clear.hidden = ambiguousMutation ? !String(queryValue || '').trim() : true;
   const results = byId('search-results');
   if (results) results.replaceChildren(node('p', 'Введите запрос для поиска.'));
 });
@@ -63,6 +145,18 @@ function cancelSourceView() {
   document.querySelectorAll('dialog[data-wisdom-source-view]').forEach(dialog => dialog.close());
   if (sourceViewController === active) sourceViewController = null;
 }
+const clearPrivateRoots = () => {
+  invalidatePrivateDialogs();
+  if (typeof window.WisdomResearch?.invalidate === 'function') window.WisdomResearch.invalidate();
+  if (typeof window.WisdomMap?.invalidate === 'function') window.WisdomMap.invalidate();
+  sourceProcessRequests.clear();
+  for (const id of [
+    'library-list', 'library-detail', 'uses-list', 'context-workspace', 'research-workspace',
+    'maps-workspace', 'access-workspace', 'jobs-workspace', 'search-results'
+  ]) byId(id)?.replaceChildren();
+  const status = byId('status');
+  if (status) status.textContent = '';
+};
 document.addEventListener('click', event => {
   const trigger = event.target instanceof Element ? event.target.closest('button, a[href]') : null;
   latestClickTrigger = trigger;
@@ -106,7 +200,9 @@ const safe = (fn, onError) => {
       if (target && disabled !== null) target.disabled = true;
       await operation;
     } catch (error) {
-      if (onError) onError(error, event); else message(readableError(error));
+      if (onError) onError(error, event);
+      else if (event?.currentTarget instanceof HTMLFormElement) window.WisdomForms.formError(event.currentTarget, readableError(error));
+      else message(readableError(error));
     } finally {
       pending = false;
       if (target) {
@@ -144,25 +240,41 @@ function dialogForm(title, render, submit) {
   form.setAttribute('aria-describedby', errorId);
   dialog.append(node('h2', title, {id:headingId}), form);
   render(form);
-  const submitButton = node('button', 'Сохранить', {type: 'submit'});
+  const submitLabelByTitle = new Map([
+    ['Понятие без источника', 'Сохранить понятие без источника'],
+    ['Ручная связь · без доказательства', 'Сохранить ручную связь без доказательства'],
+    ['Новая заметка', 'Создать заметку'],
+    ['Изменить заметку', 'Сохранить заметку'],
+    ['Черновик правила', 'Сохранить черновик правила'],
+    ['Новое правило', 'Создать правило'],
+    ['Новая версия правила', 'Создать новую версию правила'],
+    ['Зафиксировать применение', 'Зафиксировать применение'],
+    ['Результат применения', 'Сохранить результат применения'],
+  ]);
+  const submitButton = node('button', submitLabelByTitle.get(title) || 'Сохранить', {type: 'submit'});
   submitButton.setAttribute('aria-describedby', errorId);
   form.append(errorSummary, submitButton, button('Отмена', () => dialog.close()));
-  form.addEventListener('submit', safe(async () => {
-    if (!isCurrent()) { if (dialog.open) dialog.close(); return; }
+  const clearDialogError = () => {
     errorSummary.textContent = '';
     errorSummary.hidden = true;
+  };
+  form.addEventListener('submit', clearDialogError, true);
+  window.WisdomForms.submit(form, async () => {
+    if (!isCurrent()) { if (dialog.open) dialog.close(); return; }
+    clearDialogError();
     const data = new FormData(form);
     await submit(data, {isCurrent, signal: controller.signal});
     if (isCurrent()) dialog.close();
     else if (dialog.open) dialog.close();
-  }, error => {
+  }, {onError: error => {
     if (!isCurrent()) { if (dialog.open) dialog.close(); return; }
-    errorSummary.textContent = 'Не удалось выполнить действие. Проверьте значения формы и повторите попытку. Причина: ' + readableError(error);
+    errorSummary.textContent = 'Действие не подтверждено. Проверьте состояние объекта и повторите попытку. Причина: ' + readableError(error);
     errorSummary.hidden = false;
     errorSummary.focus();
-  }));
+  }});
   registerPrivateDialogInvalidator(dialog, () => controller.abort());
   dialog.addEventListener('close', () => {
+    window.WisdomForms.discardDraft(form);
     controller.abort();
     dialog.remove();
     restoreFocus(returnFocus, routeToken);
@@ -222,9 +334,20 @@ function downloadBlob(filename, blob) {
 const pagedList = (root, title, path, key, options) => {
   root.append(node('h3', title));
   const group = node('div', null, {class: 'paged-list', 'data-paged': key});
+  const pathIdentity = String(path).split(/[?#]/, 1)[0];
+  const listIdentity = String(key).split(/[?#]/, 1)[0];
+  const filterIdentity = options && options.stateKey != null
+    ? String(options.stateKey).trim()
+    : '';
+  const stateKey = 'path:' + pathIdentity
+    + ':list:' + listIdentity
+    + (filterIdentity ? ':filter:' + filterIdentity : '');
   const list = window.WisdomList.createServer(featureHost, {
     ...options,
     label: 'Страницы списка: ' + title,
+    stateKey,
+    identity: () => featureHost.identity(),
+    library: () => featureHost.currentLibrary(),
     fetchPage: ({limit, offset, signal}) => api(path + '?limit=' + limit + '&offset=' + offset, {signal})
   });
   group.append(list.element, list.navigation, list.status);
@@ -245,8 +368,16 @@ async function loadLibraries() {
   const page = await api('/api/libraries'); libraries = page.libraries;
   const list = byId('library-list'); list.replaceChildren(node('h2', 'Мои библиотеки'));
   if (!libraries.length) list.append(node('p', 'База чистая. Создайте библиотеку и загрузите материал.'));
+  const kindLabels=new Map([
+    ['reference','Справочник'],
+    ['brand','Бренд'],
+    ['project','Проект'],
+    ['playbook','Руководство'],
+    ['experience','Опыт']
+  ]);
   const items = pager({
-    renderItem: lib => button(lib.name + ' · ' + lib.kind, () => openLibrary(lib)),
+    label: 'Страницы библиотек', stateKey: 'libraries', library: null,
+    renderItem: lib => button(lib.name + ' · ' + (kindLabels.get(lib.kind) || lib.kind || 'Тип не указан'), () => openLibrary(lib)),
     empty: 'База чистая. Создайте библиотеку и загрузите материал.'
   });
   if (!libraries.length) return;
@@ -256,19 +387,65 @@ async function loadLibraries() {
 // Каждый вход в раздел перечитывает список, как и раньше: сетевой запрос
 // делает только слой данных (кэш и объединение одинаковых чтений).
 const ensureLibraries = () => loadLibraries();
+const sourceProcessRequests = new Map();
 async function trackJob(id) {
   activeJob = id;
   const job = await api('/api/jobs/' + id);
-  message('Обработка: ' + job.status + ' · частей: ' + job.chunks_done + '/' + (job.chunks_total ?? '?') + (job.error_code ? ' · ' + job.error_code : ''));
-  if (['done', 'partial', 'failed', 'needs_ocr'].includes(job.status)) {
+  const statusLabels=new Map([
+    ['queued','В очереди'],
+    ['running','Обрабатывается'],
+    ['done','Готово'],
+    ['partial','Готово частично'],
+    ['failed','Ошибка обработки'],
+    ['needs_ocr','Требуется распознавание текста'],
+    ['cancelled','Отменено']
+  ]);
+  const statusLabel=statusLabels.get(job.status) || ('неизвестный статус ('+String(job.status)+')');
+  const doneText=job.chunks_done == null ? '' : ' · готово: '+job.chunks_done;
+  const totalText=job.chunks_total == null ? '' : ' · всего: '+job.chunks_total;
+  const errorText=job.error_code ? ' · код ошибки: '+job.error_code : '';
+  message('Состояние: '+statusLabel+doneText+totalText+errorText);
+  if (['done', 'partial', 'failed', 'needs_ocr', 'cancelled'].includes(job.status)) {
     activeJob = null;
     await openLibrary(selected);
-    message(job.status === 'done' ? 'Материал обработан. Проверьте черновики перед публикацией.' : 'Обработка: ' + job.status + ' · ' + (job.error_code ?? '') + '. Можно продолжить; готовые части сохраняются.');
+    message(job.status === 'done' ? 'Материал обработан. Проверьте черновики перед публикацией.' : 'Состояние: '+statusLabel+errorText+'. Можно продолжить; готовые части сохраняются.');
   } else setTimeout(() => { if (activeJob === id) safe(() => trackJob(id))(); }, 3000);
 }
-async function processSource(id, extract, idempotencyKey = crypto.randomUUID()) {
-  const job = await post('/api/sources/' + id + '/process', {idempotency_key: idempotencyKey, extract});
-  await trackJob(job.job_id);
+async function processSource(id, extract, request = null, onJobConfirmed = null) {
+  const requestKey = String(id) + '|' + (extract ? '1' : '0');
+  const suppliedRequest = request && typeof request === 'object'
+    ? request
+    : {idempotency_key: request || crypto.randomUUID()};
+  let pendingRequest = sourceProcessRequests.get(requestKey);
+  if (!pendingRequest) {
+    suppliedRequest.idempotency_key ||= crypto.randomUUID();
+    pendingRequest = suppliedRequest;
+    sourceProcessRequests.set(requestKey, pendingRequest);
+  }
+  suppliedRequest.idempotency_key = pendingRequest.idempotency_key;
+  if (!pendingRequest.job_id) {
+    let job;
+    try {
+      job = await post('/api/sources/' + id + '/process', {idempotency_key: pendingRequest.idempotency_key, extract});
+    } catch (error) {
+      if (!error?.outcomeUnknown) {
+        pendingRequest.idempotency_key = null;
+        suppliedRequest.idempotency_key = null;
+        sourceProcessRequests.delete(requestKey);
+      }
+      throw error;
+    }
+    if (!job?.job_id) {
+      const error = Error('Обработка принята без идентификатора задания; безопасный повтор использует тот же ключ.');
+      error.outcomeUnknown = true;
+      throw error;
+    }
+    pendingRequest.job_id = String(job.job_id);
+  }
+  pendingRequest.idempotency_key = null;
+  suppliedRequest.idempotency_key = null;
+  onJobConfirmed?.(pendingRequest.job_id);
+  await trackJob(pendingRequest.job_id);
 }
 async function viewSource(id, options = {}) {
   sourceViewController?.abort();
@@ -543,7 +720,9 @@ async function openLibrary(lib, {guard = null} = {}) {
   const extractionAllowed = Boolean(policy.generation_allowed && policy.external_processing_allowed);
   root.append(node('p', 'Тип: ' + lib.kind + ' · Доступ: ' + (role ?? 'не указан')));
   if (contributor) {
-    const form = node('form'); form.append(node('h3', 'Загрузить файл')); const uploadTitle = field(form, 'Название материала', 'title');
+    const form = node('form');
+    form.dataset.draftKey = UUID_PATTERN.test(String(lib.id || '')) ? 'upload:' + lib.id : '';
+    form.append(node('h3', 'Загрузить файл')); const uploadTitle = field(form, 'Название материала', 'title');
     const input = field(form, 'PDF, EPUB, DOCX, HTML или текст', 'file', '', 'file'); input.required = true;
     const uploadAuthor = field(form, 'Автор (если известен)', 'author'); const uploadEdition = field(form, 'Издание (если известно)', 'edition');
     const extract = node('input', null, {type: 'checkbox', id: 'extract'});
@@ -552,9 +731,13 @@ async function openLibrary(lib, {guard = null} = {}) {
     if (!extractionAllowed) form.append(node('p', 'Извлечение отключено политикой библиотеки. Менеджер может включить внешнюю обработку и генерацию выше.', {class: 'muted'}));
     form.append(node('button', 'Загрузить и обработать', {type: 'submit'}));
     let pendingUpload = null;
-    form.addEventListener('submit', safe(async () => {
+    window.WisdomForms.submit(form, async () => {
       const file = input.files[0];
-      if (!file) { message('Выберите файл для загрузки.'); input.focus(); return; }
+      if (!file) {
+        window.WisdomForms.showErrors(form, [{control: input, message: 'Выберите файл для загрузки.', active: () => !input.files[0]}]);
+        input.focus();
+        return;
+      }
       const values = {title: uploadTitle.value.trim(), author: uploadAuthor.value.trim(), edition: uploadEdition.value.trim(), extract: extract.checked};
       const same = pendingUpload && pendingUpload.file === file && JSON.stringify(pendingUpload.values) === JSON.stringify(values);
       if (!same) pendingUpload = {file, values, uploadKey: crypto.randomUUID(), processKey: crypto.randomUUID(), sourceId: null};
@@ -569,17 +752,19 @@ async function openLibrary(lib, {guard = null} = {}) {
       try {
         await api('/api/sources/' + operation.sourceId + '/metadata', {method: 'PATCH', body: JSON.stringify({author: values.author || null, edition: values.edition || null, publication_ref: null})});
       } catch (error) {
-        message('Файл сохранён как источник ' + operation.sourceId + ', но метаданные не обновились: ' + error.message + '. Повторите с теми же полями.');
+        window.WisdomForms.formError(form, 'Источник ' + operation.sourceId + ' сохранён, но обновление метаданных не подтверждено: ' + readableError(error) + '. Проверьте состояние источника; ключи операции сохранены.');
         return;
       }
       try {
         await processSource(operation.sourceId, values.extract, operation.processKey);
         pendingUpload = null;
       } catch (error) {
-        message('Источник ' + operation.sourceId + ' сохранён, но обработку подтвердить не удалось: ' + error.message + '. Повторите отправку с теми же полями.');
+        window.WisdomForms.formError(form, 'Источник ' + operation.sourceId + ' сохранён, но запуск или статус обработки не подтверждён: ' + readableError(error) + '. Проверьте состояние обработки; автоматический повтор не выполнялся.');
       }
-    })); root.append(form);
-    const urlForm = node('form'); urlForm.append(node('h3', 'Добавить статью по URL'));
+    }); root.append(form);
+    const urlForm = node('form');
+    urlForm.dataset.draftKey = UUID_PATTERN.test(String(lib.id || '')) ? 'upload-url:' + lib.id : '';
+    urlForm.append(node('h3', 'Добавить статью по URL'));
     const urlInput = field(urlForm, 'URL статьи (http или https)', 'url', '', 'url');
     urlInput.required = true; urlInput.maxLength = 2048; urlInput.autocomplete = 'url';
     const titleInput = field(urlForm, 'Название материала (необязательно)', 'title'); titleInput.maxLength = 300;
@@ -595,33 +780,82 @@ async function openLibrary(lib, {guard = null} = {}) {
       const title = titleInput.value.trim();
       const extract = extractUrl.checked;
       const unchanged = pendingUrlOperation && pendingUrlOperation.url === url && pendingUrlOperation.title === title && pendingUrlOperation.extract === extract;
-      if (!url || url.length > 2048) { pendingUrlOperation = null; message('Укажите URL статьи длиной до 2048 символов.'); urlInput.focus(); return; }
-      if (title.length > 300) { pendingUrlOperation = null; message('Название должно содержать не более 300 символов.'); titleInput.focus(); return; }
-      try {
-        const parsed = new URL(url);
-        if (!['http:', 'https:'].includes(parsed.protocol)) throw Error();
-      } catch (_) { pendingUrlOperation = null; message('Введите полный URL статьи, начинающийся с http:// или https://.'); urlInput.focus(); return; }
-      if (!unchanged) pendingUrlOperation = {url, title, key: crypto.randomUUID(), extract};
-      urlSubmit.disabled = true;
-      message('Сохраняю URL статьи…');
-      try {
-        const body = {url: pendingUrlOperation.url, idempotency_key: pendingUrlOperation.key};
-        if (pendingUrlOperation.title) body.title = pendingUrlOperation.title;
-        const saved = await post('/api/libraries/' + lib.id + '/sources/from-url', body);
-        const operation = pendingUrlOperation;
+      let validProtocol = false;
+      if (url) {
+        try { validProtocol = ['http:', 'https:'].includes(new URL(url).protocol); } catch (_) {}
+      }
+      if (!url || url.length > 2048 || !validProtocol) {
         pendingUrlOperation = null;
-        urlForm.reset();
-        message('Статья сохранена как источник ' + saved.source.id + '. Запускаю обработку…');
+        window.WisdomForms.showErrors(urlForm, [{
+          control: urlInput,
+          message: 'Введите полный URL статьи длиной до 2048 символов, начинающийся с http:// или https://.',
+          active: () => {
+            const value = urlInput.value.trim();
+            if (!value || value.length > 2048) return true;
+            try { return !['http:', 'https:'].includes(new URL(value).protocol); } catch (_) { return true; }
+          }
+        }]);
+        urlInput.focus();
+        return;
+      }
+      if (title.length > 300) {
+        pendingUrlOperation = null;
+        window.WisdomForms.showErrors(urlForm, [{control: titleInput, message: 'Название должно содержать не более 300 символов.', active: () => titleInput.value.trim().length > 300}]);
+        titleInput.focus();
+        return;
+      }
+      if (!unchanged) pendingUrlOperation = {url, title, key: crypto.randomUUID(), extract, sourceId: null, process: null};
+      const operation = pendingUrlOperation;
+      urlSubmit.disabled = true;
+      try {
+        let sourceCreated = false;
+        if (!operation.sourceId) {
+          const body = {url: operation.url, idempotency_key: operation.key};
+          if (operation.title) body.title = operation.title;
+          const saved = await post('/api/libraries/' + lib.id + '/sources/from-url', body);
+          if (!saved?.source?.id) {
+            const error = Error('Сервер не подтвердил идентификатор созданного источника.');
+            error.outcomeUnknown = true;
+            throw error;
+          }
+          operation.sourceId = saved.source.id;
+          sourceCreated = true;
+        }
+        message(sourceCreated
+          ? 'Статья сохранена как источник ' + operation.sourceId + '. Запускаю обработку…'
+          : 'Использую уже подтверждённый источник ' + operation.sourceId + '. Повторяю запуск обработки…');
+        operation.process ||= {idempotency_key: crypto.randomUUID()};
+        let confirmedJobId = null;
         try {
-          await processSource(saved.source.id, operation.extract);
+          await processSource(operation.sourceId, operation.extract, operation.process, jobId => {
+            confirmedJobId = jobId;
+            if (pendingUrlOperation === operation
+                && urlInput.value.trim() === operation.url
+                && titleInput.value.trim() === operation.title
+                && extractUrl.checked === operation.extract) {
+              pendingUrlOperation = null;
+              urlForm.reset();
+            }
+          });
         } catch (error) {
-          message('Источник ' + saved.source.id + ' сохранён, но статус обработки получить не удалось: ' + error.message + '. Проверьте обработку в списке источников.');
+          const detail = readableError(error);
+          if (confirmedJobId) {
+            message('Источник ' + operation.sourceId + ' сохранён, задание ' + confirmedJobId + ' принято, но обновить статус или список не удалось: ' + detail + '. Повторная отправка не создаст новое задание.');
+          } else {
+            message('Источник ' + operation.sourceId + ' сохранён, но запуск обработки не подтверждён: ' + detail
+              + (error?.outcomeUnknown
+                ? ' Повтор с теми же данными использует этот источник и сохранённый ключ операции.'
+                : ' Повтор с теми же данными использует этот источник и новый ключ обработки.'));
+          }
         }
       } catch (error) {
-        message(error.message + (pendingUrlOperation ? ' При неопределённом результате повторите отправку этой же статьи: ключ операции сохранён.' : ''));
+        const suffix = error?.outcomeUnknown && pendingUrlOperation
+          ? ' Автоматический повтор не выполнялся. Перед повторной отправкой проверьте состояние статьи; ключ операции сохранён.'
+          : '';
+        window.WisdomForms.formError(urlForm, readableError(error) + suffix);
       } finally { urlSubmit.disabled = false; }
     };
-    urlForm.addEventListener('submit', safe(submitUrl)); root.append(urlForm);
+    window.WisdomForms.submit(urlForm, submitUrl); root.append(urlForm);
     root.append(button('Создать правило вручную', () => ruleEditor(lib)));
   }
   pagedList(root, 'Источники и происхождение', '/api/libraries/' + lib.id + '/sources', 'sources', {
@@ -681,6 +915,8 @@ async function openLibrary(lib, {guard = null} = {}) {
         card.append(button('Я применил это правило', () => {
           let pendingUse = null;
           return dialogForm('Зафиксировать применение', form => {
+          form.dataset.draftKey = UUID_PATTERN.test(String(rule.id || '')) && Number.isInteger(rule.version_no)
+            ? 'rule-use:new:' + rule.id + ':v' + rule.version_no : '';
           field(form, 'Где применили', 'where_applied'); field(form, 'Какой результат ожидали', 'expected_result', '', 'textarea');
         }, async (data, {isCurrent}) => {
           if (!isCurrent()) return;
@@ -710,6 +946,11 @@ async function openLibrary(lib, {guard = null} = {}) {
 function ruleEditor(lib, rule) {
   let evidence;
   dialogForm(rule ? 'Новая версия правила' : 'Новое правило', form => {
+    form.dataset.draftKey = UUID_PATTERN.test(String(lib.id || ''))
+      ? (rule && UUID_PATTERN.test(String(rule.id || '')) && Number.isInteger(rule.version_no)
+        ? 'rule:' + rule.id + ':v' + rule.version_no
+        : 'rule:new:' + lib.id)
+      : '';
     for (const [title, key, type] of [['Название', 'title', 'text'], ['Когда применять', 'when_to_apply', 'textarea'], ['Входные данные — по одному на строку', 'inputs', 'textarea'], ['Условия', 'preconditions', 'textarea'], ['Шаги — по одному на строку', 'actions', 'textarea'], ['Исключения', 'exceptions', 'textarea'], ['Ожидаемый эффект', 'expected_effect', 'textarea'], ['Как проверить', 'verification', 'textarea']]) field(form, title, key, Array.isArray(rule?.[key]) ? rule[key].join('\n') : rule?.[key], type);
     evidence = window.WisdomRuleEvidence.mount(form, {api, libraryId: lib.id, initialIds: (rule?.provenance ?? []).map(p => p.fragment_id).filter(Boolean)});
   }, async (data, {isCurrent}) => {
@@ -720,13 +961,19 @@ function ruleEditor(lib, rule) {
     if (!isCurrent()) return;
     await post('/api/libraries/' + lib.id + '/rules' + (rule ? '?replaces=' + rule.id : ''), body);
     if (!isCurrent()) return;
-    await openLibrary(lib);
+    try {
+      await openLibrary(lib);
+    } catch (error) {
+      if (isCurrent()) message('Правило сохранено, но список библиотеки не обновился: ' + readableError(error) + '. Обновите страницу.');
+      return;
+    }
   });
 }
 async function loadUses() {
   const list = byId('uses-list'); list.replaceChildren();
   const records = await api('/api/uses');
   const uses = pager({
+    label: 'Страницы личного опыта', stateKey: 'uses', library: null,
     empty: 'Применения пока не записаны. Просмотр и поиск не создают опыт.',
     renderItem: use => {
       const card = node('article', null, {class: 'card'}); card.append(node('h2', use.title + ' · v' + use.rule_version_no), node('p', 'Состояние: ' + use.state), node('p', 'Ожидали: ' + (use.expected_result ?? 'не указано')), node('p', 'Где: ' + (use.where_applied ?? 'не указан')));
@@ -737,6 +984,8 @@ async function loadUses() {
       else card.append(button(use.outcomes.length ? 'Добавить исправление' : 'Записать результат', () => {
         let pendingOutcome = null;
         return dialogForm('Результат применения', form => {
+        form.dataset.draftKey = UUID_PATTERN.test(String(use.id || ''))
+          ? 'use-outcome:' + use.id + ':' + (use.outcomes.length ? 'correction' : 'initial') : '';
         field(form, 'Что получилось', 'observed_result', '', 'textarea'); const rating = field(form, 'Полезность от 1 до 5 (можно не указывать)', 'rating', '', 'number'); rating.min = 1; rating.max = 5;
         field(form, 'Почему такая оценка', 'rating_basis', '', 'textarea');
         const outcomeId = 'achievement-' + crypto.randomUUID();
@@ -762,32 +1011,27 @@ async function loadUses() {
   await window.WisdomCompletion.enhanceUses(list, featureHost);
   await window.WisdomSharedExperience.mount(list, featureHost, records);
 }
+byId('create-library').dataset.draftKey = 'library:create';
 byId('create-library').addEventListener('submit', safe(async event => {
   const form = event.target;
   const nameInput = form.elements.namedItem('name');
-  const nameError = byId('library-name-error');
-  const setNameError = text => {
-    nameError.textContent = text;
-    nameError.hidden = !text;
-    nameInput.setAttribute('aria-invalid', text ? 'true' : 'false');
-    if (text) nameInput.focus();
-  };
-  setNameError('');
+
   const data = Object.fromEntries(new FormData(form));
   if (!String(data.name ?? '').trim()) {
-    setNameError('Введите название библиотеки.');
+    window.WisdomForms.showErrors(form, [{control: nameInput, message: 'Введите название библиотеки.', active: () => !nameInput.value.trim()}]);
+    nameInput.focus();
     return;
   }
   data.organisation_id = identity.account_id;
   const project = data.kind === 'project'; if (project) delete data.kind;
-  let result;
+  const result = await post(project ? '/api/projects' : '/api/libraries', data);
+  form.reset();
   try {
-    result = await post(project ? '/api/projects' : '/api/libraries', data);
+    await ensureLibraries();
+    await openLibrary(project ? result.project : result);
   } catch (error) {
-    setNameError('Не удалось создать библиотеку. Проверьте значения формы и повторите попытку. Причина: ' + readableError(error));
-    throw error;
+    window.WisdomForms.formError(form, 'Библиотека создана, но список или открытие экрана не обновились. Причина: ' + readableError(error));
   }
-  form.reset(); await ensureLibraries(); await openLibrary(project ? result.project : result);
 }));
 const searchForm = byId('search');
 const searchInput = searchForm.querySelector('input[name="q"]');
@@ -803,8 +1047,18 @@ searchClear.addEventListener('click', () => {
   byId('search-results').replaceChildren(node('p', 'Введите запрос для поиска.'));
 });
 searchInput?.addEventListener('input', () => { searchClear.hidden = !String(searchInput.value || '').trim(); });
-searchForm.addEventListener('submit', async event => {
+let searchComposing = false;
+searchInput?.addEventListener('compositionstart', () => { searchComposing = true; });
+searchInput?.addEventListener('compositionend', () => { searchComposing = false; });
+searchInput?.addEventListener('keydown', event => {
+  if (event.key !== 'Enter') return;
+  if (!event.isComposing && event.keyCode !== 229 && !searchComposing) return;
   event.preventDefault();
+  event.stopPropagation();
+});
+window.WisdomForms.submit(searchForm, async event => {
+  event.preventDefault();
+  if (searchComposing || event.isComposing) return;
   const query = String(new FormData(event.target).get('q') || '').trim();
   const list = byId('search-results');
   if (!query) {
@@ -876,6 +1130,7 @@ searchForm.addEventListener('submit', async event => {
     if (serial !== searchSerial || error.name === 'AbortError') return;
     const text = 'Поиск не завершён. ' + (error.message ? error.message + ' ' : 'Сервер не указал причину. ') + 'Проверьте запрос и повторите поиск.';
     list.replaceChildren(node('p', text, {role: 'alert'}));
+    window.WisdomForms.formError(searchForm, text);
     message(text);
   } finally {
     if (serial === searchSerial) searchController = null;
@@ -895,16 +1150,62 @@ const featureHost={node,button,api,post,notify:message,confirm:confirmDialog,lib
   download:(filename,text,type)=>downloadBlob(filename,new Blob([text],{type})),
   downloadBlob,dialog:dialogForm,navigateResearch:()=>router.navigate('research'),
   openRuleVersion:async(id,version)=>{
+    const uuidPattern=/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+    if(typeof id!=='string'||!uuidPattern.test(id))throw Error('Некорректный идентификатор версии правила.');
     const routeToken=captureRouteToken();
     const returnFocus=currentReturnFocus();
-    const rule=await api('/api/rules/'+id);
+    const rule=await api('/api/rules/'+encodeURIComponent(id));
     if(!isRouteCurrent(routeToken))return;
+    const actualVersion=Number(rule.version_no),expectedVersion=Number(version);
+    if(!Number.isInteger(actualVersion))throw Error('Сервер не вернул корректный номер версии правила.');
+    if(version==null||String(version).trim()===''||!Number.isInteger(expectedVersion)||actualVersion!==expectedVersion)throw Error('Версия правила в ответе ('+actualVersion+') не совпадает с ожидаемой ('+(version??'не указана')+'). Повторите открытие из актуального списка.');
     const controller=new AbortController();
     const headingId='rule-version-title-'+uuid();
     const d=node('dialog',null,{'data-wisdom-private':'true','aria-labelledby':headingId});
     const isCurrent=()=>isRouteCurrent(routeToken)&&!controller.signal.aborted;
-    d.append(node('h2',rule.title+' · Версия '+(version||rule.version_no),{id:headingId}),node('p',rule.when_to_apply),node('p',rule.expected_effect));
-    for(const a of rule.actions||[])d.append(node('p',a.body||a));
+    const textValues=value=>{
+      const items=Array.isArray(value)?value:[value];
+      return items.filter(item=>item!=null&&item!=='').map(item=>{
+        if(typeof item==='object'){
+          const text=item.body??item.text??JSON.stringify(item);
+          return text==null?'':String(text);
+        }
+        return String(item);
+      }).filter(Boolean);
+    };
+    const addSection=(heading,value)=>{
+      d.append(node('h3',heading));
+      const values=textValues(value);
+      if(!values.length)d.append(node('p','Не указано.'));
+      else for(const value of values)d.append(node('p',value));
+    };
+    d.append(node('h2',rule.title+' · Версия '+actualVersion,{id:headingId}));
+    addSection('Когда применять',rule.when_to_apply);
+    addSection('Ожидаемый эффект',rule.expected_effect);
+    addSection('Входные данные',rule.inputs);
+    addSection('Условия',rule.preconditions);
+    addSection('Действия',rule.actions);
+    addSection('Исключения',rule.exceptions);
+    addSection('Проверка',rule.verification);
+    d.append(node('h3','Происхождение'));
+    const provenance=Array.isArray(rule.provenance)?rule.provenance:[];
+    if(!provenance.length)d.append(node('p','Свидетельства не указаны.'));
+    for(const proof of provenance){
+      const locator=proof.locator&&typeof proof.locator==='object'?proof.locator:{};
+      const locatorText=Object.entries(locator).map(([key,value])=>key+': '+(value==null?'не указано':String(value))).join(', ')||'не указано';
+      const line=node('p',[
+        proof.source_id?'Источник: '+proof.source_id:'Источник не указан',
+        proof.fragment_id!=null?'Фрагмент: '+proof.fragment_id:'Фрагмент не указан',
+        'Цитата: '+(typeof proof.quote==='string'&&proof.quote?proof.quote:'не указана'),
+        'Место: '+locatorText
+      ].join(' · '));
+      if(typeof proof.source_id==='string'&&uuidPattern.test(proof.source_id)){
+        const sourceOptions={quote:proof.quote,locator,isCurrent};
+        if(proof.fragment_id!=null)sourceOptions.fragmentId=proof.fragment_id;
+        line.append(document.createTextNode(' · '),button('Открыть свидетельство',()=>viewSource(proof.source_id,sourceOptions)));
+      }
+      d.append(line);
+    }
     d.append(button('Закрыть',()=>d.close()));
     registerPrivateDialogInvalidator(d,()=>controller.abort());
     d.addEventListener('close',()=>{controller.abort();d.remove();restoreFocus(returnFocus,routeToken);});
@@ -918,24 +1219,239 @@ window.WisdomResearch.configure(featureHost);
 
 let identityReady = null;
 
+const setIdentityChrome = complete => {
+  const login = document.querySelector('.login');
+  if (login) login.hidden = true;
+  const logout = byId('logout');
+  if (logout) logout.hidden = false;
+  if (complete) {
+    const check = byId('check-login');
+    if (check) check.hidden = true;
+    if (login) {
+      login.removeAttribute('target');
+      login.removeAttribute('rel');
+    }
+  }
+};
+const librariesFrom = payload => {
+  const value = Array.isArray(payload) ? payload : payload?.items ?? payload?.libraries;
+  if (!Array.isArray(value)) throw new Error('Сервер вернул некорректный список библиотек. Проверьте вход повторно.');
+  return value;
+};
+
 const initializeIdentity = () => {
   if (identityReady !== null) return identityReady;
 
-  identityReady = (async () => {
+  const pending = (async () => {
     identity = await api('/api/me');
-    const login = document.querySelector('.login'); if (login) login.hidden = true;
-    const logout = byId('logout'); if (logout) logout.hidden = false;
+    const binding = identityCoordinates(identity);
+    if (!binding) throw new Error('Сервер не подтвердил аккаунт и principal. Проверьте вход повторно.');
+    authenticatedIdentityBinding = binding;
+    setIdentityChrome(true);
     const readiness = await api('/readyz');
     message(readiness.semantic_search_enabled ? 'Поиск по смыслу доступен для опубликованных знаний. Извлечение создаёт черновики для проверки.' : 'Поиск по словам · извлечение создаёт черновики для проверки.');
     return identity;
-  })().catch(error => {
-    identityReady = null;
+  })();
+  identityReady = pending;
+  pending.catch(error => {
+    if (identityReady === pending) identityReady = null;
     message(error.message);
-    throw error;
   });
-
-  return identityReady;
+  return pending;
 };
+
+const refreshIdentity = async () => {
+  const serial = ++freshIdentitySerial;
+  const check = byId('check-login');
+  const routeToken = captureRouteToken();
+  const routeAtStart = routeSnapshot();
+  if (!routeToken || !routeAtStart) throw new Error('Текущий маршрут не распознан. Восстановление не предлагается.');
+  if (check) check.disabled = true;
+  authorizedDraftBinding = null;
+  window.WisdomForms.suspend();
+  let identityChanged = false;
+  let prepare;
+  const ensureRoute = () => {
+    if (serial !== freshIdentitySerial || !isRouteCurrent(routeToken)
+        || !sameRouteSnapshot(routeSnapshot(), routeAtStart)) {
+      throw new DOMException('Проверка входа отменена', 'AbortError');
+    }
+  };
+
+  prepare = (async () => {
+    const fresh = await api('/api/me', {noCache: true, cache: 'no-store'});
+    ensureRoute();
+    const nextBinding = identityCoordinates(fresh);
+    if (!nextBinding) throw new Error('Сервер не подтвердил аккаунт и principal. Проверьте вход повторно.');
+    identityChanged = Boolean(authenticatedIdentityBinding && !sameIdentity(authenticatedIdentityBinding, nextBinding));
+    if (identityChanged) {
+      window.WisdomForms.clearDrafts();
+      expiredDraftContext = null;
+      clearPrivateRoots();
+      selected = null;
+      activeJob = null;
+    }
+    identity = fresh;
+    authenticatedIdentityBinding = nextBinding;
+    libraries = [];
+    if (identityChanged) window.WisdomData.invalidate('identity change');
+    setIdentityChrome(false);
+    const freshLibraries = await api('/api/libraries', {noCache: true, cache: 'no-store'});
+    ensureRoute();
+    libraries = librariesFrom(freshLibraries);
+    return fresh;
+  })();
+  identityReady = prepare;
+
+  try {
+    const fresh = await prepare;
+    const ensureBeforeRefresh = () => {
+      ensureRoute();
+      if (identity !== fresh || identityReady !== prepare) throw new DOMException('Проверка входа отменена', 'AbortError');
+    };
+    ensureBeforeRefresh();
+    const targetRoute = routeSnapshot();
+    const requiresLibrary = targetRoute.name === 'maps' || targetRoute.name === 'research'
+      || ((targetRoute.name === 'libraries' || targetRoute.name === 'context') && Boolean(targetRoute.params[0]));
+    let candidate = targetRoute.name === 'libraries' || targetRoute.name === 'context'
+      ? String(targetRoute.params[0] || '') : '';
+    if (targetRoute.name === 'maps') candidate = String(new URLSearchParams(targetRoute.query).get('library') || '');
+    const hintMatches = expiredDraftContext && sameRouteSnapshot(expiredDraftContext, targetRoute);
+    if (hintMatches && requiresLibrary && !candidate) candidate = expiredDraftContext.libraryId;
+    if (hintMatches && requiresLibrary && !candidate) {
+      throw new Error('Библиотека прежнего маршрута не подтверждена. Восстановление не предлагается.');
+    }
+    const allowedRoles = new Set(['reader', 'contributor', 'curator', 'manager']);
+    const validateFreshLibrary = async (libraryId, ensure) => {
+      const normalizedId = String(libraryId || '');
+      const library = libraries.find(item => String(item?.id || '') === normalizedId);
+      if (!UUID_PATTERN.test(normalizedId) || !library) {
+        throw new Error('Библиотека не найдена в свежем списке доступных. Восстановление не предлагается.');
+      }
+      const policy = await api('/api/libraries/' + encodeURIComponent(normalizedId) + '/policy', {noCache: true, cache: 'no-store'});
+      ensure();
+      if (policy?.denied === true || !allowedRoles.has(String(policy?.effective_role || ''))) {
+        throw new Error('Свежая политика не подтверждает доступ к библиотеке. Восстановление не предлагается.');
+      }
+      if (targetRoute.name === 'context' && library.kind !== 'project') {
+        throw new Error('Маршрут контекста не связан с доступным проектом. Восстановление не предлагается.');
+      }
+      return {library, policy};
+    };
+    let candidateValidation = null;
+    if (candidate) {
+      candidateValidation = await validateFreshLibrary(candidate, ensureBeforeRefresh);
+      if (targetRoute.name === 'maps' || targetRoute.name === 'research') selected = candidateValidation.library;
+    }
+
+    const refreshPromise = router.refresh();
+    const refreshedToken = router.current()?.token;
+    if (!refreshedToken) throw new Error('Маршрут не был обновлён. Восстановление не предлагается.');
+    await refreshPromise;
+    const ensureAfterRefresh = () => {
+      if (serial !== freshIdentitySerial || !isRouteCurrent(refreshedToken)
+          || !sameRouteSnapshot(routeSnapshot(), targetRoute)
+          || identity !== fresh || identityReady !== prepare) {
+        throw new DOMException('Проверка входа отменена', 'AbortError');
+      }
+    };
+    ensureAfterRefresh();
+    const currentContext = draftContextInfo();
+    if (!currentContext || !sameRouteSnapshot(currentContext, targetRoute)) {
+      throw new Error('Текущий маршрут не подтверждён. Восстановление не предлагается.');
+    }
+    if (requiresLibrary) {
+      if (!currentContext.libraryId || (candidate && currentContext.libraryId !== candidate)) {
+        throw new Error('Библиотека текущего экрана изменилась. Восстановление не предлагается.');
+      }
+      const validation = candidateValidation
+        || await validateFreshLibrary(currentContext.libraryId, ensureAfterRefresh);
+      ensureAfterRefresh();
+      if (targetRoute.name === 'context'
+          && (validation.library.kind !== 'project' || currentContext.projectId !== currentContext.libraryId)) {
+        throw new Error('Сущность проекта не подтверждена. Восстановление не предлагается.');
+      }
+    } else if (currentContext.libraryId) {
+      throw new Error('Библиотека неожиданна для текущего маршрута. Восстановление не предлагается.');
+    }
+    authorizedDraftBinding = currentContext;
+    window.WisdomForms.resume();
+    expiredDraftContext = null;
+    setIdentityChrome(true);
+    message('Вход подтверждён. Восстановление доступно только в памяти этой вкладки.');
+    return fresh;
+  } catch (error) {
+    if (identityReady === prepare) identityReady = null;
+    throw error;
+  } finally {
+    if (serial === freshIdentitySerial && check) check.disabled = false;
+  }
+};
+
+window.WisdomForms.configureContext(() => {
+  if (identityReady === null) return null;
+  const context = draftContextInfo();
+  return context ? {
+    ...context,
+    authorized: context.routeName !== 'access' && sameDraftContext(context, authorizedDraftBinding)
+  } : null;
+});
+
+window.WisdomData.onBeforeInvalidate(status => {
+  freshIdentitySerial++;
+  if (status === 401) {
+    expiredDraftContext = draftContextInfo();
+    window.WisdomForms.snapshotAll();
+    window.WisdomForms.suspend();
+    clearPrivateRoots();
+    authorizedDraftBinding = null;
+    identityReady = null;
+    identity = null;
+    selected = null;
+    activeJob = null;
+    libraries = [];
+    const login = document.querySelector('.login');
+    if (login) {
+      login.href = '/auth/login';
+      login.target = '_blank';
+      login.rel = 'noopener noreferrer';
+    }
+    const check = byId('check-login');
+    if (check) { check.hidden = false; check.disabled = false; }
+    return;
+  }
+  if (status === 403) {
+    window.WisdomForms.clearDrafts();
+    clearPrivateRoots();
+    authorizedDraftBinding = null;
+    authenticatedIdentityBinding = null;
+    expiredDraftContext = null;
+    identityReady = null;
+    identity = null;
+    selected = null;
+    activeJob = null;
+    libraries = [];
+  }
+});
+
+byId('check-login')?.addEventListener('click', () => {
+  refreshIdentity().catch(error => {
+    if (error?.name !== 'AbortError') message(error.message || 'Не удалось подтвердить вход.');
+  });
+});
+byId('logout')?.addEventListener('click', () => {
+  freshIdentitySerial++;
+  window.WisdomForms.clearDrafts();
+  clearPrivateRoots();
+  authorizedDraftBinding = null;
+  authenticatedIdentityBinding = null;
+  expiredDraftContext = null;
+  identityReady = null;
+  identity = null;
+  selected = null;
+  activeJob = null;
+  libraries = [];
+}, {capture: true});
 
 const ready = () => initializeIdentity();
 
@@ -1062,6 +1578,8 @@ function clearRouteFailure(target) {
 router.onChange((current, previous, error) => {
   const navigated = Boolean(previous && current && previous.token !== current.token);
   if (navigated && !error) {
+    authorizedDraftBinding = null;
+    window.WisdomForms.refreshRecovery();
     invalidatePrivateDialogs();
     if (previous.name === current.name) {
       cancelSourceView();

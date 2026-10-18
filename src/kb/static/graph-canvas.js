@@ -40,18 +40,36 @@
       probe.style.textDecorationColor = 'var(--muted)';
       probe.style.outlineColor = 'var(--line-strong)';
       probe.style.caretColor = 'var(--focus)';
+      probe.style.fontFamily = 'var(--graph-font-family)';
+      probe.style.fontSize = 'var(--graph-label-size)';
+      probe.style.width = 'var(--graph-label-max-width)';
       const host = container && container.isConnected ? container : document.body || document.documentElement;
       host.append(probe);
       const probeStyle = window.getComputedStyle(probe);
       const resolved = property => probeStyle.getPropertyValue(property).trim();
+      const pixel = property => Number.parseFloat(
+        window.getComputedStyle(probe).getPropertyValue(property)
+      );
       const next = {
         ink: resolved('color'),
         surface: resolved('background-color'),
         accent: resolved('border-top-color'),
         muted: resolved('text-decoration-color'),
         lineStrong: resolved('outline-color'),
-        focus: resolved('caret-color')
+        focus: resolved('caret-color'),
+        fontFamily: probeStyle.fontFamily.trim(),
+        labelSize: Number.parseFloat(probeStyle.fontSize),
+        labelMaxWidth: Number.parseFloat(resolved('width'))
       };
+      probe.style.fontSize = 'var(--graph-overview-label-size)';
+      next.overviewLabelSize = pixel('font-size');
+      probe.style.fontSize = 'var(--graph-label-size)';
+      probe.style.width = 'var(--graph-node-min-width)';
+      next.nodeMinWidth = pixel('width');
+      probe.style.width = 'var(--graph-node-padding)';
+      next.nodePadding = pixel('width');
+      probe.style.width = 'var(--graph-overview-node-size)';
+      next.overviewNodeSize = pixel('width');
       probe.remove();
       return next;
     };
@@ -62,24 +80,103 @@
     let fills = fillsFor(palette);
     if (container && container.style) container.style.backgroundColor = palette.surface;
 
+    const graphId = value => {
+      if (typeof value === 'string' && value.trim()) return value;
+      if (typeof value === 'number' && Number.isFinite(value)) return String(value);
+      return '';
+    };
     const rows = Array.isArray(data && data.nodes) ? data.nodes : [];
     const overview = rows.length > 40;
     const actualNodes = new Map();
-    const elements = rows.map((node) => {
-      actualNodes.set(String(node.id), node);
-      const label = String(node.label == null ? '' : node.label).slice(0, 60);
-      return { data: { id: node.id, label: label, kind: node.kind } };
+    const ambiguousNodeIds = new Set();
+    for (const node of rows) {
+      if (!node || typeof node !== 'object') continue;
+      const id = graphId(node.id);
+      if (!id) continue;
+      if (actualNodes.has(id)) {
+        actualNodes.delete(id);
+        ambiguousNodeIds.add(id);
+      } else if (!ambiguousNodeIds.has(id)) {
+        actualNodes.set(id, node);
+      }
+    }
+    const nodeRows = rows.filter(node => {
+      const id = graphId(node && node.id);
+      return Boolean(id && !ambiguousNodeIds.has(id));
     });
+    const elementIds = new Set(nodeRows.map(node => graphId(node.id)));
+    const labelProbe = document.createElement('span');
+    labelProbe.style.cssText = 'position:fixed;left:-10000px;top:0;display:inline-block;visibility:hidden;pointer-events:none;white-space:normal;overflow-wrap:anywhere;box-sizing:border-box;line-height:normal';
+    labelProbe.style.fontFamily = palette.fontFamily;
+    labelProbe.style.fontSize = `${palette.labelSize}px`;
+    const measurementHost = container && container.isConnected
+      ? container : document.body || document.documentElement;
+    measurementHost.append(labelProbe);
+    const elements = nodeRows.map(node => {
+      const id = graphId(node.id);
+      const label = String(node.label == null ? '' : node.label).slice(0, 60);
+      let width = palette.overviewNodeSize;
+      let height = palette.overviewNodeSize;
+      let textWidth = 1;
+      if (!overview) {
+        labelProbe.style.width = 'auto';
+        labelProbe.textContent = label || '—';
+        const naturalWidth = labelProbe.getBoundingClientRect().width;
+        const innerWidth = Math.max(
+          palette.nodeMinWidth - 2 * palette.nodePadding,
+          Math.min(palette.labelMaxWidth, naturalWidth)
+        );
+        labelProbe.style.width = `${innerWidth}px`;
+        const measured = labelProbe.getBoundingClientRect();
+        width = Math.ceil(innerWidth + 2 * palette.nodePadding);
+        height = Math.ceil(Math.max(
+          measured.height + 2 * palette.nodePadding,
+          palette.nodeMinWidth / 2
+        ));
+        textWidth = Math.max(1, Math.floor(innerWidth));
+      }
+      return { data: {
+        id: id,
+        label: label,
+        kind: node.kind,
+        width: width,
+        height: height,
+        textWidth: textWidth
+      } };
+    });
+    labelProbe.remove();
     const endpoints = new Set(actualNodes.keys());
 
+    const predicateLabels = {
+      contains: 'содержит', grounds: 'подтверждает', retrieved: 'получено',
+      used: 'применено', reports: 'результат', supports: 'поддерживает',
+      part_of: 'часть', used_for: 'используется для', contradicts: 'противоречит'
+    };
+    const reserveElementId = (preferred, fallback) => {
+      let id = preferred || fallback;
+      if (elementIds.has(id)) id = fallback;
+      let suffix = 0;
+      while (elementIds.has(id)) {
+        suffix += 1;
+        id = fallback + '-' + suffix;
+      }
+      elementIds.add(id);
+      return id;
+    };
+    const actualEdges = new Map();
     const edges = Array.isArray(data && data.edges) ? data.edges : [];
-    edges.forEach((edge) => {
-      const source = String(edge.source);
-      const target = String(edge.target);
+    edges.forEach((edge, index) => {
+      if (!edge || typeof edge !== 'object') return;
+      const source = graphId(edge.source);
+      const target = graphId(edge.target);
       if (source !== target && endpoints.has(source) && endpoints.has(target)) {
+        const id = reserveElementId(graphId(edge.id), 'relation:' + index);
+        actualEdges.set(id, edge);
+        const predicate = typeof edge.predicate === 'string' &&
+          Object.prototype.hasOwnProperty.call(predicateLabels, edge.predicate)
+          ? predicateLabels[edge.predicate] : String(edge.predicate || '');
         elements.push({
-          data: { id: edge.id, source: edge.source, target: edge.target,
-            label: ({contains:'содержит',grounds:'подтверждает',retrieved:'получено',used:'применено',reports:'результат',supports:'поддерживает',part_of:'часть',used_for:'используется для',contradicts:'противоречит'})[edge.predicate] || String(edge.predicate || '') },
+          data: { id: id, source: source, target: target, label: predicate },
           classes: edge.hypothesis ? 'hypothesis' : ''
         });
       }
@@ -89,17 +186,18 @@
         data && data.similarity && data.similarity.available) {
       const similarityEdges = Array.isArray(data.similarity.edges)
         ? data.similarity.edges : [];
-      similarityEdges.forEach((edge) => {
-        const source = String(edge.source);
-        const target = String(edge.target);
+      similarityEdges.forEach((edge, index) => {
+        const source = graphId(edge.source);
+        const target = graphId(edge.target);
         const score = edge.score;
         if (source !== target && endpoints.has(source) && endpoints.has(target) &&
             Number.isFinite(score) && score >= -1 && score <= 1) {
+          const rawId = graphId(edge.id);
           elements.push({
             data: {
-              id: 'similarity:' + String(edge.id),
-              source: edge.source,
-              target: edge.target,
+              id: reserveElementId(rawId ? 'similarity:' + rawId : '', 'similarity:' + index),
+              source: source,
+              target: target,
               label: 'cos ' + score.toFixed(2)
             },
             classes: 'similarity'
@@ -108,34 +206,92 @@
       });
     }
 
+    const legend = document.createElement('div');
+    legend.className = 'graph-legend';
+    legend.setAttribute('role', 'group');
+    legend.setAttribute('aria-label', 'Обозначения графа');
+    const legendTitle = document.createElement('strong');
+    legendTitle.textContent = 'Обозначения графа';
+    const legendList = document.createElement('ul');
+    const legendItem = (markerClass, text) => {
+      const item = document.createElement('li');
+      const marker = document.createElement('span');
+      marker.className = 'graph-legend-symbol ' + markerClass;
+      marker.setAttribute('aria-hidden', 'true');
+      const content = document.createElement('span');
+      content.textContent = text;
+      item.append(marker, content);
+      legendList.append(item);
+    };
+    const kindNames = {
+      source: 'Источник', fragment: 'Фрагмент', knowledge: 'Знание',
+      rule: 'Правило', use: 'Применение', outcome: 'Результат', concept: 'Понятие'
+    };
+    const presentKinds = [...new Set(nodeRows.map(node =>
+      node && typeof node.kind === 'string' ? node.kind : ''
+    ).filter(Boolean))];
+    for (const kind of presentKinds) {
+      const kindName = Object.prototype.hasOwnProperty.call(kindNames, kind)
+        ? kindNames[kind] : kind;
+      legendItem('graph-legend-symbol--node', kindName + ': узел');
+    }
+    legendItem('graph-legend-symbol--typed',
+      'Сплошная линия со стрелкой — направленная связь; подпись задаёт её тип.');
+    legendItem('graph-legend-symbol--hypothesis',
+      'Пунктирная направленная связь — гипотеза.');
+    legendItem('graph-legend-symbol--similarity',
+      'Пунктирная линия без стрелки — косинусное сходство понятий; это не направление и не доказательство.');
+    legend.append(legendTitle, legendList);
+    if (overview) {
+      const note = document.createElement('p');
+      note.className = 'graph-legend-note';
+      note.textContent = 'Обзорный режим: подписи узлов скрыты, а полный список остаётся в DOM. Используйте список под графом; пересечения линий в плотной сети допустимы.';
+      legend.append(note);
+    }
+
     const graph = window.cytoscape({
       container: container,
       elements: elements,
       minZoom: 0.04,
       maxZoom: 3,
       wheelSensitivity: 0.15,
-      layout: { name: mode === 'semantic' ? 'circle' : 'cose',
+      layout: { name: overview || mode === 'semantic' ? 'circle' : 'cose',
         fit: true, padding: 30, animate: false, componentSpacing: 80,
-        idealEdgeLength: 90, nodeRepulsion: 400000, nodeOverlap: 20 },
+        idealEdgeLength: 90, nodeRepulsion: 400000, nodeOverlap: 20,
+        avoidOverlap: true, nodeDimensionsIncludeLabels: true },
       style: [
         { selector: 'node', style: {
-          shape: 'ellipse', width: 30, height: 30,
+          shape: 'round-rectangle',
+          width: node => node.data('width'),
+          height: node => node.data('height'),
           'background-color': node => fills[node.data('kind')] || fills.default,
-          label: node => overview && node.data('kind') !== 'source' ? '' : node.data('label'),
-          color: () => palette.ink, 'font-size': 11,
-          'font-family': 'Arial, sans-serif', 'text-wrap': 'wrap', 'text-max-width': '90px',
-          'text-background-color': () => palette.surface, 'text-background-opacity': 1,
-          'text-background-padding': 1,
-          'text-outline-color': () => palette.surface, 'text-outline-width': 2,
+          'background-opacity': 1,
+          'border-color': () => palette.lineStrong,
+          'border-width': 1,
+          label: overview ? '' : 'data(label)',
+          color: () => palette.ink,
+          'font-size': () => palette.labelSize,
+          'font-family': () => palette.fontFamily,
+          'text-wrap': 'wrap',
+          'text-max-width': node => `${Math.max(1, Number(node.data('textWidth')) || 1)}px`,
+          'text-background-color': () => palette.surface,
+          'text-background-opacity': 1,
+          'text-background-padding': 2,
+          'text-outline-color': () => palette.surface,
+          'text-outline-width': 2,
           'text-valign': 'center', 'text-halign': 'center'
         } },
         { selector: 'edge', style: {
           'curve-style': 'bezier', 'target-arrow-shape': 'triangle', 'arrow-scale': 0.8,
           'line-color': () => palette.lineStrong, 'target-arrow-color': () => palette.lineStrong, width: 1.25,
-          label: overview ? '' : 'data(label)', 'font-size': 11, 'color': () => palette.ink,
+          label: overview ? '' : 'data(label)',
+          'font-size': () => overview ? palette.overviewLabelSize : palette.labelSize,
+          'font-family': () => palette.fontFamily,
+          'color': () => palette.ink,
           'text-rotation': 'autorotate',
           'text-background-color': () => palette.surface, 'text-background-opacity': 1,
-          'text-background-padding': 1, 'text-outline-color': () => palette.surface, 'text-outline-width': 2
+          'text-background-padding': 2,
+          'text-outline-color': () => palette.surface, 'text-outline-width': 2
         } },
         { selector: 'edge.hypothesis', style: { 'line-style': 'dashed' } },
         { selector: 'edge.similarity', style: {
@@ -146,6 +302,7 @@
       ]
     });
 
+    container.insertAdjacentElement('afterend', legend);
     graph.fit(30);
 
     let destroyed = false;
@@ -244,11 +401,18 @@
       resizeObserver = new window.ResizeObserver(handleResize);
       resizeObserver.observe(container);
     }
-    graph.on('destroy', cleanupResizeLifecycle);
+    graph.on('destroy', () => {
+      legend.remove();
+      cleanupResizeLifecycle();
+    });
 
     graph.on('tap', 'node', (event) => {
-      const node = actualNodes.get(String(event.target.id()));
+      const node = actualNodes.get(graphId(event.target.id()));
       if (node && typeof onSelect === 'function') onSelect(node);
+    });
+    graph.on('tap', 'edge', event => {
+      const edge = actualEdges.get(event.target.id());
+      if (edge && typeof options.onSelectEdge === 'function') options.onSelectEdge(edge);
     });
     return graph;
   };

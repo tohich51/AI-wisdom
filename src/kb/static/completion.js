@@ -1,12 +1,14 @@
 'use strict';
 (() => {
   let accessEpoch = 0;
+  const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
   const el = (tag, text, attrs = {}) => {
     const out = document.createElement(tag);
     if (text != null) out.textContent = String(text);
     for (const [key, value] of Object.entries(attrs)) out.setAttribute(key, value);
     return out;
   };
+  window.WisdomForms?.configure(el);
   const card = (title, body) => {
     const box = el('article', null, {class: 'card completion-card'});
     box.append(el('h2', title)); if (body) box.append(body); return box;
@@ -49,22 +51,84 @@
   };
   const empty = (root, text) => root.append(el('p', text, {class: 'completion-empty'}));
 
+  const localizedEnum = (dictionary, value, unknownPrefix) => {
+    if (value == null || value === '') return '';
+    const raw = String(value);
+    return dictionary.has(raw) ? dictionary.get(raw) : unknownPrefix + ': ' + raw;
+  };
+  const ROLE_LABELS = new Map([
+    ['reader', 'Читатель'],
+    ['contributor', 'Автор'],
+    ['curator', 'Куратор'],
+    ['manager', 'Менеджер']
+  ]);
+  const ITEM_KIND_LABELS = new Map([
+    ['knowledge', 'Знание'],
+    ['rule', 'Правило'],
+    ['source', 'Источник']
+  ]);
+  const PUBLICATION_LABELS = new Map([
+    ['draft', 'Черновик'],
+    ['needs_review', 'Требует проверки'],
+    ['published', 'Опубликовано'],
+    ['rejected', 'Отклонено']
+  ]);
+  const MEMBER_STATUS_LABELS = new Map([
+    ['active', 'активен'],
+    ['blocked', 'заблокирован'],
+    ['deactivated', 'деактивирован'],
+    ['disabled', 'отключён'],
+    ['inactive', 'неактивен'],
+    ['removed', 'удалён'],
+    ['suspended', 'приостановлен']
+  ]);
+  const INVITATION_STATUS_LABELS = new Map([
+    ['accepted', 'принято'],
+    ['cancelled', 'отменено'],
+    ['declined', 'отклонено'],
+    ['expired', 'истекло'],
+    ['failed', 'ошибка'],
+    ['pending', 'ожидает обработки'],
+    ['queued', 'в очереди'],
+    ['rejected', 'отклонено'],
+    ['revoked', 'отозвано'],
+    ['sent', 'отправлено']
+  ]);
+  const roleLabel = value => localizedEnum(ROLE_LABELS, value, 'неизвестная роль');
+  const itemKindLabel = value => localizedEnum(ITEM_KIND_LABELS, value, 'неизвестный тип элемента');
+  const publicationLabel = value => localizedEnum(PUBLICATION_LABELS, value, 'неизвестный статус публикации');
+  const memberStatusLabel = value => localizedEnum(MEMBER_STATUS_LABELS, value, 'неизвестный статус участника');
+  const invitationStatusLabel = value => localizedEnum(INVITATION_STATUS_LABELS, value, 'неизвестный статус приглашения');
+
   async function mountJobs(root, host) {
     root.replaceChildren(el('p', 'Загружаю задания…', {role: 'status'}));
     try {
       const jobs = await host.api('/api/jobs');
       const list = el('div', null, {class: 'completion-grid'});
       if (!jobs.length) empty(list, 'Заданий пока нет. Они появятся после обработки источника.');
+      const statusLabels=new Map([
+        ['queued','В очереди'],
+        ['running','Обрабатывается'],
+        ['done','Готово'],
+        ['partial','Готово частично'],
+        ['failed','Ошибка обработки'],
+        ['needs_ocr','Требуется распознавание текста'],
+        ['cancelled','Отменено']
+      ]);
       const jobCard = job => {
         const box = card(job.title || 'Материал без названия');
-        box.append(el('p', 'Состояние: ' + job.status));
-        box.append(el('p', 'Готовые части: ' + job.chunks_done + ' из ' + (job.chunks_total ?? 'не указано')));
+        const status=statusLabels.get(job.status) || ('неизвестный статус ('+String(job.status)+')');
+        box.append(el('p', 'Состояние: ' + status));
+        const chunks=[];
+        if (job.chunks_done != null) chunks.push('Готовые части: '+job.chunks_done);
+        if (job.chunks_total != null) chunks.push('Всего частей: '+job.chunks_total);
+        if (chunks.length) box.append(el('p', chunks.join(' · ')));
         if (job.error_code) box.append(el('p', 'Код ошибки: ' + job.error_code, {class: 'completion-error'}));
         if (job.created_at) box.append(el('p', 'Создано: ' + new Date(job.created_at).toLocaleString('ru-RU'), {class: 'muted'}));
         if (job.completed_at) box.append(el('p', 'Завершено: ' + new Date(job.completed_at).toLocaleString('ru-RU'), {class: 'muted'}));
         return box;
       };
-      const paged = window.WisdomList && jobs.length ? window.WisdomList.create(host, {label: 'Страницы списка заданий', renderItem: jobCard}) : null;
+      const paged = window.WisdomList && jobs.length ? window.WisdomList.create(host, {label: 'Страницы списка заданий', library: null, renderItem: jobCard}) : null;
       if (paged) { paged.set(jobs); list.append(paged.element, paged.navigation, paged.status); }
       else for (const job of jobs) list.append(jobCard(job));
       root.replaceChildren(action('Обновить список', () => mountJobs(root, host)), list);
@@ -94,7 +158,7 @@
       const roleField = (parent, name = 'role') => {
         const wrap = el('div', null, {class: 'completion-field'}), id = 'completion-' + name + '-' + crypto.randomUUID();
         const select = el('select', null, {id, name});
-        for (const value of ['reader', 'contributor', 'curator', 'manager']) select.append(el('option', value, {value}));
+        for (const value of ['reader', 'contributor', 'curator', 'manager']) select.append(el('option', roleLabel(value), {value}));
         wrap.append(el('label', 'Роль', {for: id}), select); parent.append(wrap); return select;
       };
       const selectField = (parent, label, name, items, id, text) => {
@@ -105,51 +169,60 @@
       if (!members.length) empty(memberBox, 'Участники не отображаются для текущей роли.');
       const memberItem = member => {
         const memberLine = el('div', null, {class: 'completion-list-item'});
-        const label = [member.display_name, member.email, member.status].filter(Boolean).join(' · ') || member.principal_id;
+        const label = [member.display_name, member.email, memberStatusLabel(member.status)].filter(Boolean).join(' · ') || member.principal_id;
         memberLine.append(el('p', label));
         if (member.status === 'active') {
           const deactivate = el('details'); deactivate.append(el('summary', 'Деактивировать участника'));
           const form = el('form', null, {class: 'completion-form'}), reason = field('Причина (необязательно)', 'reason');
           const confirmed = field('Подтверждаю блокировку участника и отзыв его активных сессий', 'confirmed', 'checkbox');
+          confirmed.input.required = true;
           const submit = el('button', 'Деактивировать', {type: 'submit'});
           form.append(reason.wrap, confirmed.wrap, submit);
-          confirmed.input.addEventListener('change', () => confirmed.input.setCustomValidity(''));
-          form.addEventListener('submit', async event => {
-            event.preventDefault(); if (!confirmed.input.checked) { confirmed.input.setCustomValidity('Подтвердите блокировку участника.'); confirmed.input.reportValidity(); return; }
+          window.WisdomForms.submit(form, async event => {
+            event.preventDefault();
             submit.disabled = true;
             try {
               const result = await host.post('/api/orgs/' + encodeURIComponent(accountId) + '/members/' + encodeURIComponent(member.principal_id) + '/deactivate', {reason: reason.input.value.trim() || null});
               host.notify(result.revocation_outstanding ? 'Участник заблокирован; отзыв сессии ожидает оператора.' : 'Участник заблокирован, отзыв сессии подтверждён.');
               await mountAccess(root, host);
-            } catch (error) { host.notify(error.message); } finally { submit.disabled = false; }
+            } catch (error) { window.WisdomForms.formError(form, errorMessage(error)); } finally { submit.disabled = false; }
           });
           deactivate.append(form); memberLine.append(deactivate);
         }
         return memberLine;
       };
-      const memberList = window.WisdomList && members.length ? window.WisdomList.create(host, {label: 'Страницы списка участников', renderItem: memberItem}) : null;
+      const memberList = window.WisdomList && members.length ? window.WisdomList.create(host, {label: 'Страницы списка участников', library: null, renderItem: memberItem}) : null;
       if (memberList) { memberList.set(members); memberBox.append(memberList.element, memberList.navigation, memberList.status); }
       else for (const member of members) memberBox.append(memberItem(member));
       const inviteBox = card('Приглашения');
       if (!invitations.length) empty(inviteBox, 'Ожидающих приглашений нет.');
-      for (const item of invitations) inviteBox.append(el('p', [item.email, item.subject, item.status].filter(Boolean).join(' · ') || 'Приглашение'));
+      for (const item of invitations) inviteBox.append(el('p', [item.email, item.subject, invitationStatusLabel(item.status)].filter(Boolean).join(' · ') || 'Приглашение'));
       const inviteForm = el('form', null, {class: 'completion-form'});
       const email = field('Электронная почта (необязательно)', 'email', 'email');
       const subject = field('Идентификатор subject (необязательно)', 'subject');
       email.input.maxLength = 320; subject.input.maxLength = 255;
       const submit = el('button', 'Записать приглашение', {type: 'submit'});
       inviteForm.append(email.wrap, subject.wrap, el('p', 'Это только запись в очереди оператора; письмо не отправляется.', {class: 'muted'}), submit);
-      const clearInvitationValidity = () => email.input.setCustomValidity('');
-      email.input.addEventListener('input', clearInvitationValidity);
-      subject.input.addEventListener('input', clearInvitationValidity);
-      inviteForm.addEventListener('submit', async event => {
+      const bothInvitationFieldsEmpty = () => !email.input.value.trim() && !subject.input.value.trim();
+      const clearInvitationErrors = () => window.WisdomForms.clearErrors(inviteForm, [email.input, subject.input]);
+      email.input.addEventListener('input', clearInvitationErrors);
+      subject.input.addEventListener('input', clearInvitationErrors);
+      window.WisdomForms.submit(inviteForm, async event => {
         event.preventDefault();
-        if (!email.input.value.trim() && !subject.input.value.trim()) { email.input.setCustomValidity('Укажите почту или subject.'); email.input.reportValidity(); return; }
-        email.input.setCustomValidity(''); submit.disabled = true;
+        if (bothInvitationFieldsEmpty()) {
+          window.WisdomForms.showErrors(inviteForm, [
+            {control: email.input, message: 'Укажите почту или subject.', active: bothInvitationFieldsEmpty},
+            {control: subject.input, message: 'Укажите почту или subject.', active: bothInvitationFieldsEmpty}
+          ]);
+          email.input.focus();
+          return;
+        }
+        clearInvitationErrors();
+        submit.disabled = true;
         try {
           await host.post('/api/orgs/' + encodeURIComponent(accountId) + '/invitations', {email: email.input.value.trim() || null, subject: subject.input.value.trim() || null});
           await mountAccess(root, host);
-        } catch (error) { host.notify(error.message); } finally { submit.disabled = false; }
+        } catch (error) { window.WisdomForms.formError(inviteForm, errorMessage(error)); } finally { submit.disabled = false; }
       });
       inviteBox.append(inviteForm);
       const groupBox = card('Группы');
@@ -160,19 +233,20 @@
         const membershipForm = el('form', null, {class: 'completion-form'});
         const memberSelect = selectField(membershipForm, 'Участник для добавления в группу', 'principal_id', activeMembers, 'principal_id', member => [member.display_name, member.email].filter(Boolean).join(' · ') || member.principal_id);
         const add = el('button', 'Добавить участника', {type: 'submit'}); membershipForm.append(add);
-        membershipForm.addEventListener('submit', async event => {
-          event.preventDefault(); if (!memberSelect.value) return;
+        window.WisdomForms.submit(membershipForm, async () => {
+          if (!memberSelect.value) return;
           add.disabled = true;
           try { await host.api('/api/orgs/' + encodeURIComponent(accountId) + '/groups/' + encodeURIComponent(group.id) + '/members/' + encodeURIComponent(memberSelect.value), {method: 'PUT'}); host.notify('Участник добавлен в группу.'); await mountAccess(root, host); }
-          catch (error) { host.notify(error.message); } finally { add.disabled = false; }
+          catch (error) { window.WisdomForms.formError(membershipForm, errorMessage(error)); } finally { add.disabled = false; }
         });
         const removeForm = el('form', null, {class: 'completion-form'});
         const removeMember = selectField(removeForm, 'Участник для удаления из группы', 'principal_id', activeMembers, 'principal_id', member => [member.display_name, member.email].filter(Boolean).join(' · ') || member.principal_id);
+        removeMember.required = true;
         const explainLibrary = libraries.length ? selectField(removeForm, 'Проверить оставшийся доступ к библиотеке (необязательно)', 'library_id', libraries, 'id', item => item.name || item.id) : null;
         const remove = el('button', 'Убрать из группы', {type: 'submit'}); removeForm.append(remove);
         removeForm.append(el('p', 'Показываются активные участники организации. API не предоставляет отдельный список состава группы; отсутствие участника будет показано как отказ API.', {class: 'muted'}));
         let removePending = false;
-          removeForm.addEventListener('submit', async event => {
+          window.WisdomForms.submit(removeForm, async event => {
             event.preventDefault();
             if (removePending || !removeMember.value) return;
             const memberId = removeMember.value, libraryId = explainLibrary?.value || '';
@@ -198,15 +272,15 @@
                 try {
                   const detail = await host.api('/api/orgs/' + encodeURIComponent(accountId) + '/access/' + encodeURIComponent(memberId) + '/libraries/' + encodeURIComponent(libraryId));
                   if(!actionCurrent())return;
-                  const paths = detail.paths.map(path => path.kind === 'direct' ? 'прямое разрешение ' + path.role : 'группа ' + (path.group_name || path.group_id) + ' · ' + path.role);
-                  outcome += ' После изменения: ' + (detail.denied ? 'доступ отсутствует (' + detail.reason + ')' : 'эффективная роль ' + (detail.effective_role || 'не указана')) + (paths.length ? '; пути: ' + paths.join(', ') : '; активных путей нет') + ' (ревизия ' + detail.policy_revision + ').';
+                  const paths = detail.paths.map(path => path.kind === 'direct' ? 'прямое разрешение ' + roleLabel(path.role) : 'группа ' + (path.group_name || path.group_id) + ' · ' + roleLabel(path.role));
+                  outcome += ' После изменения: ' + (detail.denied ? 'доступ отсутствует (' + detail.reason + ')' : 'эффективная роль ' + (roleLabel(detail.effective_role) || 'не указана')) + (paths.length ? '; пути: ' + paths.join(', ') : '; активных путей нет') + ' (ревизия ' + detail.policy_revision + ').';
                 } catch (error) { if (actionCurrent()) outcome += ' Проверка оставшегося доступа не удалась: ' + errorMessage(error); }
               }
               if (!actionCurrent()) return;
               host.notify(outcome);
               await mountAccess(root, host);
             } catch (error) {
-              if (actionCurrent()) host.notify(errorMessage(error));
+              if (actionCurrent()) window.WisdomForms.formError(removeForm, errorMessage(error));
             } finally {
               removePending = false;
               remove.disabled = disabled;
@@ -222,7 +296,7 @@
           if (!grants.length) empty(groupCard, 'Разрешений группы на библиотеки пока нет.');
           for (const grant of grants) {
             const library = libraries.find(item => item.id === grant.library_id);
-            const row = el('p', (library?.name || grant.library_id) + ' · ' + grant.role);
+            const row = el('p', (library?.name || grant.library_id) + ' · ' + roleLabel(grant.role));
             const revoke = action('Отозвать разрешение', async () => {
               const libraryLabel = library?.name || grant.library_id, groupLabel = group.name || group.id;
               const actionEpoch=accessEpoch, actionRouteToken=host.routeToken();
@@ -230,7 +304,7 @@
               try {
                 const confirmed = await host.confirm({
                   title: 'Отозвать разрешение группы',
-                  description: 'Отозвать роль «' + grant.role + '» группы «' + groupLabel + '» для библиотеки «' + libraryLabel + '»? Доступ через эту группу для этой библиотеки перестанет предоставляться. Прямые разрешения участников и доступ через другие группы могут сохранить доступ.',
+                  description: 'Отозвать роль «' + roleLabel(grant.role) + '» группы «' + groupLabel + '» для библиотеки «' + libraryLabel + '»? Доступ через эту группу для этой библиотеки перестанет предоставляться. Прямые разрешения участников и доступ через другие группы могут сохранить доступ.',
                   confirmLabel: 'Отозвать разрешение'
                 });
                 if (!confirmed || !actionCurrent()) return;
@@ -245,27 +319,28 @@
         if (libraries.length) {
           const grantForm = el('form', null, {class: 'completion-form'});
           const librarySelect = selectField(grantForm, 'Библиотека для группы', 'library_id', libraries, 'id', item => item.name || item.id);
+          librarySelect.required = true;
           const role = roleField(grantForm); const save = el('button', 'Назначить роль группе', {type: 'submit'}); grantForm.append(save);
-          grantForm.addEventListener('submit', async event => {
+          window.WisdomForms.submit(grantForm, async event => {
             event.preventDefault(); if (!librarySelect.value) return;
             save.disabled = true;
             try { await host.api(grantsPath + '/' + encodeURIComponent(librarySelect.value), {method: 'PUT', body: JSON.stringify({role: role.value})}); host.notify('Роль группы сохранена.'); await mountAccess(root, host); }
-            catch (error) { host.notify(error.message); } finally { save.disabled = false; }
+            catch (error) { window.WisdomForms.formError(grantForm, errorMessage(error)); } finally { save.disabled = false; }
           });
           groupCard.append(grantForm);
         }
         groupCards.push(groupCard);
       }
-      const groupList = window.WisdomList && groupCards.length ? window.WisdomList.create(host, {label: 'Страницы списка групп', renderItem: built => built}) : null;
+      const groupList = window.WisdomList && groupCards.length ? window.WisdomList.create(host, {label: 'Страницы списка групп', library: null, renderItem: built => built}) : null;
       if (groupList) { groupList.set(groupCards); groupBox.append(groupList.element, groupList.navigation, groupList.status); }
       else for (const groupCard of groupCards) groupBox.append(groupCard);
       const groupForm = el('form', null, {class: 'completion-form'});
       const groupName = field('Название группы (латиница, цифры, _ или -)', 'name'); groupName.input.pattern = '[a-z][a-z0-9_-]{1,63}'; groupName.input.required = true;
       const create = el('button', 'Создать группу', {type: 'submit'}); groupForm.append(groupName.wrap, create);
-      groupForm.addEventListener('submit', async event => {
+      window.WisdomForms.submit(groupForm, async event => {
         event.preventDefault(); create.disabled = true;
         try { await host.post('/api/orgs/' + encodeURIComponent(accountId) + '/groups', {name: groupName.input.value}); await mountAccess(root, host); }
-        catch (error) { host.notify(error.message); } finally { create.disabled = false; }
+        catch (error) { window.WisdomForms.formError(groupForm, errorMessage(error)); } finally { create.disabled = false; }
       });
       groupBox.append(groupForm);
       const directBox = card('Прямые разрешения и объяснение доступа');
@@ -281,7 +356,7 @@
           if (!grants.length) empty(libraryCard, 'Видимых прямых разрешений нет.');
           for (const grant of grants) {
             const member = members.find(item => item.principal_id === grant.principal_id);
-            const row = el('p', [member?.display_name || grant.principal_id, member?.email, grant.role].filter(Boolean).join(' · '));
+            const row = el('p', [member?.display_name || grant.principal_id, member?.email, roleLabel(grant.role)].filter(Boolean).join(' · '));
             if (manager) row.append(document.createTextNode(' · '), action('Отозвать', async () => {
               const libraryLabel = library.name || library.id;
               const memberLabel = [member?.display_name, member?.email].filter(Boolean).join(' · ') || grant.principal_id;
@@ -290,7 +365,7 @@
               try {
                 const confirmed = await host.confirm({
                   title: 'Отозвать прямое разрешение',
-                  description: 'Отозвать роль «' + grant.role + '» участника «' + memberLabel + '» на библиотеку «' + libraryLabel + '»? Прямой доступ перестанет предоставляться; доступ через группы может сохраниться.',
+                  description: 'Отозвать роль «' + roleLabel(grant.role) + '» участника «' + memberLabel + '» на библиотеку «' + libraryLabel + '»? Прямой доступ перестанет предоставляться; доступ через группы может сохраниться.',
                   confirmLabel: 'Отозвать разрешение'
                 });
                 if (!confirmed || !actionCurrent()) return;
@@ -301,16 +376,16 @@
             }, 'secondary'));
             libraryCard.append(row);
           }
-          libraryCard.append(el('p', 'Действующая роль с учётом прямых и групповых разрешений: ' + (policy.effective_role || 'нет доступа'), {class: 'muted'}));
+          libraryCard.append(el('p', 'Действующая роль с учётом прямых и групповых разрешений: ' + (roleLabel(policy.effective_role) || 'нет доступа'), {class: 'muted'}));
           if (manager) {
             const form = el('form', null, {class: 'completion-form'});
             const memberSelect = selectField(form, 'Участник', 'principal_id', activeMembers, 'principal_id', member => [member.display_name, member.email].filter(Boolean).join(' · ') || member.principal_id);
             const role = roleField(form); const save = el('button', 'Сохранить прямую роль', {type: 'submit'}); form.append(save);
-            form.addEventListener('submit', async event => {
-              event.preventDefault(); if (!memberSelect.value) return;
+            window.WisdomForms.submit(form, async () => {
+              if (!memberSelect.value) return;
               save.disabled = true;
               try { await host.api('/api/libraries/' + encodeURIComponent(library.id) + '/grants', {method: 'PUT', body: JSON.stringify({principal_id: memberSelect.value, role: role.value})}); host.notify('Прямое разрешение сохранено.'); await mountAccess(root, host); }
-              catch (error) { host.notify(error.message); } finally { save.disabled = false; }
+              catch (error) { window.WisdomForms.formError(form, errorMessage(error)); } finally { save.disabled = false; }
             });
             libraryCard.append(form);
           } else libraryCard.append(el('p', 'Менять прямые разрешения может только менеджер этой библиотеки.', {class: 'muted'}));
@@ -319,19 +394,20 @@
       }
       if (libraries.length) {
         const explain = el('form', null, {class: 'completion-form'});
-        const member = selectField(explain, 'Проверить участника', 'principal_id', members, 'principal_id', item => [item.display_name, item.email, item.status].filter(Boolean).join(' · ') || item.principal_id);
+        const member = selectField(explain, 'Проверить участника', 'principal_id', members, 'principal_id', item => [item.display_name, item.email, memberStatusLabel(item.status)].filter(Boolean).join(' · ') || item.principal_id);
         const library = selectField(explain, 'Библиотека', 'library_id', libraries, 'id', item => item.name || item.id);
+        member.required = true; library.required = true;
         const lookup = el('button', 'Показать пути доступа', {type: 'submit'}), result = el('div', null, {class: 'completion-access-result'});
         explain.append(lookup, result);
-        explain.addEventListener('submit', async event => {
+        window.WisdomForms.submit(explain, async event => {
           event.preventDefault(); if (!member.value || !library.value) return;
           lookup.disabled = true; result.replaceChildren(el('p', 'Проверяю действующие пути…', {role: 'status'}));
           try {
             const detail = await host.api('/api/orgs/' + encodeURIComponent(accountId) + '/access/' + encodeURIComponent(member.value) + '/libraries/' + encodeURIComponent(library.value));
-            result.replaceChildren(el('p', (detail.denied ? 'Доступ отсутствует: ' + detail.reason : 'Доступ разрешён') + ' · эффективная роль: ' + (detail.effective_role || 'нет доступа') + ' · ревизия политики: ' + detail.policy_revision));
+            result.replaceChildren(el('p', (detail.denied ? 'Доступ отсутствует: ' + detail.reason : 'Доступ разрешён') + ' · эффективная роль: ' + (roleLabel(detail.effective_role) || 'нет доступа') + ' · ревизия политики: ' + detail.policy_revision));
             if (!detail.paths.length) result.append(el('p', 'Активных путей доступа нет.'));
-            for (const path of detail.paths) result.append(el('p', path.kind === 'direct' ? 'Прямое разрешение · ' + path.role : 'Группа ' + (path.group_name || path.group_id) + ' · ' + path.role));
-          } catch (error) { result.replaceChildren(el('p', error.message, {role: 'alert', class: 'completion-error'})); }
+            for (const path of detail.paths) result.append(el('p', path.kind === 'direct' ? 'Прямое разрешение · ' + roleLabel(path.role) : 'Группа ' + (path.group_name || path.group_id) + ' · ' + roleLabel(path.role)));
+          } catch (error) { window.WisdomForms.formError(explain, errorMessage(error)); result.replaceChildren(el('p', errorMessage(error), {role: 'alert', class: 'completion-error'})); }
           finally { lookup.disabled = false; }
         });
         directBox.append(explain);
@@ -361,7 +437,7 @@
         ['external_processing_allowed', 'Внешняя обработка'], ['cloud_mcp_allowed', 'Облачные MCP-клиенты'],
         ['export_allowed', 'Экспорт'], ['generation_allowed', 'Генерация']
       ];
-      policyCard.append(el('p', 'Роль: ' + (policy.effective_role || 'не указана')));
+      policyCard.append(el('p', 'Роль: ' + (roleLabel(policy.effective_role) || 'не указана')));
       const form = el('form', null, {class: 'completion-form'});
       for (const [key, label] of names) {
         const row = field(label, key, 'checkbox'); row.input.checked = Boolean(policy[key]); row.input.disabled = !manager;
@@ -370,7 +446,7 @@
       policyCard.append(el('p', 'Локальный поиск продолжит работать при выключенных облачных и внешних обработчиках. Генерация изначально выключена.', {class: 'muted'}));
       if (manager) {
         const save = el('button', 'Сохранить ограничения', {type: 'submit'}); form.append(save);
-        form.addEventListener('submit', async event => {
+        window.WisdomForms.submit(form, async event => {
           event.preventDefault(); save.disabled = true;
           try {
             const payload = Object.fromEntries(names.map(([key]) => [key, form.elements[key].checked]));
@@ -378,7 +454,7 @@
             if (!host.currentLibrary() || host.currentLibrary().id !== library.id) return;
             host.notify('Ограничения сохранены.');
             if (host.refreshLibrary) await host.refreshLibrary(); else await enhanceLibrary(root, library, host);
-          } catch (error) { fail(policyCard, error); } finally { save.disabled = false; }
+          } catch (error) { window.WisdomForms.formError(form, errorMessage(error)); } finally { save.disabled = false; }
         });
       } else policyCard.append(el('p', 'Изменять ограничения может только менеджер библиотеки.', {class: 'muted'}));
       policyCard.append(form);
@@ -398,7 +474,7 @@
           const check = el('input', null, {type: 'checkbox', value: item.id});
           checks.push({check, item}); label.append(check);
         }
-        label.append(el('span', (item.title || item.statement || 'Без названия') + ' · ' + item.item_kind + ' · ' + item.publication));
+        label.append(el('span', (item.title || item.statement || 'Без названия') + ' · ' + itemKindLabel(item.item_kind) + ' · ' + publicationLabel(item.publication)));
         review.append(label);
         if (item.item_kind === 'knowledge') {
           const canEdit = canReview || Boolean(item.created_by && item.created_by === host.identity()?.principal_id);
@@ -423,16 +499,41 @@
             editor.append(line);
           }
           if (canEdit) {
-            const text = el('textarea'); text.value = item.statement || ''; text.setAttribute('aria-label', 'Текст черновика');
-            const save = el('button', 'Сохранить текст', {type: 'button'});
-            save.addEventListener('click', async () => {
-              save.disabled = true;
+            const form = el('form', null, {class: 'completion-form'});
+            form.dataset.draftKey = uuid.test(String(item.id || '')) ? 'knowledge:' + library.id + ':' + item.id : '';
+            const text = el('textarea', null, {name: 'statement', 'aria-label': 'Текст черновика'});
+            text.value = item.statement || '';
+            const actions = el('div');
+            const save = el('button', 'Сохранить текст', {type: 'submit'});
+            const cancel = el('button', 'Отмена', {type: 'button'});
+            cancel.addEventListener('click', () => {
+              window.WisdomForms.discardDraft(form);
+              editor.remove();
+            });
+            actions.append(save, cancel);
+            form.append(text, actions);
+            window.WisdomForms.submit(form, async () => {
+              editor.querySelector('[data-knowledge-save-error]')?.remove();
               try {
                 await host.api('/api/knowledge/' + encodeURIComponent(item.id), {method: 'PATCH', body: JSON.stringify({statement: text.value, expected_statement: item.statement, kind: item.kind})});
+              } catch (error) {
+                const detail = error?.message ? ': ' + error.message : '.';
+                editor.append(el('p', 'Черновик не сохранён' + detail, {role: 'alert', 'data-knowledge-save-error': 'true'}));
+                return;
+              }
+              window.WisdomForms.discardDraft(form);
+              if (!host.currentLibrary() || host.currentLibrary().id !== library.id) return;
+              try {
+                await enhanceLibrary(root, library, host);
+              } catch (error) {
                 if (!host.currentLibrary() || host.currentLibrary().id !== library.id) return;
-                host.notify('Черновик обновлён.'); await enhanceLibrary(root, library, host);
-              } catch (error) { fail(review, error); } finally { save.disabled = false; }
-            }); editor.append(text, save);
+                const detail = error?.message ? ': ' + error.message : '';
+                host.notify('Черновик обновлён, но список не обновился' + detail + '. Обновите страницу.');
+                return;
+              }
+              if (host.currentLibrary()?.id === library.id) host.notify('Черновик обновлён.');
+            });
+            editor.append(form);
           }
           review.append(editor);
         }
@@ -449,7 +550,15 @@
           if (JSON.stringify(now) !== JSON.stringify(selected.map(({item}) => item.id))) throw Error('Выбор изменился. Повторите действие.');
           await host.post('/api/libraries/' + encodeURIComponent(library.id) + '/review', {item_kind: selected[0].item.item_kind, item_ids: now, decision});
           if (!host.currentLibrary() || host.currentLibrary().id !== library.id) return;
-          await enhanceLibrary(root, library, host);
+          try {
+            await enhanceLibrary(root, library, host);
+          } catch (error) {
+            if (!host.currentLibrary() || host.currentLibrary().id !== library.id) return;
+            const detail = error?.message ? ': ' + error.message : '';
+            host.notify('Решение сохранено, но список не обновился' + detail + '. Обновите страницу.');
+            return;
+          }
+          if (host.currentLibrary()?.id === library.id) host.notify('Решение сохранено.');
         }), action('Отмена', () => confirmation.remove()));
         review.append(confirmation);
       }, decision === 'publish' ? 'primary' : 'secondary'));
@@ -476,7 +585,7 @@
       const journal = el('details'); journal.append(el('summary','Последние выдачи материалов'));
       const entries = await host.api('/api/retrievals');
       if (!entries.length) journal.append(el('p','История выдачи пока пуста.'));
-      for (const entry of entries) journal.append(el('p',(entry.title ?? 'Материал') + ' · ' + entry.item_kind + (entry.version_no ? ' · v' + entry.version_no : '') + ' · ' + entry.delivered_at));
+      for (const entry of entries) journal.append(el('p',(entry.title ?? 'Материал') + ' · ' + itemKindLabel(entry.item_kind) + (entry.version_no ? ' · v' + entry.version_no : '') + ' · ' + entry.delivered_at));
       area.append(journal);
     } catch (error) { fail(area, error); }
   }

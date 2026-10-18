@@ -5,6 +5,7 @@
 <title>AI-wisdom</title>
 <link rel="stylesheet" href="/static/style.css">
 <script src="/static/data.js" defer></script>
+<script src="/static/forms.js" defer></script>
 <script src="/static/router.js" defer></script>
 <script src="/static/pager.js" defer></script>
 <script src="/static/graph-canvas.js" defer></script>
@@ -23,6 +24,7 @@
 <a class="wordmark" href="/" aria-label="AI-wisdom — главная">AI-wisdom</a>
 <div class="account">
 <a class="login" href="/auth/login">Войти</a>
+<button id="check-login" type="button" hidden>Проверить вход</button>
 <button id="logout" class="logout" type="button">Выйти</button>
 </div>
 </header>
@@ -50,8 +52,7 @@
 <article class="card" aria-labelledby="create-library-heading"><h2 id="create-library-heading">Новая библиотека</h2>
 <form id="create-library" novalidate>
 <label for="library-name">Название</label>
-<input id="library-name" name="name" type="text" autocomplete="off" required aria-describedby="library-name-error" aria-invalid="false">
-<p id="library-name-error" class="completion-error" role="alert" hidden></p>
+<input id="library-name" name="name" type="text" autocomplete="off" required>
 <label for="library-kind">Тип</label>
 <select id="library-kind" name="kind" required>
 <option value="reference">Справочник</option><option value="brand">Бренд</option><option value="project">Проект</option><option value="playbook">Плейбук</option><option value="experience">Опыт</option>
@@ -65,19 +66,19 @@
 <input id="search-query" name="q" type="search" required>
 <button type="submit">Найти</button>
 </form>
-<div id="search-results" aria-live="polite"></div>
+<div id="search-results"></div>
 </article>
 </div>
 <div class="library-grid">
-<div id="library-list" aria-live="polite"></div>
-<article id="library-detail" class="card" aria-live="polite"></article>
+<div id="library-list"></div>
+<article id="library-detail" class="card"></article>
 </div>
 </section>
 <section id="uses-tab" aria-labelledby="uses-heading" hidden>
 <div class="section-heading"><h1 id="uses-heading">Опыт применения</h1>
 <p>Ожидаемый результат, фактический результат и полезность конкретной версии правила.</p>
 </div>
-<div id="uses-list" aria-live="polite"></div>
+<div id="uses-list"></div>
 </section>
 <section id="research-tab" aria-labelledby="research-heading" hidden>
 <div class="section-heading"><h1 id="research-heading">Исследование и Studio</h1>
@@ -92,17 +93,17 @@
 <section id="access-tab" aria-labelledby="access-heading" hidden>
 <div class="section-heading"><h1 id="access-heading">Доступ</h1>
 <p>Участники организации, группы и ожидающие приглашения.</p></div>
-<div id="access-workspace" aria-live="polite"></div>
+<div id="access-workspace"></div>
 </section>
 <section id="jobs-tab" aria-labelledby="jobs-heading" hidden>
 <div class="section-heading"><h1 id="jobs-heading">Задания</h1>
 <p>Состояние обработки материалов и готовые части.</p></div>
-<div id="jobs-workspace" aria-live="polite"></div>
+<div id="jobs-workspace"></div>
 </section>
 <section id="context-tab" aria-labelledby="context-heading" hidden>
 <div class="section-heading"><h1 id="context-heading">Контекст проекта</h1>
 <p>Цели, ограничения и накопленный опыт проекта по адресу /app/projects/:id/context.</p></div>
-<div id="context-workspace" aria-live="polite"></div>
+<div id="context-workspace"></div>
 </section>
 </main>
 </div>

@@ -199,7 +199,7 @@
         publishedCards.push(card);
       }
       if (window.WisdomList && publishedCards.length) {
-        const published = window.WisdomList.create(host, {label: 'Страницы списка опубликованных записей', renderItem: built => built});
+        const published = window.WisdomList.create(host, {label: 'Страницы списка опубликованных записей', library:()=>librarySelect.value, renderItem: built => built});
         published.set(publishedCards);
         feed.append(published.element, published.navigation, published.status);
       } else for (const card of publishedCards) feed.append(card);
