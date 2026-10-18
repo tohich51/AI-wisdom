@@ -1001,6 +1001,8 @@ router.register('maps', {
     const chosenMode = context.query.get('view') || context.query.get('mode') || undefined;
     const chosenSource = context.query.get('source') || undefined;
     await window.WisdomMap.mount(byId('maps-workspace'), featureHost, chosen, chosenMode, chosenSource);
+    if (!context.isCurrent()) return;
+    window.WisdomMap.restoreFocus(context.token);
   }
 });
 router.register('access', {
@@ -1055,7 +1057,10 @@ router.onChange((current, previous, error) => {
     invalidatePrivateDialogs();
     if (previous.name === current.name) {
       cancelSourceView();
-      if (current.name === 'maps') window.WisdomMap.invalidate();
+      if (current.name === 'maps') {
+        window.WisdomMap.captureFocusIntent(current.token);
+        window.WisdomMap.invalidate();
+      }
     }
   }
   if (previous && current && previous.name !== current.name) router.focusHeading();

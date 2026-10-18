@@ -113,6 +113,7 @@
           const confirmed = field('Подтверждаю блокировку участника и отзыв его активных сессий', 'confirmed', 'checkbox');
           const submit = el('button', 'Деактивировать', {type: 'submit'});
           form.append(reason.wrap, confirmed.wrap, submit);
+          confirmed.input.addEventListener('change', () => confirmed.input.setCustomValidity(''));
           form.addEventListener('submit', async event => {
             event.preventDefault(); if (!confirmed.input.checked) { confirmed.input.setCustomValidity('Подтвердите блокировку участника.'); confirmed.input.reportValidity(); return; }
             submit.disabled = true;
@@ -138,6 +139,9 @@
       email.input.maxLength = 320; subject.input.maxLength = 255;
       const submit = el('button', 'Записать приглашение', {type: 'submit'});
       inviteForm.append(email.wrap, subject.wrap, el('p', 'Это только запись в очереди оператора; письмо не отправляется.', {class: 'muted'}), submit);
+      const clearInvitationValidity = () => email.input.setCustomValidity('');
+      email.input.addEventListener('input', clearInvitationValidity);
+      subject.input.addEventListener('input', clearInvitationValidity);
       inviteForm.addEventListener('submit', async event => {
         event.preventDefault();
         if (!email.input.value.trim() && !subject.input.value.trim()) { email.input.setCustomValidity('Укажите почту или subject.'); email.input.reportValidity(); return; }
@@ -339,6 +343,7 @@
   }
 
   async function enhanceLibrary(root, library, host) {
+    const routeToken = host.routeToken();
     root.querySelector('.completion-library')?.remove();
     const area = el('section', null, {class: 'completion-library'});
     const policyCard = card('Обработка и экспорт');
@@ -402,7 +407,19 @@
           if (!provenance.length) editor.append(el('p', 'Связанные свидетельства не указаны.', {class: 'muted'}));
           for (const proof of provenance) {
             const line = el('p', [proof.quote, proof.locator?.chapter, proof.locator?.file_page ? 'Страница ' + proof.locator.file_page : null, proof.fragment_id].filter(Boolean).join(' · ') || 'Фрагмент источника');
-            if (typeof proof.source_id === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(proof.source_id)) line.append(document.createTextNode(' · '), action('Открыть источник', () => host.openSource(proof.source_id)));
+            const locator = proof.locator && typeof proof.locator === 'object' ? proof.locator : {};
+            const hasExactTarget = Boolean(
+              (typeof proof.quote === 'string' && proof.quote.length > 0) ||
+              (proof.fragment_id != null && String(proof.fragment_id).length > 0) ||
+              ['chapter', 'file_page', 'printed_label', 'paragraph', 'table_index', 'cell_row', 'cell_column'].some(key => locator[key] != null)
+            );
+            const sourceOptions = {
+              quote: proof.quote,
+              locator: proof.locator,
+              fragmentId: proof.fragment_id,
+              isCurrent: () => host.routeIsCurrent(routeToken) && host.currentLibrary()?.id === library.id && area.isConnected
+            };
+            if (typeof proof.source_id === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(proof.source_id)) line.append(document.createTextNode(' · '), action(hasExactTarget ? 'Открыть точное место' : 'Открыть источник', () => host.openSource(proof.source_id, sourceOptions)));
             editor.append(line);
           }
           if (canEdit) {

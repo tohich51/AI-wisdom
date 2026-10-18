@@ -1,8 +1,20 @@
 'use strict';
 window.WisdomMap = (() => {
-  let epoch=0, controller, canvas, root, host, similarityTimer;
+  let epoch=0, controller, canvas, root, host, similarityTimer, pendingFocusIntent=null;
   const clearSimilarityTimer=()=> { const pending=similarityTimer; similarityTimer=null; if(pending) { clearTimeout(pending.id); pending.cancel(); } };
   const invalidate=()=> { epoch++; clearSimilarityTimer(); controller?.abort(); canvas?.destroy(); canvas=null; root?.replaceChildren(); };
+  const captureFocusIntent=token=> {
+    const active=document.activeElement;
+    pendingFocusIntent={token,intent:active?.id==='map-library'?'library':active?.id==='map-mode'?'mode':'heading'};
+  };
+  const restoreFocus=token=> {
+    if(!pendingFocusIntent || pendingFocusIntent.token!==token || !host?.routeIsCurrent(token) || !root?.isConnected)return;
+    const intent=pendingFocusIntent.intent;
+    pendingFocusIntent=null;
+    const target=intent==='library'?root.querySelector('#map-library'):intent==='mode'?root.querySelector('#map-mode'):null;
+    if(target instanceof HTMLElement && !target.disabled)target.focus({preventScroll:true});
+    else window.WisdomRouter?.focusHeading();
+  };
   const waitForSimilarity=(ms,signal)=>new Promise((resolve,reject)=>{
     let id;
     const cancel=()=> {
@@ -387,5 +399,5 @@ window.WisdomMap = (() => {
   const types={source:'Источник',fragment:'Фрагмент',knowledge:'Знание',rule:'Правило',use:'Использование',outcome:'Результат',concept:'Понятие'};
   const publication={draft:'Черновик',published:'Подтверждено',private:'Личное',original:'Оригинал',withdrawn:'Снято с публикации'};
   const predicates={contains:'содержит',grounds:'подтверждает',retrieved:'получено',used:'применено',reports:'зафиксирован результат',supports:'поддерживает',part_of:'часть',used_for:'используется для',contradicts:'противоречит'};
-  return {mount,invalidate};
+  return {mount,invalidate,captureFocusIntent,restoreFocus};
 })();
