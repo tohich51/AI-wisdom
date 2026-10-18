@@ -20,6 +20,25 @@ const node = (tag, text, attrs = {}) => {
   return n;
 };
 let identity, selected, libraries = [], activeJob, libraryView = 0, sourceViewSerial = 0, sourceViewController, searchSerial = 0, searchController, latestClickTrigger = null;
+let privateDialogInvalidators = new Set();
+const captureRouteToken = () => router.current()?.token;
+const isRouteCurrent = token => router.current()?.token === token;
+const registerPrivateDialogInvalidator = (dialog, invalidate) => {
+  const entry = {dialog, invalidate};
+  privateDialogInvalidators.add(entry);
+  dialog.addEventListener('close', () => privateDialogInvalidators.delete(entry), {once: true});
+};
+const invalidatePrivateDialogs = () => {
+  for (const entry of [...privateDialogInvalidators]) {
+    privateDialogInvalidators.delete(entry);
+    if (!entry.dialog.isConnected) continue;
+    try { entry.invalidate(); } catch (_) { /* закрытие диалога не должно блокировать переход */ }
+  }
+  document.querySelectorAll('dialog[data-wisdom-private]').forEach(dialog => {
+    if (dialog.open) dialog.close();
+    else dialog.remove();
+  });
+};
 const SOURCE_PAGE_SIZE = 200;
 const SOURCE_AUTO_SEARCH_PAGES = 3;
 const SOURCE_REQUEST_TIMEOUT_MS = 12000;
@@ -92,6 +111,11 @@ const safe = (fn, onError) => {
   };
 };
 const button = (text, fn) => node('button', text, {type: 'button', onclick: safe(fn)});
+const pagerButton = (text, fn) => {
+  const control = node('button', text, {type: 'button'});
+  control.addEventListener('click', event => { event.preventDefault(); fn(event); });
+  return control;
+};
 function field(form, title, name, value = '', type = 'text') {
   const id = 'f-' + uuid();
   form.append(node('label', title, {for: id}));
@@ -103,8 +127,11 @@ function field(form, title, name, value = '', type = 'text') {
 }
 function dialogForm(title, render, submit) {
   const returnFocus = currentReturnFocus();
+  const routeToken = captureRouteToken();
+  const controller = new AbortController();
   const headingId = 'dialog-title-' + uuid(), errorId = 'dialog-error-' + uuid();
   const dialog = node('dialog', null, {'data-wisdom-private':'true','aria-labelledby':headingId});
+  const isCurrent = () => isRouteCurrent(routeToken) && !controller.signal.aborted && dialog.isConnected;
   const form = node('form');
   const errorSummary = node('div', null, {id:errorId, role:'alert', tabindex:'-1', class:'dialog-form-error'});
   errorSummary.hidden = true;
@@ -115,25 +142,32 @@ function dialogForm(title, render, submit) {
   submitButton.setAttribute('aria-describedby', errorId);
   form.append(errorSummary, submitButton, button('Отмена', () => dialog.close()));
   form.addEventListener('submit', safe(async () => {
+    if (!isCurrent()) { if (dialog.open) dialog.close(); return; }
     errorSummary.textContent = '';
     errorSummary.hidden = true;
     const data = new FormData(form);
-    await submit(data);
-    dialog.close();
+    await submit(data, {isCurrent, signal: controller.signal});
+    if (isCurrent()) dialog.close();
+    else if (dialog.open) dialog.close();
   }, error => {
+    if (!isCurrent()) { if (dialog.open) dialog.close(); return; }
     errorSummary.textContent = 'Не удалось выполнить действие. Проверьте значения формы и повторите попытку. Причина: ' + readableError(error);
     errorSummary.hidden = false;
     errorSummary.focus();
   }));
+  registerPrivateDialogInvalidator(dialog, () => controller.abort());
   dialog.addEventListener('close', () => {
+    controller.abort();
     dialog.remove();
-    restoreFocus(returnFocus);
+    if (isRouteCurrent(routeToken)) restoreFocus(returnFocus);
   });
+  if (!isRouteCurrent(routeToken)) return;
   document.body.append(dialog);
   dialog.showModal();
 }
 function confirmDialog({title = 'Подтверждение действия', description, confirmLabel = 'Подтвердить', cancelLabel = 'Отмена'} = {}) {
   const returnFocus = currentReturnFocus();
+  const routeToken = captureRouteToken();
   return new Promise(resolve => {
     const titleId = 'confirm-title-' + uuid(), descriptionId = 'confirm-description-' + uuid();
     const dialog = node('dialog', null, {'data-wisdom-private':'true','aria-labelledby':titleId,'aria-describedby':descriptionId});
@@ -141,7 +175,7 @@ function confirmDialog({title = 'Подтверждение действия', d
     const finish = value => {
       if (settled) return;
       settled = true;
-      resolve(Boolean(value));
+      resolve(Boolean(value) && isRouteCurrent(routeToken));
       if (dialog.open) dialog.close();
     };
     dialog.append(
@@ -152,11 +186,13 @@ function confirmDialog({title = 'Подтверждение действия', d
     const confirmButton = node('button', confirmLabel, {type:'button', onclick:() => finish(true)});
     dialog.append(cancelButton, confirmButton);
     dialog.addEventListener('cancel', event => { event.preventDefault(); finish(false); });
+    registerPrivateDialogInvalidator(dialog, () => finish(false));
     dialog.addEventListener('close', () => {
       if (!settled) { settled = true; resolve(false); }
       dialog.remove();
-      restoreFocus(returnFocus);
+      if (isRouteCurrent(routeToken)) restoreFocus(returnFocus);
     });
+    if (!isRouteCurrent(routeToken)) { finish(false); return; }
     document.body.append(dialog);
     dialog.showModal();
     cancelButton.focus({preventScroll:true});
@@ -340,7 +376,8 @@ async function viewSource(id, options = {}) {
       locatorPairs.length ? 'локатора' : null
     ].filter(Boolean).join(' и ');
     if (targetPart) {
-      targetLine.textContent = (targetQuote ? 'Цитата найдена' : 'Фрагмент найден') + ' в источнике' + (locationOf(targetPart) ? ' · ' + locationOf(targetPart) : '') + '.';
+      const foundLabel = targetQuote ? 'Цитата найдена' : targetFragmentId ? 'Фрагмент найден' : 'Локатор найден';
+      targetLine.textContent = foundLabel + ' в источнике' + (locationOf(targetPart) ? ' · ' + locationOf(targetPart) : '') + '.';
     } else if (searchStop === 'limit') {
       targetLine.textContent = 'Точное совпадение ' + targetDescription + ' не найдено в первых ' + SOURCE_AUTO_SEARCH_PAGES + ' страницах (' + fragmentsScanned + ' фрагментов). Источник может продолжаться; автоматический поиск ограничен тремя страницами.';
     } else if (searchStop === 'ordinal') {
@@ -351,13 +388,14 @@ async function viewSource(id, options = {}) {
   } else targetLine.hidden = true;
   let currentFrom = displayFrom, currentLastOrdinal = displayPage.fragments.at(-1)?.ordinal;
   let previousFrom = previousStarts.slice(), pending = false, hasNext = displayPage.fragments.length === SOURCE_PAGE_SIZE;
-  const previous = button('Предыдущая часть', async () => {
-    if (pending || !previousFrom.length) return;
+  const previous = pagerButton('Предыдущая часть', async () => {
+    if (!previousFrom.length) return;
     await renderPage(previousFrom.at(-1));
   });
-  const next = button('Следующая часть', async () => {
+  const next = pagerButton('Следующая часть', async () => {
     if (pending) return;
     pending = true; next.disabled = true;
+    next.setAttribute('aria-busy', 'true');
     try {
       if (!Number.isInteger(currentLastOrdinal)) {
         hasNext = false;
@@ -382,13 +420,18 @@ async function viewSource(id, options = {}) {
     } finally {
       if (isCurrent() && d.isConnected) {
         pending = false;
+        next.removeAttribute('aria-busy');
         next.disabled = !hasNext;
         previous.disabled = previousFrom.length === 0;
       }
     }
   });
   async function renderPage(from) {
-    pending = true; previous.disabled = true; next.disabled = true; pagerLine.textContent = 'Загружаю фрагменты…';
+    if (pending) return;
+    pending = true;
+    previous.disabled = true; next.disabled = true;
+    previous.setAttribute('aria-busy', 'true');
+    pagerLine.textContent = 'Загружаю фрагменты…';
     try {
       const page = await requestSource('/api/sources/' + encodeURIComponent(id) + '?from_fragment=' + encodeURIComponent(from) + '&limit=' + SOURCE_PAGE_SIZE);
       if (!isCurrent() || !d.isConnected) return;
@@ -403,6 +446,7 @@ async function viewSource(id, options = {}) {
     } finally {
       if (isCurrent() && d.isConnected) {
         pending = false;
+        previous.removeAttribute('aria-busy');
         previous.disabled = previousFrom.length === 0;
         next.disabled = !hasNext;
       }
@@ -416,11 +460,14 @@ async function viewSource(id, options = {}) {
     hasNext = fragments.length === SOURCE_PAGE_SIZE;
     for (const part of fragments) {
       const fragment = node('article', null, {class:'source-fragment'});
-      const exactTarget = samePart(part) && (targetQuote || targetFragmentId);
+      const exactTarget = samePart(part) && Boolean(targetQuote || targetFragmentId || locatorPairs.length > 0);
       if (exactTarget) {
+        const exactLocation = locationOf(part);
         fragment.id = 'source-fragment-' + uuid();
         fragment.tabIndex = -1;
         fragment.dataset.sourceFragmentTarget = 'true';
+        fragment.setAttribute('aria-label', 'Точное совпадение' + (exactLocation ? ' · ' + exactLocation : ''));
+        fragment.append(node('p', 'Точное совпадение' + (exactLocation ? ' · ' + exactLocation : ''), {class:'muted source-fragment-target-label'}));
         targetFocus = fragment;
       }
       const pre = node('pre');
@@ -628,11 +675,16 @@ async function openLibrary(lib, {guard = null} = {}) {
           let pendingUse = null;
           return dialogForm('Зафиксировать применение', form => {
           field(form, 'Где применили', 'where_applied'); field(form, 'Какой результат ожидали', 'expected_result', '', 'textarea');
-        }, async data => {
+        }, async (data, {isCurrent}) => {
+          if (!isCurrent()) return;
           const payload = {rule_id: rule.id, version_no: rule.version_no, where_applied: data.get('where_applied') || null, expected_result: data.get('expected_result') || null};
           if (!pendingUse || JSON.stringify(pendingUse.payload) !== JSON.stringify(payload)) pendingUse = {payload, key: crypto.randomUUID()};
+          if (!isCurrent()) return;
           const use = await post('/api/uses', {...pendingUse.payload, idempotency_key: pendingUse.key});
-          await post('/api/uses/' + use.id + '/applied'); message('Применение записано. Результат добавьте в разделе «Опыт».');
+          if (!isCurrent()) return;
+          await post('/api/uses/' + use.id + '/applied');
+          if (!isCurrent()) return;
+          message('Применение записано. Результат добавьте в разделе «Опыт».');
         });
         }));
         if (policy.export_allowed) card.append(button('Экспорт SKILL.md', async () => {
@@ -653,11 +705,15 @@ function ruleEditor(lib, rule) {
   dialogForm(rule ? 'Новая версия правила' : 'Новое правило', form => {
     for (const [title, key, type] of [['Название', 'title', 'text'], ['Когда применять', 'when_to_apply', 'textarea'], ['Входные данные — по одному на строку', 'inputs', 'textarea'], ['Условия', 'preconditions', 'textarea'], ['Шаги — по одному на строку', 'actions', 'textarea'], ['Исключения', 'exceptions', 'textarea'], ['Ожидаемый эффект', 'expected_effect', 'textarea'], ['Как проверить', 'verification', 'textarea']]) field(form, title, key, Array.isArray(rule?.[key]) ? rule[key].join('\n') : rule?.[key], type);
     evidence = window.WisdomRuleEvidence.mount(form, {api, libraryId: lib.id, initialIds: (rule?.provenance ?? []).map(p => p.fragment_id).filter(Boolean)});
-  }, async data => {
+  }, async (data, {isCurrent}) => {
+    if (!isCurrent()) return;
     const body = Object.fromEntries(data); for (const key of ['inputs', 'preconditions', 'actions', 'exceptions']) body[key] = body[key].split('\n').filter(v => v.trim());
     for (const key of ['when_to_apply', 'expected_effect', 'verification']) body[key] ||= null;
     body.fragment_ids = evidence.selectedIds();
-    await post('/api/libraries/' + lib.id + '/rules' + (rule ? '?replaces=' + rule.id : ''), body); await openLibrary(lib);
+    if (!isCurrent()) return;
+    await post('/api/libraries/' + lib.id + '/rules' + (rule ? '?replaces=' + rule.id : ''), body);
+    if (!isCurrent()) return;
+    await openLibrary(lib);
   });
 }
 async function loadUses() {
@@ -681,10 +737,14 @@ async function loadUses() {
         for (const [value, label] of [['unknown','Пока неизвестно'],['met','Цель достигнута'],['partly','Достигнута частично'],['not_met','Цель не достигнута']]) outcomeSelect.append(node('option', label, {value}));
         form.append(node('label', 'Достижение ожидаемого результата', {for:outcomeId}), outcomeSelect);
         field(form, 'Наблюдение или ссылка, подтверждающие результат', 'assessment_evidence', '', 'textarea');
-      }, async data => {
+      }, async (data, {isCurrent}) => {
+        if (!isCurrent()) return;
         const payload = {observed_result: data.get('observed_result') || null, rating: data.get('rating') ? Number(data.get('rating')) : null, rating_basis: data.get('rating_basis') || null, achievement:data.get('achievement'), assessor_kind:'human', assessment_evidence:data.get('assessment_evidence') || null, is_correction: use.outcomes.length > 0};
         if (!pendingOutcome || JSON.stringify(pendingOutcome.payload) !== JSON.stringify(payload)) pendingOutcome = {payload, key: crypto.randomUUID()};
-        await post('/api/uses/' + use.id + '/outcomes', {...pendingOutcome.payload, idempotency_key: pendingOutcome.key}); await loadUses();
+        if (!isCurrent()) return;
+        await post('/api/uses/' + use.id + '/outcomes', {...pendingOutcome.payload, idempotency_key: pendingOutcome.key});
+        if (!isCurrent()) return;
+        await loadUses();
       });
       }));
       return card;
@@ -696,10 +756,31 @@ async function loadUses() {
   await window.WisdomSharedExperience.mount(list, featureHost, records);
 }
 byId('create-library').addEventListener('submit', safe(async event => {
-  const data = Object.fromEntries(new FormData(event.target)); data.organisation_id = identity.account_id;
+  const form = event.target;
+  const nameInput = form.elements.namedItem('name');
+  const nameError = byId('library-name-error');
+  const setNameError = text => {
+    nameError.textContent = text;
+    nameError.hidden = !text;
+    nameInput.setAttribute('aria-invalid', text ? 'true' : 'false');
+    if (text) nameInput.focus();
+  };
+  setNameError('');
+  const data = Object.fromEntries(new FormData(form));
+  if (!String(data.name ?? '').trim()) {
+    setNameError('Введите название библиотеки.');
+    return;
+  }
+  data.organisation_id = identity.account_id;
   const project = data.kind === 'project'; if (project) delete data.kind;
-  const result = await post(project ? '/api/projects' : '/api/libraries', data);
-  event.target.reset(); await ensureLibraries(); await openLibrary(project ? result.project : result);
+  let result;
+  try {
+    result = await post(project ? '/api/projects' : '/api/libraries', data);
+  } catch (error) {
+    setNameError('Не удалось создать библиотеку. Проверьте значения формы и повторите попытку. Причина: ' + readableError(error));
+    throw error;
+  }
+  form.reset(); await ensureLibraries(); await openLibrary(project ? result.project : result);
 }));
 const searchForm = byId('search');
 const searchInput = searchForm.querySelector('input[name="q"]');
@@ -795,6 +876,7 @@ searchForm.addEventListener('submit', async event => {
 });
 byId('logout').addEventListener('click', safe(async () => { await post('/auth/logout'); location.reload(); }));
 const featureHost={node,button,api,post,notify:message,confirm:confirmDialog,libraries:()=>libraries,currentLibrary:()=>selected,identity:()=>identity,
+  routeToken:captureRouteToken,routeIsCurrent:isRouteCurrent,
   refreshLibrary:()=>selected?openLibrary(selected):Promise.resolve(),
   openSource:viewSource,
   librarySourcesPath:libraryId=>router.path('libraries',[libraryId,'sources']),
@@ -806,10 +888,22 @@ const featureHost={node,button,api,post,notify:message,confirm:confirmDialog,lib
   download:(filename,text,type)=>downloadBlob(filename,new Blob([text],{type})),
   downloadBlob,dialog:dialogForm,navigateResearch:()=>router.navigate('research'),
   openRuleVersion:async(id,version)=>{
-    const rule=await api('/api/rules/'+id);const headingId='rule-version-title-'+uuid();const d=node('dialog',null,{'data-wisdom-private':'true','aria-labelledby':headingId});
+    const routeToken=captureRouteToken();
+    const rule=await api('/api/rules/'+id);
+    if(!isRouteCurrent(routeToken))return;
+    const controller=new AbortController();
+    const headingId='rule-version-title-'+uuid();
+    const d=node('dialog',null,{'data-wisdom-private':'true','aria-labelledby':headingId});
+    const isCurrent=()=>isRouteCurrent(routeToken)&&!controller.signal.aborted;
     d.append(node('h2',rule.title+' · Версия '+(version||rule.version_no),{id:headingId}),node('p',rule.when_to_apply),node('p',rule.expected_effect));
     for(const a of rule.actions||[])d.append(node('p',a.body||a));
-    d.append(button('Закрыть',()=>d.close()));d.addEventListener('close',()=>d.remove());document.body.append(d);d.showModal();
+    d.append(button('Закрыть',()=>d.close()));
+    registerPrivateDialogInvalidator(d,()=>controller.abort());
+    d.addEventListener('close',()=>{controller.abort();d.remove();});
+    if(!isCurrent())return;
+    document.body.append(d);
+    if(!isCurrent()){d.remove();return;}
+    d.showModal();
   }
 };
 window.WisdomResearch.configure(featureHost);
@@ -900,6 +994,7 @@ router.register('maps', {
   title: 'AI-wisdom — Карта знаний',
   leave: () => { cancelSourceView(); window.WisdomMap.invalidate(); },
   mount: async (container, context) => {
+    window.WisdomMap.invalidate();
     await ready(); if (!context.isCurrent()) return;
     await ensureLibraries(); if (!context.isCurrent()) return;
     const chosen = context.query.get('library') || undefined;
@@ -955,8 +1050,15 @@ function clearRouteFailure(target) {
   if (host) host.querySelectorAll('.route-error').forEach(node => node.remove());
 }
 router.onChange((current, previous, error) => {
+  const navigated = Boolean(previous && current && previous.token !== current.token);
+  if (navigated && !error) {
+    invalidatePrivateDialogs();
+    if (previous.name === current.name) {
+      cancelSourceView();
+      if (current.name === 'maps') window.WisdomMap.invalidate();
+    }
+  }
   if (previous && current && previous.name !== current.name) router.focusHeading();
-  if (previous && current && previous.name === current.name) cancelSourceView();
   if (!current) return;
   if (error) routeFailure(current, error);
   else clearRouteFailure(current);

@@ -18,8 +18,8 @@ window.WisdomMap = (() => {
     if(signal.aborted)cancel();else signal.addEventListener('abort',cancel,{once:true});
   });
   async function mount(container, helpers, chosenId, chosenMode, chosenSourceId) {
-    invalidate(); root=container; host=helpers; const generation=epoch, n=host.node;
-    controller=new AbortController(); const valid=()=>generation===epoch&&!controller.signal.aborted;
+    invalidate(); root=container; host=helpers; const generation=epoch, routeToken=host.routeToken(), n=host.node;
+    controller=new AbortController(); const valid=()=>host.routeIsCurrent(routeToken)&&generation===epoch&&!controller.signal.aborted;
     let sourceFilter=typeof chosenSourceId==='string'&&chosenSourceId?chosenSourceId:null;
     const libs=host.libraries(); if (!libs.length) { root.append(n('p','Создайте библиотеку и добавьте материалы.')); return; }
     const library=n('select',null,{id:'map-library'});
@@ -169,7 +169,9 @@ window.WisdomMap = (() => {
       }
     }
     async function review(entityId,entityKind,decision) {
-      await host.post('/api/graphs/review',{entity_id:entityId,entity_kind:entityKind,decision}); await load();
+      if(!valid())return;
+      await host.post('/api/graphs/review',{entity_id:entityId,entity_kind:entityKind,decision});
+      if(valid())await load();
     }
     const foldSearch=value=>String(value??'').toLocaleLowerCase().replace(/\s+/g,' ').trim();
     const matchingNodes=()=> {
@@ -308,7 +310,6 @@ window.WisdomMap = (() => {
     }
     library.addEventListener('change',act(()=>host.navigateMapSource(library.value,null,mode.value)));
     mode.addEventListener('change',act(()=> {
-      document.querySelectorAll('dialog[data-wisdom-private]').forEach(d=>d.close());
       const semantic=mode.value==='semantic';
       return host.navigateMapSource(library.value,semantic?sourceFilter:null,mode.value);
     }));
@@ -355,7 +356,13 @@ window.WisdomMap = (() => {
       for(const [name,label] of [['label','Название понятия'],['body','Описание']]) {
         const id='concept-'+name,input=n(name==='body'?'textarea':'input',null,{id,name,required:true,maxlength:name==='body'?2000:500});form.append(n('label',label,{for:id}),input);
       }
-      },async fields=> { await host.post('/api/graphs/concepts',{library_id:library.value,label:fields.get('label'),body:fields.get('body')});if(valid())await load(); });
+      },async (fields,{isCurrent})=> {
+        const selectedLibrary=library.value,selectedMode=mode.value;
+        if(!isCurrent()||!valid()||selectedLibrary!==library.value||selectedMode!==mode.value)return;
+        await host.post('/api/graphs/concepts',{library_id:selectedLibrary,label:fields.get('label'),body:fields.get('body')});
+        if(!isCurrent()||!valid()||selectedLibrary!==library.value||selectedMode!==mode.value)return;
+        await load();
+      });
     });
     controls.append(manual);
     const relationButton=b('Добавить связь',()=> {
@@ -366,7 +373,13 @@ window.WisdomMap = (() => {
         }
         const select=n('select',null,{id:'predicate',name:'predicate'});
         for(const p of ['supports','part_of','used_for','contradicts'])select.append(n('option',predicates[p],{value:p})); form.append(n('label','Тип связи',{for:'predicate'}),select);
-      },async fields=> {await host.post('/api/graphs/relations',{library_id:library.value,from_concept:fields.get('from_concept'),to_concept:fields.get('to_concept'),predicate:fields.get('predicate'),hypothesis:true});if(valid())await load();});
+      },async (fields,{isCurrent})=>{
+        const selectedLibrary=library.value,selectedMode=mode.value;
+        if(!isCurrent()||!valid()||selectedMode!=='semantic'||selectedLibrary!==library.value)return;
+        await host.post('/api/graphs/relations',{library_id:selectedLibrary,from_concept:fields.get('from_concept'),to_concept:fields.get('to_concept'),predicate:fields.get('predicate'),hypothesis:true});
+        if(!isCurrent()||!valid()||selectedLibrary!==library.value||selectedMode!==mode.value)return;
+        await load();
+      });
     });
     controls.append(relationButton);
     await act(load)();

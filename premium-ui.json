@@ -1,0 +1,23 @@
+{
+  "sourceRoots": [
+    "src/kb/static"
+  ],
+  "locale": "ru-RU",
+  "canonicalMap": "UX-CONTRACT.md",
+  "requiredCapabilities": [
+    "Select/Listbox",
+    "Form",
+    "Scrollbar",
+    "Toast",
+    "CRUD"
+  ],
+  "ownership": {
+    "Select/Listbox": "native"
+  },
+  "commands": {
+    "lint": "just lint",
+    "types": "just types",
+    "tests": ".venv/bin/python -m pytest -q --maxfail=1 --tb=short"
+  },
+  "profile": "product-admin"
+}

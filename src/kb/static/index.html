@@ -48,9 +48,10 @@
 </div>
 <div class="workspace-grid">
 <article class="card" aria-labelledby="create-library-heading"><h2 id="create-library-heading">Новая библиотека</h2>
-<form id="create-library">
+<form id="create-library" novalidate>
 <label for="library-name">Название</label>
-<input id="library-name" name="name" type="text" autocomplete="off" required>
+<input id="library-name" name="name" type="text" autocomplete="off" required aria-describedby="library-name-error" aria-invalid="false">
+<p id="library-name-error" class="completion-error" role="alert" hidden></p>
 <label for="library-kind">Тип</label>
 <select id="library-kind" name="kind" required>
 <option value="reference">Справочник</option><option value="brand">Бренд</option><option value="project">Проект</option><option value="playbook">Плейбук</option><option value="experience">Опыт</option>
@@ -59,7 +60,7 @@
 </form>
 </article>
 <article class="card" aria-labelledby="search-heading"><h2 id="search-heading">Поиск</h2>
-<form id="search">
+<form id="search" novalidate>
 <label for="search-query">Запрос</label>
 <input id="search-query" name="q" type="search" required>
 <button type="submit">Найти</button>

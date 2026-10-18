@@ -69,9 +69,13 @@ window.WisdomResearch = (() => {
       const metadata=[cite.author,cite.edition].filter(Boolean).join(' · ');
       d.append(n('h2',cite.title||'Цитата',{id:headingId}),n('p',metadata||'Метаданные источника не указаны.'),n('p','Локатор: '+locate(cite)),n('blockquote',quote||'Текст цитаты не указан.'));
       if(typeof cite.source_id==='string'&&cite.source_id) {
-        const sourceOptions={quote,locator:cite.locator&&typeof cite.locator==='object'?cite.locator:{},isCurrent:()=>valid()&&runId===currentRun&&selection===runSerial};
-        if(cite.fragment_id!=null)sourceOptions.fragmentId=cite.fragment_id;
-        d.append(b('Открыть точное место',()=>host.openSource(cite.source_id,sourceOptions)));
+        const locator=cite.locator&&typeof cite.locator==='object'?cite.locator:{};
+        const hasLocator=['chapter','file_page','printed_label','paragraph','table_index','cell_row','cell_column'].some(key=>locator[key]!=null);
+        const fragmentId=cite.fragment_id!=null&&String(cite.fragment_id)?String(cite.fragment_id):'';
+        const hasExactTarget=Boolean(quote||fragmentId||hasLocator);
+        const sourceOptions={quote,locator,isCurrent:()=>valid()&&runId===currentRun&&selection===runSerial};
+        if(fragmentId)sourceOptions.fragmentId=fragmentId;
+        d.append(b(hasExactTarget?'Открыть точное место':'Открыть источник',()=>host.openSource(cite.source_id,sourceOptions)));
       }
       else d.append(n('p','Источник цитаты недоступен в текущем ответе. Выберите другую цитату в результате.'));
       d.append(b('Вернуться к результату',()=>d.close()));
@@ -119,17 +123,18 @@ window.WisdomResearch = (() => {
       const runId=currentRun, serial=runSerial, noteId=currentNote, editEpoch=epoch;
       let editableNote=note;
       const ownsSelection=()=>valid() && editEpoch===epoch && runId===currentRun && serial===runSerial && noteId===currentNote;
-      host.dialog('Изменить заметку',form=>formFields(form,[['title','Название',editableNote.title,'input'],['comment','Комментарий',editableNote.comment]]),async data=> {
+      host.dialog('Изменить заметку',form=>formFields(form,[['title','Название',editableNote.title,'input'],['comment','Комментарий',editableNote.comment]]),async (data,{isCurrent})=> {
         try {
+          if(!isCurrent()||!ownsSelection())return;
           const saved=await fetchPost('/api/notes/'+editableNote.id,{title:data.get('title'),comment:data.get('comment'),revision:editableNote.revision},'PATCH');
-          if (!ownsSelection()) return;
+          if (!isCurrent()||!ownsSelection()) return;
           editableNote=saved.note;
           renderNote(editableNote);
           await refreshLists({id:runId,serial});
-          if (!ownsSelection()) return;
+          if (!isCurrent()||!ownsSelection()) return;
           host.notify('Заметка сохранена.');
         } catch (error) {
-          if (!ownsSelection()) return;
+          if (!isCurrent()||!ownsSelection()) return;
           throw error;
         }
       });
@@ -168,12 +173,23 @@ window.WisdomResearch = (() => {
       window.WisdomResult.render(result,run.result,{node:n,button:b,citation,question:(q,ids)=>question(q,ids,libId),notify:host.notify});
       if (run.result.no_evidence) return finishTerminal();
       const actions=n('div',null,{class:'actions'}); result.append(actions);
-      actions.append(b('Сохранить заметку',()=>host.dialog('Новая заметка',form=>formFields(form,[['title','Название',run.result.title,'input'],['comment','Личный комментарий','']]),async data=> {
-        await fetchPost('/api/notes',{run_id:id,title:data.get('title'),comment:data.get('comment')}); await refreshLists(); host.notify('Заметка сохранена в базе.');
+      const actionRunId=id, actionRunSerial=runSerial;
+      const actionCurrent=()=>valid()&&actionRunId===currentRun&&actionRunSerial===runSerial;
+      actions.append(b('Сохранить заметку',()=>host.dialog('Новая заметка',form=>formFields(form,[['title','Название',run.result.title,'input'],['comment','Личный комментарий','']]),async (data,{isCurrent})=> {
+        if(!isCurrent()||!actionCurrent())return;
+        await fetchPost('/api/notes',{run_id:actionRunId,title:data.get('title'),comment:data.get('comment')});
+        if(!isCurrent()||!actionCurrent())return;
+        await refreshLists({id:actionRunId,serial:actionRunSerial});
+        if(!isCurrent()||!actionCurrent())return;
+        host.notify('Заметка сохранена в базе.');
       })),b('Скачать Markdown',async()=> {
-        const doc=await request('/api/research/'+id+'/markdown'); host.download(doc.filename,doc.markdown,'text/markdown');
-      }),b('Создать черновик правила',()=>host.dialog('Черновик правила',form=>formFields(form,[['title','Название',run.result.title,'input'],['when_to_apply','Когда применять',''],['expected_effect','Ожидаемый результат','']]),async data=> {
-        await fetchPost('/api/research/'+id+'/draft-rule',{run_id:id,title:data.get('title'),when_to_apply:data.get('when_to_apply'),expected_effect:data.get('expected_effect')});
+        if(!actionCurrent())return;
+        const doc=await request('/api/research/'+actionRunId+'/markdown');
+        if(actionCurrent())host.download(doc.filename,doc.markdown,'text/markdown');
+      }),b('Создать черновик правила',()=>host.dialog('Черновик правила',form=>formFields(form,[['title','Название',run.result.title,'input'],['when_to_apply','Когда применять',''],['expected_effect','Ожидаемый результат','']]),async (data,{isCurrent})=> {
+        if(!isCurrent()||!actionCurrent())return;
+        await fetchPost('/api/research/'+actionRunId+'/draft-rule',{run_id:actionRunId,title:data.get('title'),when_to_apply:data.get('when_to_apply'),expected_effect:data.get('expected_effect')});
+        if(!isCurrent()||!actionCurrent())return;
         host.notify('Черновик создан. Проверьте и опубликуйте его в библиотеке.');
       })));
       return finishTerminal();
