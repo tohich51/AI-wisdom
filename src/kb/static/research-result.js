@@ -110,8 +110,8 @@
       };
       const rows = n('div', '');
       for (const [i, item] of items.entries()) {
-        const row = n('article', ''), heading = str(item.heading);
-        row.style.marginLeft = `${Math.min(depth(i), 5) * 0.75}rem`; row.style.borderLeft = '2px solid #888'; row.style.paddingLeft = '.5rem';
+        const row = n('article', '', { class: 'research-topic-row' }), heading = str(item.heading);
+        row.style.setProperty('--topic-depth', String(Math.min(depth(i), 5)));
         const ids = [...new Set((Array.isArray(item.citation_ids) ? item.citation_ids : [])
           .map(citation).filter(Boolean).map(c => c.source_id)
           .filter(value => typeof value === 'string' && value.trim()))];
@@ -143,4 +143,5 @@
     } else {
       const list = n('div', ''); for (const item of items) list.append(paragraph(item)); root.append(list);
     }
-  };})();
+  };
+})();

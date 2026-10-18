@@ -23,9 +23,9 @@
     const area = host.node('section', null, {class: 'card ' + ownClass, 'aria-labelledby': 'shared-experience-title-' + mountId});
     const current = () => mounts.get(root) === mountId && area.isConnected && root.contains(area);
     const heading = host.node('h2', 'Опыт проекта', {id: 'shared-experience-title-' + mountId});
-    const status = host.node('p', 'Выберите проектную библиотеку для просмотра общего опыта.', {class: 'muted', role: 'status', 'aria-live': 'polite'});
+    const status = host.node('p', 'Выберите проектную библиотеку для просмотра общего опыта.', {class: 'muted', role: 'status', 'aria-atomic': 'true'});
     const controls = host.node('div', null, {class: 'completion-grid'});
-    const feed = host.node('div', null, {class: 'completion-grid', 'aria-live': 'polite'});
+    const feed = host.node('div', null, {class: 'completion-grid'});
     area.append(heading, status, controls, feed);
     root.append(area);
 
@@ -143,20 +143,21 @@
       feed.replaceChildren(feedTitle);
       if (!libraryId) { status.textContent = 'Выберите проектную библиотеку для просмотра общего опыта.'; return; }
       status.textContent = 'Загружаю опубликованные записи…';
-      feed.append(host.node('p', 'Загрузка…', {class: 'muted', role: 'status'}));
+      feed.append(host.node('p', 'Загрузка…', {class: 'muted'}));
       try {
         const data = await host.api('/api/libraries/' + encodeURIComponent(libraryId) + '/experience');
         if (!current() || token !== feedRequest || librarySelect.value !== libraryId) return;
-        status.textContent = 'Общие записи являются явными самоотчётами участников, а не доказательством бизнес-результата.';
         renderFeed(data);
+        status.textContent = Array.isArray(data?.items) && data.items.length ? 'Готово: опубликованные записи загружены.' : 'Готово: опубликованных записей пока нет.';
       } catch (error) {
         if (!current() || token !== feedRequest || librarySelect.value !== libraryId) return;
-        status.textContent = 'Не удалось загрузить общий опыт.';
-        feed.replaceChildren(feedTitle, host.node('p', safeError(error), {class: 'completion-error', role: 'alert'}));
+        status.textContent = 'Ошибка: не удалось загрузить общий опыт.';
+        feed.replaceChildren(feedTitle, host.node('p', safeError(error), {class: 'completion-error'}));
       }
     }
     function renderFeed(data) {
       feed.replaceChildren(feedTitle);
+      feed.append(host.node('p', 'Общие записи являются явными самоотчётами участников, а не доказательством бизнес-результата.', {class: 'muted'}));
       const items = Array.isArray(data?.items) ? data.items : [];
       const versions = Array.isArray(data?.by_rule_version) ? data.by_rule_version : [];
       const aggregateGrid = host.node('div', null, {class: 'completion-grid'});
@@ -179,7 +180,6 @@
         aggregateGrid.append(card);
       }
       if (versions.length) feed.append(aggregateGrid);
-      if (!items.length) feed.append(host.node('p', 'Опубликованных записей пока нет.', {class: 'muted'}));
       const publishedCards = [];
       for (const item of items) {
         const snapshot = item?.snapshot || {};
@@ -234,7 +234,7 @@
     for (const [select, handler] of [[librarySelect, () => { ++policyRequest; invalidateReview(); void loadFeed(); }], [useSelect, () => { ++policyRequest; refreshOutcomes(); }], [outcomeSelect, () => { ++policyRequest; invalidateReview(); }]]) select.addEventListener('change', handler);
     refreshUses();
     if (!eligibleLibraries.length) {
-      status.textContent = 'Нет доступных библиотек типа «проект» или «опыт».';
+      status.textContent = 'Готово: доступных проектных библиотек нет.';
       feed.append(host.node('p', 'Общий опыт доступен только в библиотеках, переданных приложением.', {class: 'muted'}));
     }
     return area;

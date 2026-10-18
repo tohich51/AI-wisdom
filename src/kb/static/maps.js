@@ -51,12 +51,12 @@ window.WisdomMap = (() => {
     };
     controller=new AbortController(); const valid=()=>host.routeIsCurrent(routeToken)&&generation===epoch&&!controller.signal.aborted;
     let sourceFilter=typeof chosenSourceId==='string'&&chosenSourceId?chosenSourceId:null;
-    const libs=host.libraries(); if (!libs.length) { root.append(n('p','Создайте библиотеку и добавьте материалы.')); return; }
+    const libs=host.libraries(); if (!libs.length) { root.append(n('p','Создайте библиотеку и добавьте материалы.',{role:'status'})); return; }
     const libraryId=chosenId ?? host.currentLibrary()?.id ?? libs[0].id;
     const mapMode=chosenMode ?? 'provenance';
     if (!libs.some(lib=>lib.id===libraryId) || !['provenance','semantic'].includes(mapMode)) {
       root.append(
-        n('p','Не удалось открыть карту: выбранная библиотека или режим недоступен.'),
+        n('p','Не удалось открыть карту: выбранная библиотека или режим недоступен.',{role:'status'}),
         n('button','Открыть первую доступную библиотеку в режиме «Происхождение и опыт»',{onclick:()=>host.navigateMapSource(libs[0].id,null,'provenance')})
       );
       return;
@@ -73,7 +73,8 @@ window.WisdomMap = (() => {
     mode.append(n('option','Происхождение и опыт',{value:'provenance'}),n('option','Семантическая сеть',{value:'semantic'}));
     mode.value=(sourceFilter || mapMode === 'semantic') ? 'semantic' : 'provenance';
     const controls=n('div',null,{class:'map-controls'}), content=n('div',null,{class:'card'}), list=n('div',null,{class:'map-list'});
-    const details=n('aside',null,{class:'card map-details','aria-live':'polite'});
+    const detailStatus=n('p','Выберите узел или связь для просмотра подробностей.',{class:'map-detail-status',role:'status','aria-atomic':'true'});
+    const details=n('aside',null,{class:'card map-details'});
     const similarityControl=n('span',null,{class:'map-similarity-control'});
     const showSimilarity=n('input',null,{id:'map-similarity',type:'checkbox',checked:true,'aria-describedby':'map-similarity-status'});
     const similarityStatus=n('span',null,{id:'map-similarity-status',class:'map-similarity-status','aria-live':'polite'});
@@ -89,7 +90,7 @@ window.WisdomMap = (() => {
     const searchStatus=n('p','Поиск станет доступен после загрузки карты.',{class:'map-search-status',id:searchId+'-status',role:'status','aria-live':'polite','aria-atomic':'true'});
     let searchQuery='',searchHighlightId=null,searchComposing=false;
     searchPanel.append(n('label','Поиск по загруженной карте',{for:searchId}),searchInput,clearSearch,searchHelp,searchStatus);
-    root.append(controls,searchPanel,sourceNotice,content,details,list); content.append(surface);
+    root.append(controls,searchPanel,sourceNotice,content,detailStatus,details,list); content.append(surface);
     let data, loading=true, readSerial=0, graphSerial=0, similarityPoll=0, similarityQueued=false, similarityNotice='', similarityRefreshButton=null;
     const noConceptsNotice='В библиотеке нет доступных понятий.';
     const filterGraphToSource=(graph,graphMode=mode.value,activeSource=sourceFilter)=>{
@@ -179,6 +180,7 @@ window.WisdomMap = (() => {
       const selectedCurrent=()=>valid()&&selection===readSerial&&selectedMode===mode.value&&selectedLibrary===library.value;
       const showUnavailable=()=> {
         if(!selectedCurrent()||signal.aborted)return;
+        detailStatus.textContent='Ошибка: подробности записи недоступны.';
         details.replaceChildren(n('p','Подробности узла недоступны: идентичность записи не подтверждена однозначно. Обновите карту.'));
       };
       if(!selectedIdentity){showUnavailable();return;}
@@ -187,16 +189,25 @@ window.WisdomMap = (() => {
       const visibleCurrentNodes=visibleGraphRows(data).nodes;
       if(currentIdentityMatches.length!==1||!visibleCurrentNodes.includes(currentIdentityMatches[0])){showUnavailable();return;}
       details.replaceChildren(n('p','Загрузка подробностей…'));
+      detailStatus.textContent='Загружаю подробности…';
       let freshNode;
-      if(selectedMode==='semantic' && node.kind==='concept') {
-        freshNode=await host.api('/api/graphs/concepts/'+encodeURIComponent(node.entity_id)+'?library_id='+encodeURIComponent(selectedLibrary),{signal});
-      } else {
-        const fresh=await host.api(endpoint(),{signal});
-        const freshNodes=Array.isArray(fresh?.nodes)?fresh.nodes:[];
-        const identityMatches=freshNodes.filter(value=>entityIdentity(value)===selectedIdentity);
-        const visibleFreshNodes=visibleGraphRows(fresh).nodes;
-        if(identityMatches.length!==1||!identityMatches[0]||!visibleFreshNodes.includes(identityMatches[0])){showUnavailable();return;}
-        freshNode=identityMatches[0];
+      try {
+        if(selectedMode==='semantic' && node.kind==='concept') {
+          freshNode=await host.api('/api/graphs/concepts/'+encodeURIComponent(node.entity_id)+'?library_id='+encodeURIComponent(selectedLibrary),{signal});
+        } else {
+          const fresh=await host.api(endpoint(),{signal});
+          const freshNodes=Array.isArray(fresh?.nodes)?fresh.nodes:[];
+          const identityMatches=freshNodes.filter(value=>entityIdentity(value)===selectedIdentity);
+          const visibleFreshNodes=visibleGraphRows(fresh).nodes;
+          if(identityMatches.length!==1||!identityMatches[0]||!visibleFreshNodes.includes(identityMatches[0])){showUnavailable();return;}
+          freshNode=identityMatches[0];
+        }
+      } catch(error) {
+        if(selectedCurrent() && error.name!=='AbortError') {
+          detailStatus.textContent='Ошибка: не удалось загрузить подробности.';
+          details.replaceChildren(n('p','Подробности узла недоступны. Обновите карту.'));
+        }
+        throw error;
       }
       if(!selectedCurrent() || signal.aborted) return;
       if(!freshNode||entityIdentity(freshNode)!==selectedIdentity){showUnavailable();return;}
@@ -223,6 +234,7 @@ window.WisdomMap = (() => {
         if(data.capabilities?.can_review && node.publication==='draft') details.append(b('Подтвердить понятие',()=>review(node.entity_id,'concept','publish')));
         if(data.capabilities?.can_review && node.publication!=='withdrawn') details.append(b('Снять понятие с публикации',()=>review(node.entity_id,'concept','withdraw')));
       }
+      detailStatus.textContent='Готово: подробности узла загружены.';
       if(selectedCurrent()) {
         detailHeading.focus({preventScroll:true});
         details.scrollIntoView({block:'nearest'});
@@ -245,6 +257,7 @@ window.WisdomMap = (() => {
       const heading=n('h2',headingText,{id:'map-edge-heading-'+crypto.randomUUID(),tabindex:'-1'});
       const statusText=[publication[edge.publication],typeof edge.basis==='string'?edge.basis:'',edge.hypothesis?'Гипотеза':''].filter(Boolean).join(' · ')||'Типизированная связь';
       details.replaceChildren(heading,n('p',statusText));
+      detailStatus.textContent='Готово: связь открыта.';
       const evidence=Array.isArray(edge.evidence)?edge.evidence:[];
       if (!evidence.length) details.append(n('p','Доказательства не указаны: эта связь не подтверждена.'));
       for(const cite of evidence) details.append(renderCitation(cite,'Вернуться к связи',()=>{
@@ -356,7 +369,11 @@ window.WisdomMap = (() => {
     const applyLocalSearch=value=> {
       if(loading||!data)return;
       const nextQuery=foldSearch(value);
-      if(nextQuery!==searchQuery) { ++readSerial; details.replaceChildren(); }
+      if(nextQuery!==searchQuery) {
+        ++readSerial;
+        details.replaceChildren();
+        detailStatus.textContent='Выберите узел или связь для просмотра подробностей.';
+      }
       searchQuery=nextQuery;
       searchHighlightId=null;
       renderLoadedList();
@@ -378,7 +395,7 @@ window.WisdomMap = (() => {
     });
     clearSearch.addEventListener('click',()=> {
       searchComposing=false;searchInput.value='';searchQuery='';searchHighlightId=null;
-      ++readSerial;details.replaceChildren();
+      ++readSerial;details.replaceChildren();detailStatus.textContent='Выберите узел или связь для просмотра подробностей.';
       if(data&&!loading)renderLoadedList();
       searchInput.focus();
     });
@@ -388,6 +405,7 @@ window.WisdomMap = (() => {
       const serial=++graphSerial, selectedMode=mode.value, selectedLibrary=library.value, selectedSource=sourceFilter;
       ++readSerial;
       loading=true; data=null; details.replaceChildren();
+      detailStatus.textContent='Загружаю карту и подробности…';
       canvas?.destroy();canvas=null;
       surface.replaceChildren(n('p','Загружаю карту…',{class:'map-loading',role:'status'}));
       list.replaceChildren(n('h2','Узлы и связи'),n('p','Узлы и связи загружаются…',{class:'map-loading',role:'status'}));
@@ -409,6 +427,7 @@ window.WisdomMap = (() => {
       content.querySelector('.map-summary')?.remove();status.className='map-summary'; content.prepend(status);
       if(visible.nodes.length>40) status.append(n('span',' Нажмите на узел или связь либо выберите их в списке, чтобы увидеть подробности.'));
       renderLoadedList();
+      detailStatus.textContent=visible.nodes.length ? 'Выберите узел или связь для просмотра подробностей.' : 'Готово: подробных узлов пока нет.';
       if(!visible.nodes.length) {
         const emptyMessage=mode.value==='semantic'?(sourceFilter?'В режиме выбранного источника нет связанных понятий.':'Пока нет понятий и связей. Создайте сеть в Studio или добавьте понятие вручную.'):'После загрузки источников здесь появится их происхождение.';
         surface.append(n('p',emptyMessage));
@@ -428,8 +447,10 @@ window.WisdomMap = (() => {
           loading=false;data=null;renderSourceNotice();renderSimilarityState();
           searchInput.disabled=true;clearSearch.disabled=true;
           searchStatus.textContent='Локальный поиск недоступен: карта не загружена. Нажмите «Обновить», чтобы повторить запрос.';
-          surface.replaceChildren(n('p','Карта не загружена. Нажмите «Обновить», чтобы повторить запрос.'));
+          surface.replaceChildren(n('p','Карта не загружена. Нажмите «Обновить», чтобы повторить загрузку.'));
           list.replaceChildren(n('h2','Узлы и связи'),n('p','Список карты не загружен. Нажмите «Обновить», чтобы повторить запрос.',{role:'alert'}));
+          detailStatus.textContent='Ошибка: подробности карты недоступны.';
+          details.replaceChildren(n('p','Подробности узлов и связей недоступны. Обновите карту.'));
         }
         throw error;
       }
@@ -475,7 +496,7 @@ window.WisdomMap = (() => {
     similarityRefreshButton.disabled=true;
     controls.append(b('Обновить',load),similarityRefreshButton,b('Уместить граф',()=>canvas?.fit(30)),b('Приблизить',()=>canvas?.zoom(canvas.zoom()*1.2)),b('Отдалить',()=>canvas?.zoom(canvas.zoom()/1.2)),
       b('Скачать JSON',async()=> { const selectedMode=mode.value,selectedLibrary=library.value,selectedSource=sourceFilter;const fresh=await host.api('/api/graphs/'+selectedMode+'?library_id='+encodeURIComponent(selectedLibrary)+'&limit=200',{signal:controller.signal});if(valid()&&!controller.signal.aborted&&selectedMode===mode.value&&selectedLibrary===library.value&&selectedSource===sourceFilter)host.download('knowledge-graph.json',JSON.stringify(filterGraphToSource(fresh,selectedMode,selectedSource),null,2),'application/json'); }),
-      b('Скачать PNG',async()=> { await load(); if(!canvas)throw Error('В карте пока нет узлов.');const blob=await canvas.png({output:'blob-promise',bg:getComputedStyle(surface).backgroundColor,full:true,scale:2});if(valid())host.downloadBlob('knowledge-graph.png',blob); }));
+      b('Скачать PNG',async()=> { await load(); if(!canvas)throw Error('В карте пока нет узлов.'); const blob=await canvas.png({output:'blob-promise',bg:getComputedStyle(surface).backgroundColor,full:true,scale:2});if(valid())host.downloadBlob('knowledge-graph.png',blob); }));
     const manual=b('Добавить понятие',()=> {
       if(sourceFilter)throw Error('Сначала откройте сеть всей библиотеки: ручное понятие без доказательства не входит в фильтр источника.');
       const operation=operationId('concept');

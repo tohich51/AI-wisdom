@@ -1,9 +1,12 @@
 'use strict';
 window.WisdomResearch = (() => {
   const MAX_PENDING_OPERATIONS = 20;
+  const MAX_SOURCE_SELECTION_KEYS = 20;
+  const MAX_CACHED_SOURCE_IDS = 100;
   const operations = new Map();
+  const sourceSelections = new Map();
   const ambiguousNotice = 'Результат запуска не подтверждён. Автоматический повтор не выполнялся. Проверьте историю; точный повтор этого запроса использует сохранённый ключ операции.';
-  let epoch = 0, controller, timer, root, host, pending;
+  let epoch = 0, controller, timer, root, host, pending, sourceSelectionIdentity;
   const identityRecord = value => {
     const accountId = value?.account_id, principalId = value?.principal_id;
     if (accountId === null || accountId === undefined || principalId === null || principalId === undefined) return null;
@@ -13,6 +16,33 @@ window.WisdomResearch = (() => {
   const sameIdentity = (left, right) => Boolean(
     left && right && left.accountId === right.accountId && left.principalId === right.principalId
   );
+  const clearSourceSelectionIdentity = () => {
+    sourceSelections.clear();
+    sourceSelectionIdentity = null;
+  };
+  const reconcileSourceSelectionIdentity = identity => {
+    if (sourceSelectionIdentity && !sameIdentity(sourceSelectionIdentity, identity)) sourceSelections.clear();
+    sourceSelectionIdentity = identity ? {...identity} : null;
+  };
+  const sourceSelectionKey = (identity, libraryId) => JSON.stringify([
+    identity.accountId, identity.principalId, String(libraryId)
+  ]);
+  const readSourceSelection = (identity, libraryId) => {
+    if (!identity) return [];
+    const value = sourceSelections.get(sourceSelectionKey(identity, libraryId));
+    return Array.isArray(value) ? value.slice() : [];
+  };
+  const rememberSourceSelection = (identity, libraryId, sourceIds) => {
+    if (!identity) return;
+    const key = sourceSelectionKey(identity, libraryId);
+    const value = Array.from(new Set(Array.from(sourceIds || [], item => String(item))))
+      .slice(0, MAX_CACHED_SOURCE_IDS);
+    if (value.length) sourceSelections.set(key, value);
+    else sourceSelections.delete(key);
+    while (sourceSelections.size > MAX_SOURCE_SELECTION_KEYS) {
+      sourceSelections.delete(sourceSelections.keys().next().value);
+    }
+  };
   const sameOperation = (left, right) => Boolean(
     left && right && sameIdentity(left, right)
     && left.libraryId === right.libraryId && left.kind === right.kind && left.query === right.query
@@ -31,10 +61,11 @@ window.WisdomResearch = (() => {
     epoch++; controller?.abort(); clearTimeout(timer);
     root?.replaceChildren();
     document.querySelectorAll('dialog[data-wisdom-private]').forEach(d => d.close());
-    if (clearIdentityState) { operations.clear(); pending = null; }
+    if (clearIdentityState) { operations.clear(); pending = null; clearSourceSelectionIdentity(); }
   };
   function question(query, sourceIds, libraryId) {
     const identity = currentIdentity();
+    reconcileSourceSelectionIdentity(identity);
     if (!identity) throw Error('Идентификация пользователя недоступна.');
     pending = {
       identity,
@@ -47,6 +78,7 @@ window.WisdomResearch = (() => {
   async function mount(container, helpers, libraryId, openRunId) {
     invalidate(); root = container; host = helpers;
     const mountIdentity = currentIdentity();
+    reconcileSourceSelectionIdentity(mountIdentity);
     const mountedPending = mountIdentity && pending && sameIdentity(mountIdentity, pending.identity) ? pending : null;
     const generation = epoch; controller = new AbortController();
     const n = host.node; let selected = new Set(), currentRun, currentNote, currentNoteData, runSerial=0, listSerial=0;
@@ -59,25 +91,31 @@ window.WisdomResearch = (() => {
     const action = fn => async e => {
       e?.preventDefault();
       try { await fn(); } catch (error) {
-        if (valid() && error.name !== 'AbortError') { result.replaceChildren(); host.notify(error.message); }
+        if (valid() && error.name !== 'AbortError') {
+          result.replaceChildren();
+          resultStatus.textContent = 'Ошибка: действие не выполнено.';
+          host.notify(error.message);
+        }
       }
     };
     const b = (text, fn) => n('button', text, {type:'button', onclick:action(fn)});
     const fetchPost = (path, data, method = 'POST') => request(path, {method, body:JSON.stringify(data)});
     const libs = host.libraries();
-    if (!libs.length) { root.append(n('p','Создайте библиотеку и загрузите источники.')); return; }
+    if (!libs.length) { root.append(n('p','Создайте библиотеку и загрузите источники.',{role:'status'})); return; }
     const chosen = mountedPending?.libraryId || libraryId || host.currentLibrary()?.id || libs[0].id;
     const selector = n('select',null,{id:'research-library'});
     for (const lib of libs) selector.append(n('option',lib.name,{value:lib.id}));
     selector.value = libs.some(l => l.id === chosen) ? chosen : libs[0].id;
     const libId = selector.value;
+    const rememberedSelection = mountIdentity ? readSourceSelection(mountIdentity, libId) : [];
     selector.addEventListener('change', () => { pending = null; mount(root,host,selector.value).catch(e=>host.notify(e.message)); });
     root.append(n('label','Библиотека',{for:'research-library'}),selector);
     const layout=n('div',null,{class:'research-layout'}), sources=n('aside',null,{class:'card'});
     const work=n('div',null,{class:'research-work'}), studio=n('aside',null,{class:'card'});
-    const result=n('div',null,{class:'research-result','aria-live':'polite'});
+    const resultStatus=n('p','Загружаю доступные источники…',{class:'research-result-status',role:'status','aria-atomic':'true'});
+    const result=n('div',null,{class:'research-result'});
     const history=n('div',null,{class:'card'}), notes=n('div',null,{class:'card'}), personalNote=n('div',null,{class:'card'});
-    layout.append(sources,work,studio); root.append(layout); work.append(result,history,notes);
+    layout.append(sources,work,studio); root.append(layout); work.append(resultStatus,result,history,notes);
     const retainedOperation = [...operations.values()].reverse().find(entry =>
       sameIdentity(entry, mountIdentity) && entry.libraryId === libId && entry.notice);
     if (retainedOperation) work.prepend(n('p', retainedOperation.notice, {role:'alert'}));
@@ -188,6 +226,7 @@ window.WisdomResearch = (() => {
       clearTimeout(timer); const selectionChanged=id!==currentRun || noteId!==currentNote;
       currentRun=id; currentNote=noteId; const serial=++runSerial;
       if (selectionChanged) clearPersonalNote();
+      resultStatus.textContent='Загружаю результат…';
       const run=await freshRun(id); if(serial!==runSerial || currentRun!==id) return false;
       const wasActive=isActive(runStatus.get(id)), terminal=run.status==='done' || run.status==='failed';
       rememberRun(id,run.status);
@@ -204,10 +243,12 @@ window.WisdomResearch = (() => {
       };
       result.replaceChildren(n('h2',run.query || labels[run.kind]));
       if (isActive(run.status)) {
+        resultStatus.textContent=statusLabel(run.status)+'. Результат сохранится в базе.';
         result.append(n('p',statusLabel(run.status)+'. Можно открыть другой раздел: результат сохранится в базе.'));
         timer=setTimeout(()=>action(()=>showRun(id,noteId))(),5000); return true;
       }
       if (run.status==='failed') {
+        resultStatus.textContent='Ошибка: не удалось создать результат.';
         const message=run.error_code==='access_revoked'
           ? 'Не удалось создать результат: нет доступа к одному или нескольким источникам. Восстановите доступ и попробуйте ещё раз.'
           : run.error_code==='generation_failed'
@@ -216,7 +257,11 @@ window.WisdomResearch = (() => {
         result.append(n('p',message)); return finishTerminal();
       }
       window.WisdomResult.render(result,run.result,{node:n,button:b,citation,question:(q,ids)=>question(q,ids,libId),notify:host.notify});
-      if (run.result.no_evidence) return finishTerminal();
+      if (run.result.no_evidence) {
+        resultStatus.textContent='Готово: подтверждающих материалов нет.';
+        return finishTerminal();
+      }
+      resultStatus.textContent='Готово: результат подготовлен.';
       const actions=n('div',null,{class:'actions'}); result.append(actions);
       const actionRunId=id, actionRunSerial=runSerial;
       const actionCurrent=()=>valid()&&actionRunId===currentRun&&actionRunSerial===runSerial;
@@ -229,7 +274,7 @@ window.WisdomResearch = (() => {
         if(!isCurrent()||!actionCurrent())return;
         try {
           await refreshLists({id:actionRunId,serial:actionRunSerial});
-        } catch (error) {
+        } catch(error) {
           if(!isCurrent()||!actionCurrent())return;
           const detail=error?.message?': '+error.message:'';
           host.notify('Заметка сохранена, но список не обновился'+detail+'. Обновите страницу.');
@@ -266,7 +311,10 @@ window.WisdomResearch = (() => {
         const queryText=String(queryValue);
         if(queryText.length>2000) throw Error('Вопрос не должен превышать 2000 символов.');
         const identity=currentIdentity();
-        if(!identity || !sameIdentity(identity,mountIdentity)) throw Error('Идентификация пользователя изменилась. Обновите экран перед запуском исследования.');
+        if(!identity || !sameIdentity(identity,mountIdentity)) {
+          clearSourceSelectionIdentity();
+          throw Error('Идентификация пользователя изменилась. Обновите экран перед запуском исследования.');
+        }
         const candidate={accountId:identity.accountId,principalId:identity.principalId,libraryId:String(libId),sourceIds:[...selected].map(value=>String(value)).sort(),kind:String(kind),query:queryText};
         operation=[...operations.values()].find(entry=>sameOperation(entry,candidate))||null;
         if(!operation) {
@@ -305,24 +353,38 @@ window.WisdomResearch = (() => {
     studio.append(n('label','Формат',{for:'studio-format'}),format,generate,n('p','Аудио, видео и слайды пока не подключены.'));
     try {
       const data=await request('/api/research/sources?library_id='+libId); canGenerate=data.can_generate;
+      if (mountIdentity && !sameIdentity(currentIdentity(),mountIdentity)) {
+        clearSourceSelectionIdentity();
+        throw new DOMException('Отменено', 'AbortError');
+      }
+      const freshSources=Array.isArray(data.sources)?data.sources:[];
+      const authorizedSourceIds=new Set(freshSources.filter(source=>source?.text_available).map(source=>String(source.id)));
+      const requestedSelection=mountedPending ? mountedPending.sourceIds : rememberedSelection;
+      selected=new Set(Array.from(requestedSelection || [],value=>String(value)).filter(id=>authorizedSourceIds.has(id)));
+      rememberSourceSelection(mountIdentity,libId,selected);
       sources.append(n('h2','Источники'),n('p','Выберите материалы. Оригиналы остаются в библиотеке.'));
-      for (const source of data.sources) {
-        const id='source-'+source.id, check=n('input',null,{id,type:'checkbox',value:source.id});
+      for (const source of freshSources) {
+        const sourceId=String(source.id), id='source-'+sourceId, check=n('input',null,{id,type:'checkbox',value:sourceId});
         check.disabled=!source.text_available;
-        if (mountedPending?.sourceIds?.includes(String(source.id)) && !check.disabled) { check.checked=true; selected.add(source.id); }
-        check.addEventListener('change',()=>check.checked?selected.add(source.id):selected.delete(source.id));
+        if (selected.has(sourceId) && !check.disabled) check.checked=true;
+        check.addEventListener('change',()=> {
+          check.checked?selected.add(sourceId):selected.delete(sourceId);
+          if (sameIdentity(currentIdentity(),mountIdentity)) rememberSourceSelection(mountIdentity,libId,selected);
+          else clearSourceSelectionIdentity();
+        });
         const row=n('div',null,{class:'source-option'}); row.append(check,n('label',source.title+(source.partial?' · частично обработан':''),{for:id})); sources.append(row);
       }
       if (pending === mountedPending || !pending || !mountIdentity || !sameIdentity(mountIdentity, pending.identity)) pending=null;
       submit.disabled=generate.disabled=!canGenerate;
+      resultStatus.textContent=freshSources.length ? 'Выберите источники и задайте вопрос.' : 'Готово: доступных источников нет.';
       if (!canGenerate) studio.append(n('p','Генерация доступна владельцу с правами добавления материалов.'));
       if (data.truncated) sources.append(n('p','Показаны 100 последних источников.'));
-      if (!data.sources.length) sources.append(n('p','Загрузите и обработайте материал в разделе «Библиотеки».'));
+      if (!freshSources.length) sources.append(n('p','Загрузите и обработайте материал в разделе «Библиотеки».'));
       await refreshLists();
       // Адрес /app/research/:runId открывает сразу нужный прогон: список прогонов
       // к этому моменту уже отрисован, поэтому showRun ничего не теряет.
       if (openRunId) await showRun(openRunId);
-    } catch (error) { if (valid() && error.name!=='AbortError') { result.replaceChildren(); host.notify(error.message); } }
+    } catch (error) { if (valid() && error.name!=='AbortError') { result.replaceChildren(); resultStatus.textContent='Ошибка: данные исследования недоступны.'; host.notify(error.message); } }
   }
   const uuid=/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
   const labels={research:'Исследование',summary:'Краткое содержание',faq:'Вопросы и ответы',comparison:'Сравнение',checklist:'Чек-лист',flashcards:'Карточки',topic:'Карта тем',network:'Семантическая сеть'};
