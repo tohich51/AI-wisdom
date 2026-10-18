@@ -1,9 +1,11 @@
 """Additive Research/Studio/graph tools on the same authenticated transport."""
 
+import json
 from typing import Literal
 from uuid import UUID
 
 from mcp.server.mcpserver import Context
+from mcp.types import CallToolResult, TextContent
 
 from kb.catalog import graphs
 from kb.research import notes, rule_handoff, runs, semantic, similarity
@@ -71,7 +73,20 @@ def install_tools(server, call):
 
     @server.tool()
     def get_semantic_network(library_id: UUID, ctx: Context, limit: int = 200):
-        return call(ctx, semantic.semantic_network, library_id, limit)
+        data = call(ctx, semantic.semantic_network, library_id, limit)
+        return CallToolResult(
+            content=[
+                TextContent(
+                    type="text",
+                    text=json.dumps(
+                        data,
+                        ensure_ascii=False,
+                        separators=(",", ":"),
+                        allow_nan=False,
+                    ),
+                )
+            ]
+        )
 
     @server.tool()
     def refresh_concept_similarity(library_id: UUID, ctx: Context):
