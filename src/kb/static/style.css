@@ -565,6 +565,10 @@ section#maps-tab { grid-template-columns: minmax(0, 1fr); }
     color: ButtonText;
   }
   .main-nav a.nav-link.is-current,
+  .main-nav a.nav-link[aria-current="page"] {
+    forced-color-adjust: none;
+  }
+  .main-nav a.nav-link.is-current,
   .main-nav a.nav-link[aria-current="page"],
   button[aria-pressed="true"]:not([type="submit"]):not(.primary) {
     border-color: Highlight;
