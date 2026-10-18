@@ -191,6 +191,26 @@ window.WisdomMap = (() => {
       return searchQuery?nodes.filter(node=>foldSearch(node?.label).includes(searchQuery)||foldSearch(node?.body).includes(searchQuery)):nodes.slice();
     };
     const renderLoadedList=()=>{
+      const updateSearchMarker=id=> {
+        searchHighlightId=id;
+        const selected=String(id);
+        for(const button of list.querySelectorAll('button[data-map-search-result]')) {
+          const marker=button.querySelector('[data-map-search-marker]');
+          const current=button.dataset.mapSearchResult===selected;
+          button.classList.toggle('map-search-current',current);
+          if(current) {
+            button.setAttribute('aria-current','true');
+            if(!marker)button.prepend(n('strong','Выделенный результат: ',{'data-map-search-marker':'true'}));
+          } else {
+            button.removeAttribute('aria-current');
+            marker?.remove();
+          }
+        }
+      };
+      if(searchQuery&&searchHighlightId!==null&&list.querySelector('button[data-map-search-result]')) {
+        updateSearchMarker(searchHighlightId);
+        return;
+      }
       const allNodes=Array.isArray(data?.nodes)?data.nodes:[],nodes=matchingNodes();
       const nodeIds=new Set(nodes.map(node=>String(node.id)));
       const allEdges=Array.isArray(data?.edges)?data.edges:[];
@@ -205,15 +225,16 @@ window.WisdomMap = (() => {
       else {
         const nodeList=window.WisdomList?window.WisdomList.create(host,{empty:'Узлов пока нет.',label:'Страницы списка узлов',renderItem:node=>{
           const button=b((types[node.kind]||node.kind)+' · '+node.label,()=> {
-            if(searchQuery) { searchHighlightId=node.id; renderLoadedList(); }
+            if(searchQuery) updateSearchMarker(node.id);
             return renderDetail(node);
           });
           if(searchQuery) {
             button.classList.add('map-search-match');
+            button.dataset.mapSearchResult=String(node.id);
             if(String(node.id)===String(searchHighlightId)) {
               button.classList.add('map-search-current');
               button.setAttribute('aria-current','true');
-              button.prepend(n('strong','Выделенный результат: '));
+              button.prepend(n('strong','Выделенный результат: ',{'data-map-search-marker':'true'}));
             }
           }
           return button;
@@ -361,7 +382,7 @@ window.WisdomMap = (() => {
     similarityRefreshButton.disabled=true;
     controls.append(b('Обновить',load),similarityRefreshButton,b('Уместить граф',()=>canvas?.fit(30)),b('Приблизить',()=>canvas?.zoom(canvas.zoom()*1.2)),b('Отдалить',()=>canvas?.zoom(canvas.zoom()/1.2)),
       b('Скачать JSON',async()=> { const selectedMode=mode.value,selectedLibrary=library.value,selectedSource=sourceFilter;const fresh=await host.api('/api/graphs/'+selectedMode+'?library_id='+encodeURIComponent(selectedLibrary)+'&limit=200',{signal:controller.signal});if(valid()&&!controller.signal.aborted&&selectedMode===mode.value&&selectedLibrary===library.value&&selectedSource===sourceFilter)host.download('knowledge-graph.json',JSON.stringify(filterGraphToSource(fresh,selectedMode,selectedSource),null,2),'application/json'); }),
-      b('Скачать PNG',async()=> { await load(); if(!canvas)throw Error('В карте пока нет узлов.');const blob=await canvas.png({output:'blob-promise',bg:'#ffffff',full:true,scale:2});if(valid())host.downloadBlob('knowledge-graph.png',blob); }));
+      b('Скачать PNG',async()=> { await load(); if(!canvas)throw Error('В карте пока нет узлов.');const blob=await canvas.png({output:'blob-promise',bg:getComputedStyle(surface).backgroundColor,full:true,scale:2});if(valid())host.downloadBlob('knowledge-graph.png',blob); }));
     const manual=b('Добавить понятие',()=> {
       if(sourceFilter)throw Error('Сначала откройте сеть всей библиотеки: ручное понятие без доказательства не входит в фильтр источника.');
       return host.dialog('Понятие без источника',form=> {
