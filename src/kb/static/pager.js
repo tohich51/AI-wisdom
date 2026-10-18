@@ -238,6 +238,7 @@
     let busy = false;
     let epoch = 0;
     let controller = null;
+    let restorationFallbackAvailable = initialOffset !== null && initialOffset !== 0;
     let observedInvalidation = invalidationGeneration;
 
     const paintStatus = (text, {pending = false} = {}) => {
@@ -255,6 +256,7 @@
       offset = 0;
       shown = 0;
       done = false;
+      restorationFallbackAvailable = false;
       list.replaceChildren();
       paintStatus('');
     };
@@ -268,6 +270,7 @@
       const restoredOffset = offsetFor(readPosition(cacheKey));
       clearView();
       offset = restoredOffset === null ? 0 : restoredOffset;
+      restorationFallbackAvailable = restoredOffset !== null && restoredOffset !== 0;
       return true;
     };
 
@@ -288,10 +291,10 @@
       activeControllers.add(requestController);
       busy = true;
 
-      let fallbackAvailable = true;
       let committed = false;
       let discard = false;
       let failureText = '';
+      let reachedEnd = false;
 
       try {
         while (true) {
@@ -315,11 +318,17 @@
           if (!list.isConnected) break;
 
           const rows = Array.isArray(response) ? response : [];
-          if (!rows.length && requestOffset !== 0 && fallbackAvailable) {
-            fallbackAvailable = false;
+          if (!rows.length && requestOffset !== 0 && shown === 0 && restorationFallbackAvailable) {
             pageIndex = 0;
             requestOffset = 0;
             continue;
+          }
+          if (!rows.length && requestOffset !== 0 && shown && requestOffset > offset) {
+            restorationFallbackAvailable = false;
+            done = true;
+            committed = true;
+            reachedEnd = true;
+            break;
           }
 
           const fragment = document.createDocumentFragment();
@@ -340,6 +349,7 @@
           shown = rows.length;
           done = rows.length < size;
           writePosition(cacheKey, pageIndex);
+          restorationFallbackAvailable = false;
           committed = true;
           break;
         }
@@ -372,9 +382,11 @@
 
       paintStatus(shown
         ? 'Показано ' + (offset + 1) + '–' + (offset + shown)
-          + (done
-            ? ' · страница короче размера'
-            : ' · следующая страница ещё не проверена')
+          + (reachedEnd
+            ? ' · конец списка'
+            : done
+              ? ' · страница короче размера'
+              : ' · следующая страница ещё не проверена')
         : '');
       if (scrollAfter) list.scrollIntoView({block: 'nearest'});
     }

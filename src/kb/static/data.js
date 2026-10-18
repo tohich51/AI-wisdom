@@ -81,7 +81,7 @@
   function deny(status) {
     emit(status === 401 ? 'Войдите в свой аккаунт.' : 'Доступ к материалу отсутствует или отозван.');
     for (const hook of invalidationHooks) { try { hook('access'); } catch (_) { /* экран мог быть уже закрыт */ } }
-    if (typeof window.WisdomResearch?.invalidate === 'function') window.WisdomResearch.invalidate();
+    if (typeof window.WisdomResearch?.invalidate === 'function') window.WisdomResearch.invalidate(status === 403);
     if (typeof window.WisdomMap?.invalidate === 'function') window.WisdomMap.invalidate();
     document.querySelectorAll('dialog[data-wisdom-private]').forEach(dialog => {
       try { if (dialog.open) dialog.close(); } catch (_) { /* удаление всё равно требуется */ }
@@ -101,6 +101,7 @@
       const cookie = document.cookie.split('; ').find(value => value.startsWith('kb_csrf='));
       if (cookie) headers.set('X-KB-CSRF', decodeURIComponent(cookie.slice(8)));
     }
+    if (options.signal?.aborted) throw new DOMException('Отменено', 'AbortError');
     stats.requests++;
     const mutation = method !== 'GET' && method !== 'HEAD';
     const requestError = (text, kind, cause = null) => {
@@ -115,7 +116,10 @@
     try {
       response = await fetch(path, {...options, method, headers, credentials: 'same-origin'});
     } catch (error) {
-      if (error?.name === 'AbortError') throw error;
+      if (error?.name === 'AbortError') {
+        if (!mutation) throw error;
+        throw requestError(ambiguousMessage, 'AmbiguousRequestError', error);
+      }
       throw requestError(
         mutation
           ? 'Нет подтверждения связи с сервером. Результат изменения неизвестен. Проверьте состояние объекта перед повторной отправкой; автоматический повтор не выполнялся.'
@@ -151,7 +155,10 @@
       const value = await response.json();
       return value;
     } catch (error) {
-      if (error?.name === 'AbortError') throw error;
+      if (error?.name === 'AbortError') {
+        if (!mutation) throw error;
+        throw requestError(ambiguousMessage, 'AmbiguousRequestError', error);
+      }
       throw requestError(
         mutation
           ? 'Сервер вернул некорректный ответ и не подтвердил результат изменения. Проверьте состояние объекта перед повторной отправкой; автоматический повтор не выполнялся.'

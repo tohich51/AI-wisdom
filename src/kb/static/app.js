@@ -22,6 +22,7 @@ const node = (tag, text, attrs = {}) => {
 window.WisdomForms.configure(node);
 document.querySelectorAll('main form').forEach(form => window.WisdomForms.enhance(form));
 let identity, selected, libraries = [], activeJob, libraryView = 0, sourceViewSerial = 0, sourceViewController, searchSerial = 0, searchController, latestClickTrigger = null;
+let libraryReadSerial = 0, usesReadSerial = 0;
 let privateDialogInvalidators = new Set();
 let authenticatedIdentityBinding = null;
 let authorizedDraftBinding = null;
@@ -118,6 +119,42 @@ const draftContextInfo = (binding = identityCoordinates(identity)) => {
   };
 };
 
+const LIBRARY_KIND_LABELS = new Map([
+  ['reference','Справочник'],
+  ['brand','Бренд'],
+  ['project','Проект'],
+  ['playbook','Руководство'],
+  ['experience','Опыт']
+]);
+const ROLE_LABELS = new Map([
+  ['reader','Читатель'],
+  ['contributor','Автор'],
+  ['curator','Куратор'],
+  ['manager','Менеджер']
+]);
+const KNOWLEDGE_KIND_LABELS = new Map([
+  ['assertion','Утверждение'],
+  ['definition','Определение'],
+  ['recommendation','Рекомендация'],
+  ['example','Пример']
+]);
+const PUBLICATION_LABELS = new Map([
+  ['draft','Черновик'],
+  ['needs_review','Требует проверки'],
+  ['published','Опубликовано'],
+  ['withdrawn','Отозвано']
+]);
+const USE_STATE_LABELS = new Map([
+  ['planned','Запланировано'],
+  ['retrieved','Получено'],
+  ['applied','Применено'],
+  ['completed','Завершено'],
+  ['abandoned','Оставлено без результата']
+]);
+const visibleEnum = (labels, value, missing = 'не указан') => {
+  const text = String(value ?? '');
+  return labels.get(text) || (!text.trim() ? missing : 'Неизвестное значение (' + text + ')');
+};
 const SOURCE_PAGE_SIZE = 200;
 const SOURCE_AUTO_SEARCH_PAGES = 3;
 const SOURCE_REQUEST_TIMEOUT_MS = 12000;
@@ -200,6 +237,7 @@ const safe = (fn, onError) => {
       if (target && disabled !== null) target.disabled = true;
       await operation;
     } catch (error) {
+      if (error?.name === 'AbortError') return;
       if (onError) onError(error, event);
       else if (event?.currentTarget instanceof HTMLFormElement) window.WisdomForms.formError(event.currentTarget, readableError(error));
       else message(readableError(error));
@@ -365,19 +403,22 @@ const libraryRoute = (id, {replace = false} = {}) => {
   router.navigate(target, {replace});
 };
 async function loadLibraries() {
-  const page = await api('/api/libraries'); libraries = page.libraries;
+  const readSerial = ++libraryReadSerial;
+  const authSerial = freshIdentitySerial;
+  const dataGeneration = window.WisdomData.generation();
+  const readBinding = identityCoordinates(identity);
+  const page = await api('/api/libraries');
+  if (readSerial !== libraryReadSerial || authSerial !== freshIdentitySerial
+      || dataGeneration !== window.WisdomData.generation()
+      || !sameIdentity(readBinding, identityCoordinates(identity))) {
+    throw new DOMException('Чтение списка библиотек устарело.', 'AbortError');
+  }
+  libraries = page.libraries;
   const list = byId('library-list'); list.replaceChildren(node('h2', 'Мои библиотеки'));
   if (!libraries.length) list.append(node('p', 'База чистая. Создайте библиотеку и загрузите материал.'));
-  const kindLabels=new Map([
-    ['reference','Справочник'],
-    ['brand','Бренд'],
-    ['project','Проект'],
-    ['playbook','Руководство'],
-    ['experience','Опыт']
-  ]);
   const items = pager({
     label: 'Страницы библиотек', stateKey: 'libraries', library: null,
-    renderItem: lib => button(lib.name + ' · ' + (kindLabels.get(lib.kind) || lib.kind || 'Тип не указан'), () => openLibrary(lib)),
+    renderItem: lib => button(lib.name + ' · ' + visibleEnum(LIBRARY_KIND_LABELS, lib.kind, 'Тип не указан'), () => openLibrary(lib)),
     empty: 'База чистая. Создайте библиотеку и загрузите материал.'
   });
   if (!libraries.length) return;
@@ -718,7 +759,7 @@ async function openLibrary(lib, {guard = null} = {}) {
   const curator = ['curator', 'manager'].includes(role);
   const contributor = curator || role === 'contributor';
   const extractionAllowed = Boolean(policy.generation_allowed && policy.external_processing_allowed);
-  root.append(node('p', 'Тип: ' + lib.kind + ' · Доступ: ' + (role ?? 'не указан')));
+  root.append(node('p', 'Тип: ' + visibleEnum(LIBRARY_KIND_LABELS, lib.kind, 'Тип не указан') + ' · Доступ: ' + visibleEnum(ROLE_LABELS, role)));
   if (contributor) {
     const form = node('form');
     form.dataset.draftKey = UUID_PATTERN.test(String(lib.id || '')) ? 'upload:' + lib.id : '';
@@ -878,7 +919,7 @@ async function openLibrary(lib, {guard = null} = {}) {
     empty: 'Знаний пока нет.',
     renderItem: item => {
       const card = node('article', null, {class: 'card'});
-      card.append(node('p', item.kind + ' · ' + item.publication), node('p', item.statement));
+      card.append(node('p', visibleEnum(KNOWLEDGE_KIND_LABELS, item.kind, 'Вид не указан') + ' · ' + visibleEnum(PUBLICATION_LABELS, item.publication)), node('p', item.statement));
       if (item.publication === 'withdrawn') card.append(node('p', 'Знание отозвано.'));
       if (curator && ['draft', 'needs_review'].includes(item.publication)) {
         const publish = button('Подтвердить знание', async () => { await post('/api/knowledge/' + item.id + '/publish'); await openLibrary(lib); });
@@ -896,7 +937,7 @@ async function openLibrary(lib, {guard = null} = {}) {
   pagedList(root, 'Правила и навыки', '/api/libraries/' + lib.id + '/rules', 'rules', {
     empty: 'Правил пока нет.',
     renderItem: rule => {
-      const card = node('article', null, {class: 'card'}); card.append(node('h4', rule.title + ' · v' + rule.version_no + ' · ' + rule.publication));
+      const card = node('article', null, {class: 'card'}); card.append(node('h4', rule.title + ' · v' + rule.version_no + ' · ' + visibleEnum(PUBLICATION_LABELS, rule.publication)));
       for (const [title, value] of [['Когда', rule.when_to_apply], ['Входные данные', rule.inputs?.join('\n')], ['Шаги', rule.actions?.join('\n')], ['Исключения', rule.exceptions?.join('\n')], ['Ожидаемый эффект', rule.expected_effect]]) card.append(node('strong', title), node('p', value ?? 'не указано'));
       card.append(node('details', null)); const detail = card.lastChild; detail.append(node('summary', 'Происхождение'), node('pre', JSON.stringify(rule.provenance, null, 2)));
       if (rule.publication === 'withdrawn') card.append(node('p', 'Правило отозвано.'));
@@ -970,13 +1011,22 @@ function ruleEditor(lib, rule) {
   });
 }
 async function loadUses() {
+  const readSerial = ++usesReadSerial;
+  const authSerial = freshIdentitySerial;
+  const dataGeneration = window.WisdomData.generation();
+  const readBinding = identityCoordinates(identity);
   const list = byId('uses-list'); list.replaceChildren();
   const records = await api('/api/uses');
+  if (readSerial !== usesReadSerial || authSerial !== freshIdentitySerial
+      || dataGeneration !== window.WisdomData.generation()
+      || !sameIdentity(readBinding, identityCoordinates(identity))) {
+    throw new DOMException('Чтение личного опыта устарело.', 'AbortError');
+  }
   const uses = pager({
     label: 'Страницы личного опыта', stateKey: 'uses', library: null,
     empty: 'Применения пока не записаны. Просмотр и поиск не создают опыт.',
     renderItem: use => {
-      const card = node('article', null, {class: 'card'}); card.append(node('h2', use.title + ' · v' + use.rule_version_no), node('p', 'Состояние: ' + use.state), node('p', 'Ожидали: ' + (use.expected_result ?? 'не указано')), node('p', 'Где: ' + (use.where_applied ?? 'не указан')));
+      const card = node('article', null, {class: 'card'}); card.append(node('h2', use.title + ' · v' + use.rule_version_no), node('p', 'Состояние: ' + visibleEnum(USE_STATE_LABELS, use.state)), node('p', 'Ожидали: ' + (use.expected_result ?? 'не указано')), node('p', 'Где: ' + (use.where_applied ?? 'не указан')));
       const achievementLabels = {met:'достигнута', partly:'достигнута частично', not_met:'не достигнута', unknown:'пока неизвестно'};
       const assessorLabels = {human:'человек', agent:'агент', measurement:'измерение', unknown:'не указан'};
       for (const result of use.outcomes) card.append(node('p', (result.is_correction ? 'Исправление: ' : 'Результат: ') + (result.observed_result ?? 'не указан') + ' · Полезность: ' + (result.rating ?? 'не оценена') + ' · Цель: ' + (achievementLabels[result.achievement] ?? 'пока неизвестно') + ' · Автор оценки: ' + (assessorLabels[result.assessor_kind] ?? 'не указан') + ' · Основание полезности: ' + (result.rating_basis ?? 'не указано') + ' · Основание результата: ' + (result.assessment_evidence ?? 'не указано')));
@@ -1267,12 +1317,13 @@ const refreshIdentity = async () => {
   const routeAtStart = routeSnapshot();
   if (!routeToken || !routeAtStart) throw new Error('Текущий маршрут не распознан. Восстановление не предлагается.');
   if (check) check.disabled = true;
+  window.WisdomForms.snapshotAll();
   authorizedDraftBinding = null;
   window.WisdomForms.suspend();
   let identityChanged = false;
   let prepare;
   const ensureRoute = () => {
-    if (serial !== freshIdentitySerial || !isRouteCurrent(routeToken)
+    if (serial !== freshIdentitySerial || identityReady !== prepare || !isRouteCurrent(routeToken)
         || !sameRouteSnapshot(routeSnapshot(), routeAtStart)) {
       throw new DOMException('Проверка входа отменена', 'AbortError');
     }
@@ -1287,14 +1338,18 @@ const refreshIdentity = async () => {
     if (identityChanged) {
       window.WisdomForms.clearDrafts();
       expiredDraftContext = null;
-      clearPrivateRoots();
-      selected = null;
-      activeJob = null;
     }
+    clearPrivateRoots();
+    if (identityChanged) window.WisdomResearch?.invalidate?.(true);
+    libraryReadSerial++;
+    usesReadSerial++;
+    libraryView++;
+    selected = null;
+    activeJob = null;
     identity = fresh;
     authenticatedIdentityBinding = nextBinding;
     libraries = [];
-    if (identityChanged) window.WisdomData.invalidate('identity change');
+    window.WisdomData.invalidate('identity check');
     setIdentityChrome(false);
     const freshLibraries = await api('/api/libraries', {noCache: true, cache: 'no-store'});
     ensureRoute();
@@ -1443,6 +1498,7 @@ byId('logout')?.addEventListener('click', () => {
   freshIdentitySerial++;
   window.WisdomForms.clearDrafts();
   clearPrivateRoots();
+  window.WisdomResearch?.invalidate?.(true);
   authorizedDraftBinding = null;
   authenticatedIdentityBinding = null;
   expiredDraftContext = null;
@@ -1493,7 +1549,7 @@ router.register('context', {
     selected = project;
     const policy = await api('/api/libraries/' + project.id + '/policy');
     if (!context.isCurrent()) return;
-    workspace.append(node('h2', project.name), node('p', 'Тип: ' + project.kind + ' · Доступ: ' + (policy.effective_role ?? 'не указан')));
+    workspace.append(node('h2', project.name), node('p', 'Тип: ' + visibleEnum(LIBRARY_KIND_LABELS, project.kind, 'Тип не указан') + ' · Доступ: ' + visibleEnum(ROLE_LABELS, policy.effective_role)));
     await window.WisdomProjectContext.mount(workspace, project, featureHost, {canCurate: ['curator', 'manager'].includes(policy.effective_role)});
   }
 });
@@ -1591,7 +1647,7 @@ router.onChange((current, previous, error) => {
   }
   if (previous && current && previous.name !== current.name) router.focusHeading();
   if (!current) return;
-  if (error) routeFailure(current, error);
+  if (error) { if (error?.name !== 'AbortError') routeFailure(current, error); }
   else clearRouteFailure(current);
 });
 router.start();

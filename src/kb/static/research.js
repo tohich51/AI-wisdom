@@ -1,18 +1,55 @@
 'use strict';
 window.WisdomResearch = (() => {
+  const MAX_PENDING_OPERATIONS = 20;
+  const operations = new Map();
+  const ambiguousNotice = 'Результат запуска не подтверждён. Автоматический повтор не выполнялся. Проверьте историю; точный повтор этого запроса использует сохранённый ключ операции.';
   let epoch = 0, controller, timer, root, host, pending;
-  const invalidate = () => {
+  const identityRecord = value => {
+    const accountId = value?.account_id, principalId = value?.principal_id;
+    if (accountId === null || accountId === undefined || principalId === null || principalId === undefined) return null;
+    return {accountId:String(accountId), principalId:String(principalId)};
+  };
+  const currentIdentity = () => identityRecord(host?.identity?.());
+  const sameIdentity = (left, right) => Boolean(
+    left && right && left.accountId === right.accountId && left.principalId === right.principalId
+  );
+  const sameOperation = (left, right) => Boolean(
+    left && right && sameIdentity(left, right)
+    && left.libraryId === right.libraryId && left.kind === right.kind && left.query === right.query
+    && left.sourceIds.length === right.sourceIds.length
+    && left.sourceIds.every((id, index) => id === right.sourceIds[index])
+  );
+  const rememberOperation = operation => {
+    operations.delete(operation.idempotencyKey);
+    operations.set(operation.idempotencyKey, operation);
+    while (operations.size > MAX_PENDING_OPERATIONS) operations.delete(operations.keys().next().value);
+  };
+  const forgetOperation = operation => {
+    if (operation && operations.get(operation.idempotencyKey) === operation) operations.delete(operation.idempotencyKey);
+  };
+  const invalidate = (clearIdentityState = false) => {
     epoch++; controller?.abort(); clearTimeout(timer);
     root?.replaceChildren();
     document.querySelectorAll('dialog[data-wisdom-private]').forEach(d => d.close());
+    if (clearIdentityState) { operations.clear(); pending = null; }
   };
   function question(query, sourceIds, libraryId) {
-    pending = {query, sourceIds, libraryId}; host?.navigateResearch();
+    const identity = currentIdentity();
+    if (!identity) throw Error('Идентификация пользователя недоступна.');
+    pending = {
+      identity,
+      query:String(query || '').slice(0, 2000),
+      sourceIds:Array.from(new Set(Array.from(sourceIds || [], value => String(value)))).slice(0, 10),
+      libraryId:String(libraryId || '')
+    };
+    host?.navigateResearch();
   }
   async function mount(container, helpers, libraryId, openRunId) {
     invalidate(); root = container; host = helpers;
+    const mountIdentity = currentIdentity();
+    const mountedPending = mountIdentity && pending && sameIdentity(mountIdentity, pending.identity) ? pending : null;
     const generation = epoch; controller = new AbortController();
-    const n = host.node; let selected = new Set(), currentRun, currentNote, currentNoteData, runSerial=0, operation, listSerial=0;
+    const n = host.node; let selected = new Set(), currentRun, currentNote, currentNoteData, runSerial=0, listSerial=0;
     const valid = () => generation === epoch;
     const request = async (path, options = {}) => {
       const data = await host.api(path, {...options, signal: controller.signal});
@@ -29,7 +66,7 @@ window.WisdomResearch = (() => {
     const fetchPost = (path, data, method = 'POST') => request(path, {method, body:JSON.stringify(data)});
     const libs = host.libraries();
     if (!libs.length) { root.append(n('p','Создайте библиотеку и загрузите источники.')); return; }
-    const chosen = pending?.libraryId || libraryId || host.currentLibrary()?.id || libs[0].id;
+    const chosen = mountedPending?.libraryId || libraryId || host.currentLibrary()?.id || libs[0].id;
     const selector = n('select',null,{id:'research-library'});
     for (const lib of libs) selector.append(n('option',lib.name,{value:lib.id}));
     selector.value = libs.some(l => l.id === chosen) ? chosen : libs[0].id;
@@ -41,6 +78,9 @@ window.WisdomResearch = (() => {
     const result=n('div',null,{class:'research-result','aria-live':'polite'});
     const history=n('div',null,{class:'card'}), notes=n('div',null,{class:'card'}), personalNote=n('div',null,{class:'card'});
     layout.append(sources,work,studio); root.append(layout); work.append(result,history,notes);
+    const retainedOperation = [...operations.values()].reverse().find(entry =>
+      sameIdentity(entry, mountIdentity) && entry.libraryId === libId && entry.notice);
+    if (retainedOperation) work.prepend(n('p', retainedOperation.notice, {role:'alert'}));
     const freshRun = id => request('/api/research/'+id);
     const isActive = status => status === 'queued' || status === 'running';
     const runStatus = new Map();
@@ -221,18 +261,41 @@ window.WisdomResearch = (() => {
         return;
       }
       submit.disabled=generate.disabled=true;
+      let operation=null;
       try {
-        const fingerprint=JSON.stringify({library_id:libId,source_ids:[...selected].sort(),kind,query:queryValue});
-        if(!operation || operation.fingerprint!==fingerprint) operation={fingerprint,key:crypto.randomUUID()};
-        const job=await fetchPost('/api/research',{library_id:libId,source_ids:[...selected],kind,query:queryValue,idempotency_key:operation.key});
-        operation=null;
+        const queryText=String(queryValue);
+        if(queryText.length>2000) throw Error('Вопрос не должен превышать 2000 символов.');
+        const identity=currentIdentity();
+        if(!identity || !sameIdentity(identity,mountIdentity)) throw Error('Идентификация пользователя изменилась. Обновите экран перед запуском исследования.');
+        const candidate={accountId:identity.accountId,principalId:identity.principalId,libraryId:String(libId),sourceIds:[...selected].map(value=>String(value)).sort(),kind:String(kind),query:queryText};
+        operation=[...operations.values()].find(entry=>sameOperation(entry,candidate))||null;
+        if(!operation) {
+          operation={...candidate,idempotencyKey:crypto.randomUUID(),notice:''};
+          rememberOperation(operation);
+        } else rememberOperation(operation);
+        const job=await fetchPost('/api/research',{library_id:operation.libraryId,source_ids:operation.sourceIds,kind:operation.kind,query:operation.query,idempotency_key:operation.idempotencyKey});
+        if(!job?.run_id) {
+          const error=Error('Сервер не подтвердил идентификатор запуска. Результат операции неизвестен; автоматический повтор не выполнялся.');
+          error.outcomeUnknown=true;
+          throw error;
+        }
+        forgetOperation(operation);
+        if(!valid() || !sameIdentity(currentIdentity(),operation)) return;
         await showRun(job.run_id); await refreshLists();
+      } catch (error) {
+        if (error?.outcomeUnknown) {
+          if (operation && operations.get(operation.idempotencyKey) === operation) {
+            operation.notice=ambiguousNotice;
+            rememberOperation(operation);
+          }
+        } else if (operation) forgetOperation(operation);
+        throw error;
       } finally { if (valid()) submit.disabled=generate.disabled=!canGenerate; }
     }
     let canGenerate=false;
     const ask=n('form',null,{class:'card'}), query=n('textarea',null,{id:'research-query',maxlength:2000,rows:4,required:true});
     ask.dataset.draftKey = uuid.test(String(libId || '')) ? 'research:' + libId + ':ask' : '';
-    query.value=pending?.query || ''; ask.append(n('h2','Исследование'),n('label','Вопрос по выбранным источникам',{for:'research-query'}),query);
+    query.value=mountedPending?.query || ''; ask.append(n('h2','Исследование'),n('label','Вопрос по выбранным источникам',{for:'research-query'}),query);
     const submit=n('button','Исследовать',{type:'submit',disabled:true}); ask.append(submit); work.prepend(ask);
     window.WisdomForms.submit(ask,()=>start('research',query.value));
     studio.append(n('h2','Studio'),n('p','Создайте полезный формат из тех же источников.'));
@@ -246,11 +309,12 @@ window.WisdomResearch = (() => {
       for (const source of data.sources) {
         const id='source-'+source.id, check=n('input',null,{id,type:'checkbox',value:source.id});
         check.disabled=!source.text_available;
-        if (pending?.sourceIds?.includes(source.id) && !check.disabled) { check.checked=true; selected.add(source.id); }
+        if (mountedPending?.sourceIds?.includes(String(source.id)) && !check.disabled) { check.checked=true; selected.add(source.id); }
         check.addEventListener('change',()=>check.checked?selected.add(source.id):selected.delete(source.id));
         const row=n('div',null,{class:'source-option'}); row.append(check,n('label',source.title+(source.partial?' · частично обработан':''),{for:id})); sources.append(row);
       }
-      pending=null; submit.disabled=generate.disabled=!canGenerate;
+      if (pending === mountedPending || !pending || !mountIdentity || !sameIdentity(mountIdentity, pending.identity)) pending=null;
+      submit.disabled=generate.disabled=!canGenerate;
       if (!canGenerate) studio.append(n('p','Генерация доступна владельцу с правами добавления материалов.'));
       if (data.truncated) sources.append(n('p','Показаны 100 последних источников.'));
       if (!data.sources.length) sources.append(n('p','Загрузите и обработайте материал в разделе «Библиотеки».'));

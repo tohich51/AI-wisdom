@@ -232,6 +232,8 @@
         const groupCard = card(group.name);
         const membershipForm = el('form', null, {class: 'completion-form'});
         const memberSelect = selectField(membershipForm, 'Участник для добавления в группу', 'principal_id', activeMembers, 'principal_id', member => [member.display_name, member.email].filter(Boolean).join(' · ') || member.principal_id);
+        memberSelect.required = true;
+        memberSelect.addEventListener('change', () => window.WisdomForms.clearErrors(membershipForm, [memberSelect]));
         const add = el('button', 'Добавить участника', {type: 'submit'}); membershipForm.append(add);
         window.WisdomForms.submit(membershipForm, async () => {
           if (!memberSelect.value) return;
@@ -380,6 +382,8 @@
           if (manager) {
             const form = el('form', null, {class: 'completion-form'});
             const memberSelect = selectField(form, 'Участник', 'principal_id', activeMembers, 'principal_id', member => [member.display_name, member.email].filter(Boolean).join(' · ') || member.principal_id);
+            memberSelect.required = true;
+            memberSelect.addEventListener('change', () => window.WisdomForms.clearErrors(form, [memberSelect]));
             const role = roleField(form); const save = el('button', 'Сохранить прямую роль', {type: 'submit'}); form.append(save);
             window.WisdomForms.submit(form, async () => {
               if (!memberSelect.value) return;

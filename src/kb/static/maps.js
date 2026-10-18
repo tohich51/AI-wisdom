@@ -33,6 +33,22 @@ window.WisdomMap = (() => {
   });
   async function mount(container, helpers, chosenId, chosenMode, chosenSourceId) {
     invalidate(); root=container; host=helpers; const generation=epoch, routeToken=host.routeToken(), n=host.node;
+    const graphId=window.WisdomGraphCanvas.canonicalId;
+    const uniqueRowsById=(rows,keepMissing=false)=>window.WisdomGraphCanvas.uniqueRowsById(rows,keepMissing);
+    const visibleGraphRows=graph=>{
+      const nodes=uniqueRowsById(Array.isArray(graph?.nodes)?graph.nodes:[]);
+      const nodeIds=new Set(nodes.map(node=>graphId(node.id)));
+      const candidates=uniqueRowsById(Array.isArray(graph?.edges)?graph.edges:[],true);
+      const edges=candidates.filter(edge=>{
+        const source=graphId(edge?.source),target=graphId(edge?.target);
+        return source!==target&&nodeIds.has(source)&&nodeIds.has(target);
+      });
+      return {nodes,edges};
+    };
+    const entityIdentity=value=>{
+      const kind=typeof value?.kind==='string'?value.kind:'',entityId=graphId(value?.entity_id);
+      return kind&&entityId?JSON.stringify([kind,entityId]):'';
+    };
     controller=new AbortController(); const valid=()=>host.routeIsCurrent(routeToken)&&generation===epoch&&!controller.signal.aborted;
     let sourceFilter=typeof chosenSourceId==='string'&&chosenSourceId?chosenSourceId:null;
     const libs=host.libraries(); if (!libs.length) { root.append(n('p','Создайте библиотеку и добавьте материалы.')); return; }
@@ -78,14 +94,19 @@ window.WisdomMap = (() => {
     const noConceptsNotice='В библиотеке нет доступных понятий.';
     const filterGraphToSource=(graph,graphMode=mode.value,activeSource=sourceFilter)=>{
       if(graphMode!=='semantic'||!activeSource)return graph;
-      const nodes=(Array.isArray(graph.nodes)?graph.nodes:[]).filter(value=>value&&value.kind==='concept'&&Array.isArray(value.evidence)&&value.evidence.some(cite=>cite&&typeof cite.source_id==='string'&&cite.source_id===activeSource));
-      const nodeIds=new Set(nodes.map(value=>value.id));
-      const keepPair=edge=>edge&&nodeIds.has(edge.source)&&nodeIds.has(edge.target);
+      const graphRows=visibleGraphRows(graph);
+      const nodes=graphRows.nodes.filter(value=>value&&value.kind==='concept'&&Array.isArray(value.evidence)&&value.evidence.some(cite=>cite&&typeof cite.source_id==='string'&&cite.source_id===activeSource));
+      const nodeIds=new Set(nodes.map(value=>graphId(value.id)));
+      const keepPair=edge=>{
+        if(!edge)return false;
+        const source=graphId(edge.source),target=graphId(edge.target);
+        return source!==target&&nodeIds.has(source)&&nodeIds.has(target);
+      };
       const similarity=graph.similarity&&typeof graph.similarity==='object'?{
         ...graph.similarity,
         edges:Array.isArray(graph.similarity.edges)?graph.similarity.edges.filter(keepPair):[]
       }:graph.similarity;
-      return {...graph,nodes,edges:(Array.isArray(graph.edges)?graph.edges:[]).filter(keepPair),similarity};
+      return {...graph,nodes,edges:graphRows.edges.filter(keepPair),similarity};
     };
     const cancelSimilarityPoll=()=> { similarityPoll++; clearSimilarityTimer(); similarityQueued=false; similarityNotice=''; };
     const endpoint=()=>'/api/graphs/'+mode.value+'?library_id='+library.value+'&limit=200';
@@ -110,7 +131,7 @@ window.WisdomMap = (() => {
       }
       if(!similarityRefreshButton) return;
       similarityRefreshButton.hidden=!semantic;
-      const total=Number.isInteger(similarity?.total)?similarity.total:(data?.nodes||[]).filter(node=>node.kind==='concept'&&node.publication!=='withdrawn').length;
+      const total=Number.isInteger(similarity?.total)?similarity.total:visibleGraphRows(data).nodes.filter(node=>node.kind==='concept'&&node.publication!=='withdrawn').length;
       const noEligible=similarityNotice===noConceptsNotice||total<1;
       similarityRefreshButton.disabled=!semantic||similarityQueued||!data?.capabilities?.can_create||noEligible;
     };
@@ -146,16 +167,24 @@ window.WisdomMap = (() => {
     const renderSourceNotice=()=>{
       sourceNotice.replaceChildren();
       if(!sourceFilter)return;
-      const count=Array.isArray(data?.nodes)?data.nodes.length:null;
+      const count=Array.isArray(data?.nodes)?visibleGraphRows(data).nodes.length:null;
       const base='Выбранный источник';
       const scope=loading?'Загружаю связанные понятия…':count===null?'Связанные понятия не загружены; предыдущий граф очищен.':count?'Показано связанных понятий: '+count+'.':'В доступной выдаче связанных понятий пока нет.';
       sourceNotice.append(n('p',base+' · '+scope),b('Показать все понятия',()=>host.navigateMapSource(library.value,null,mode.value)));
       sourceNotice.append(n('p','Ручное создание понятия скрыто: понятие без доказательства не сохранилось бы в этом режиме источника. Сначала откройте сеть всей библиотеки.',{class:'muted'}));
     };
     async function renderDetail(node) {
-      const selectedId=node.id,selectedMode=mode.value,selectedLibrary=library.value,selection=++readSerial;
+      const selectedIdentity=entityIdentity(node),selectedMode=mode.value,selectedLibrary=library.value,selection=++readSerial;
       const signal=controller.signal;
       const selectedCurrent=()=>valid()&&selection===readSerial&&selectedMode===mode.value&&selectedLibrary===library.value;
+      const showUnavailable=()=> {
+        if(!selectedCurrent()||signal.aborted)return;
+        details.replaceChildren(n('p','Подробности узла недоступны: идентичность записи не подтверждена однозначно. Обновите карту.'));
+      };
+      const currentNodes=Array.isArray(data?.nodes)?data.nodes:[];
+      const currentIdentityMatches=currentNodes.filter(value=>entityIdentity(value)===selectedIdentity);
+      const visibleCurrentNodes=visibleGraphRows(data).nodes;
+      if(currentIdentityMatches.length!==1||!visibleCurrentNodes.includes(currentIdentityMatches[0])){showUnavailable();return;}
       details.replaceChildren(n('p','Загрузка подробностей…'));
       let freshNode;
       if(selectedMode==='semantic' && node.kind==='concept') {
@@ -164,10 +193,14 @@ window.WisdomMap = (() => {
         freshNode=node;
       } else {
         const fresh=await host.api(endpoint(),{signal});
-        freshNode=fresh.nodes.find(value=>value.id===selectedId);
+        const freshNodes=Array.isArray(fresh?.nodes)?fresh.nodes:[];
+        const identityMatches=freshNodes.filter(value=>entityIdentity(value)===selectedIdentity);
+        const visibleFreshNodes=visibleGraphRows(fresh).nodes;
+        if(identityMatches.length!==1||!visibleFreshNodes.includes(identityMatches[0])){showUnavailable();return;}
+        freshNode=identityMatches[0];
       }
       if(!selectedCurrent() || signal.aborted) return;
-      if(freshNode?.id!==selectedId) throw Error('Узел больше не доступен. Обновите карту.');
+      if(!freshNode||entityIdentity(freshNode)!==selectedIdentity){showUnavailable();return;}
       node=freshNode;
       const detailHeading=n('h2',node.label,{id:'map-detail-heading-'+crypto.randomUUID(),tabindex:'-1'});
       details.replaceChildren(detailHeading,n('p',[types[node.kind]||node.kind,publication[node.publication]||node.publication,
@@ -197,13 +230,15 @@ window.WisdomMap = (() => {
       }
     }
     function renderDetailEdge(edge) {
-      if (!valid() || !Array.isArray(data?.edges) || !data.edges.includes(edge)) return;
+      if(!valid())return;
       const selectedMode=mode.value,selectedLibrary=library.value,selectedSource=sourceFilter,selection=++readSerial;
       const selectedCurrent=()=>valid()&&selection===readSerial&&selectedMode===mode.value&&selectedLibrary===library.value&&selectedSource===sourceFilter;
-      const nodes=Array.isArray(data.nodes)?data.nodes:[];
-      const source=nodes.find(node=>node&&node.id===edge.source);
-      const target=nodes.find(node=>node&&node.id===edge.target);
-      if (!source || !target) return;
+      const graphRows=visibleGraphRows(data);
+      if(!graphRows.edges.includes(edge))return;
+      const nodesById=new Map(graphRows.nodes.map(node=>[graphId(node.id),node]));
+      const source=nodesById.get(graphId(edge.source));
+      const target=nodesById.get(graphId(edge.target));
+      if(!source||!target)return;
       const sourceText=String(source.label||types[source.kind]||'Узел');
       const targetText=String(target.label||types[target.kind]||'Узел');
       const predicateText=typeof edge.predicate==='string'&&edge.predicate?(predicates[edge.predicate]||edge.predicate):'тип связи не указан';
@@ -231,16 +266,16 @@ window.WisdomMap = (() => {
     }
     const foldSearch=value=>String(value??'').toLocaleLowerCase().replace(/\s+/g,' ').trim();
     const matchingNodes=()=> {
-      const nodes=Array.isArray(data?.nodes)?data.nodes:[];
+      const nodes=visibleGraphRows(data).nodes;
       return searchQuery?nodes.filter(node=>foldSearch(node?.label).includes(searchQuery)||foldSearch(node?.body).includes(searchQuery)):nodes.slice();
     };
     const renderLoadedList=()=>{
       const updateSearchMarker=id=> {
-        searchHighlightId=id;
-        const selected=String(id);
+        searchHighlightId=graphId(id);
+        const selected=searchHighlightId;
         for(const button of list.querySelectorAll('button[data-map-search-result]')) {
           const marker=button.querySelector('[data-map-search-marker]');
-          const current=button.dataset.mapSearchResult===selected;
+          const current=graphId(button.dataset.mapSearchResult)===selected;
           button.classList.toggle('map-search-current',current);
           if(current) {
             button.setAttribute('aria-current','true');
@@ -255,13 +290,16 @@ window.WisdomMap = (() => {
         updateSearchMarker(searchHighlightId);
         return;
       }
-      const allNodes=Array.isArray(data?.nodes)?data.nodes:[],nodes=matchingNodes();
-      const nodeIds=new Set(nodes.map(node=>node.id));
-      const allEdges=Array.isArray(data?.edges)?data.edges:[];
-      const edges=allEdges.filter(edge=>nodeIds.has(String(edge?.source))&&nodeIds.has(String(edge?.target)));
+      const graphRows=visibleGraphRows(data),allNodes=graphRows.nodes,nodes=matchingNodes();
+      const nodeIds=new Set(nodes.map(node=>graphId(node.id)));
+      const allEdges=graphRows.edges;
+      const edges=allEdges.filter(edge=>{
+        const source=graphId(edge?.source),target=graphId(edge?.target);
+        return source!==target&&nodeIds.has(source)&&nodeIds.has(target);
+      });
       const serial=graphSerial,selectedMode=mode.value,selectedLibrary=library.value,selectedSource=sourceFilter;
       const graphCurrent=()=>valid()&&serial===graphSerial&&selectedMode===mode.value&&selectedLibrary===library.value&&selectedSource===sourceFilter;
-      if(searchQuery&&searchHighlightId===null)searchHighlightId=nodes[0]?.id??null;
+      if(searchQuery&&searchHighlightId===null)searchHighlightId=nodes[0]?graphId(nodes[0].id):null;
       list.replaceChildren(n('h2',searchQuery?'Результаты поиска':'Узлы и связи'));
       if(selectedMode==='semantic'&&!data?.similarity?.available)
         list.append(n('p','Слой близости недоступен. '+(data.similarity?.reason?'Причина: '+data.similarity.reason+'.':'Причина не указана.')+' На карте остаются только типизированные связи; сходство не является доказательством.'));
@@ -274,8 +312,8 @@ window.WisdomMap = (() => {
           });
           if(searchQuery) {
             button.classList.add('map-search-match');
-            button.dataset.mapSearchResult=String(node.id);
-            if(String(node.id)===String(searchHighlightId)) {
+            button.dataset.mapSearchResult=graphId(node.id);
+            if(graphId(node.id)===graphId(searchHighlightId)) {
               button.classList.add('map-search-current');
               button.setAttribute('aria-current','true');
               button.prepend(n('strong','Выделенный результат: ',{'data-map-search-marker':'true'}));
@@ -286,11 +324,11 @@ window.WisdomMap = (() => {
         if(nodeList) { nodeList.set(nodes); list.append(nodeList.element,nodeList.navigation,nodeList.status); }
         else for(const node of nodes) list.append(b((types[node.kind]||node.kind)+' · '+node.label,()=>renderDetail(node)));
       }
-      const labels=new Map(nodes.map(value=>[value.id,value.label]));
+      const labels=new Map(nodes.map(value=>[graphId(value.id),value.label]));
       for(const edge of edges) {
         const row=n('article',null,{class:'graph-relation'});
         const relationCurrent=()=>graphCurrent()&&row.isConnected;
-        const relationText=String(labels.get(edge.source)||'Узел')+' → '+(predicates[edge.predicate]||edge.predicate||'тип связи не указан')+' → '+String(labels.get(edge.target)||'Узел');
+        const relationText=String(labels.get(graphId(edge.source))||'Узел')+' → '+(predicates[edge.predicate]||edge.predicate||'тип связи не указан')+' → '+String(labels.get(graphId(edge.target))||'Узел');
         const relationButton=b(relationText,()=>renderDetailEdge(edge));
         relationButton.setAttribute('aria-label','Открыть связь: '+relationText);
         const relationHeading=n('h3','');
@@ -328,7 +366,7 @@ window.WisdomMap = (() => {
       if(!searchQuery||loading||!data)return;
       const node=matchingNodes()[0];
       if(!node)return;
-      searchHighlightId=node.id;
+      searchHighlightId=graphId(node.id);
       renderLoadedList();
       return renderDetail(node);
     };
@@ -366,12 +404,13 @@ window.WisdomMap = (() => {
         relationButton.hidden=selectedMode!=='semantic' || !data.capabilities?.can_create;
         renderSimilarityState();
         canvas?.destroy();canvas=null; surface.replaceChildren();list.replaceChildren(n('h2','Узлы и связи'));
-      const status=n('p',(mode.value==='semantic'?'Понятия и направленные смысловые связи':'Источник → фрагмент → знание или правило → опыт → результат')+
-        ' · '+data.nodes.length+' узлов · '+data.edges.length+' связей'+(data.truncated?' · Показана часть карты.':''));
+        const visible=visibleGraphRows(data);
+        const status=n('p',(mode.value==='semantic'?'Понятия и направленные смысловые связи':'Источник → фрагмент → знание или правило → опыт → результат')+
+          ' · '+visible.nodes.length+' узлов · '+visible.edges.length+' связей'+(data.truncated?' · Показана часть карты.':''));
       content.querySelector('.map-summary')?.remove();status.className='map-summary'; content.prepend(status);
-      if(data.nodes.length>40) status.append(n('span',' Нажмите на узел или связь либо выберите их в списке, чтобы увидеть подробности.'));
+      if(visible.nodes.length>40) status.append(n('span',' Нажмите на узел или связь либо выберите их в списке, чтобы увидеть подробности.'));
       renderLoadedList();
-      if(!data.nodes.length) {
+      if(!visible.nodes.length) {
         const emptyMessage=mode.value==='semantic'?(sourceFilter?'В режиме выбранного источника нет связанных понятий.':'Пока нет понятий и связей. Создайте сеть в Studio или добавьте понятие вручную.'):'После загрузки источников здесь появится их происхождение.';
         surface.append(n('p',emptyMessage));
         if(mode.value==='semantic') surface.append(b('Открыть Studio',()=>window.WisdomResearch.question('',[],library.value)));
@@ -380,7 +419,7 @@ window.WisdomMap = (() => {
         if(typeof window.WisdomGraphCanvas.ensureLibrary==='function') await window.WisdomGraphCanvas.ensureLibrary();
         if(!valid() || serial!==graphSerial) return;
         canvas=window.WisdomGraphCanvas.render(
-          surface,data,mode.value,
+          surface,{...data,nodes:visible.nodes,edges:visible.edges},mode.value,
           node=>act(()=>renderDetail(node))(),
           {showSimilarity:showSimilarity.checked,onSelectEdge:edge=>act(()=>renderDetailEdge(edge))()}
         );
@@ -405,7 +444,7 @@ window.WisdomMap = (() => {
     async function refreshSimilarity() {
       if(mode.value!=='semantic' || !data?.capabilities?.can_create) return;
       const total=Number.isInteger(data.similarity?.total)?data.similarity.total:
-        (data.nodes||[]).filter(node=>node.kind==='concept'&&node.publication!=='withdrawn').length;
+        visibleGraphRows(data).nodes.filter(node=>node.kind==='concept'&&node.publication!=='withdrawn').length;
       if(total<1) return;
       const selectedMode=mode.value, selectedLibrary=library.value, signal=controller.signal;
       clearSimilarityTimer();
@@ -463,12 +502,12 @@ window.WisdomMap = (() => {
     });
     controls.append(manual);
     const relationButton=b('Добавить связь',()=> {
-      if(mode.value!=='semantic' || data.nodes.length<2) throw Error('Откройте семантическую сеть с двумя понятиями.');
+      if(mode.value!=='semantic' || visibleGraphRows(data).nodes.length<2) throw Error('Откройте семантическую сеть с двумя понятиями.');
       const operation=operationId('relation');
       host.dialog('Ручная связь · без доказательства',form=> {
         form.dataset.draftKey=uuid.test(String(libraryId||''))?'relation:'+libraryId+':'+operation:'';
         for(const [name,label] of [['from_concept','От понятия'],['to_concept','К понятию']]) {
-          const select=n('select',null,{id:name,name}); for(const node of data.nodes)select.append(n('option',node.label,{value:node.entity_id})); form.append(n('label',label,{for:name}),select);
+          const select=n('select',null,{id:name,name}); for(const node of visibleGraphRows(data).nodes)select.append(n('option',node.label,{value:node.entity_id})); form.append(n('label',label,{for:name}),select);
         }
         const select=n('select',null,{id:'predicate',name:'predicate'});
         for(const p of ['supports','part_of','used_for','contradicts'])select.append(n('option',predicates[p],{value:p})); form.append(n('label','Тип связи',{for:'predicate'}),select);

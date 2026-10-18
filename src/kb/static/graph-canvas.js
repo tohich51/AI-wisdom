@@ -2,6 +2,24 @@
   'use strict';
 
   const api = window.WisdomGraphCanvas || (window.WisdomGraphCanvas = {});
+  const canonicalId = value => {
+    if (typeof value === 'string' && value.trim()) return value;
+    if (typeof value === 'number' && Number.isFinite(value)) return String(value);
+    return '';
+  };
+  api.canonicalId = canonicalId;
+  api.uniqueRowsById = (rows, keepMissing = false) => {
+    const values = Array.isArray(rows) ? rows : [];
+    const counts = new Map();
+    for (const row of values) {
+      const id = canonicalId(row && typeof row === 'object' ? row.id : undefined);
+      if (id) counts.set(id, (counts.get(id) || 0) + 1);
+    }
+    return values.filter(row => {
+      const id = canonicalId(row && typeof row === 'object' ? row.id : undefined);
+      return id ? counts.get(id) === 1 : keepMissing === true;
+    });
+  };
   // Ленивая загрузка библиотеки графа: cytoscape весит больше всех остальных
   // скриптов вместе взятых и нужен только на экране «Карта знаний» и только
   // когда в карте есть узлы. Файл в vendor не меняется, он подключается один раз.
@@ -80,30 +98,11 @@
     let fills = fillsFor(palette);
     if (container && container.style) container.style.backgroundColor = palette.surface;
 
-    const graphId = value => {
-      if (typeof value === 'string' && value.trim()) return value;
-      if (typeof value === 'number' && Number.isFinite(value)) return String(value);
-      return '';
-    };
+    const graphId = canonicalId;
     const rows = Array.isArray(data && data.nodes) ? data.nodes : [];
-    const overview = rows.length > 40;
-    const actualNodes = new Map();
-    const ambiguousNodeIds = new Set();
-    for (const node of rows) {
-      if (!node || typeof node !== 'object') continue;
-      const id = graphId(node.id);
-      if (!id) continue;
-      if (actualNodes.has(id)) {
-        actualNodes.delete(id);
-        ambiguousNodeIds.add(id);
-      } else if (!ambiguousNodeIds.has(id)) {
-        actualNodes.set(id, node);
-      }
-    }
-    const nodeRows = rows.filter(node => {
-      const id = graphId(node && node.id);
-      return Boolean(id && !ambiguousNodeIds.has(id));
-    });
+    const nodeRows = api.uniqueRowsById(rows);
+    const overview = nodeRows.length > 40;
+    const actualNodes = new Map(nodeRows.map(node => [graphId(node.id), node]));
     const elementIds = new Set(nodeRows.map(node => graphId(node.id)));
     const labelProbe = document.createElement('span');
     labelProbe.style.cssText = 'position:fixed;left:-10000px;top:0;display:inline-block;visibility:hidden;pointer-events:none;white-space:normal;overflow-wrap:anywhere;box-sizing:border-box;line-height:normal';
@@ -164,7 +163,9 @@
       return id;
     };
     const actualEdges = new Map();
-    const edges = Array.isArray(data && data.edges) ? data.edges : [];
+    const edges = api.uniqueRowsById(
+      Array.isArray(data && data.edges) ? data.edges : [], true
+    );
     edges.forEach((edge, index) => {
       if (!edge || typeof edge !== 'object') return;
       const source = graphId(edge.source);
