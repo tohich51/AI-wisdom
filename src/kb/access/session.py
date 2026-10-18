@@ -880,6 +880,7 @@ class SessionStore:
                 {"now": now},
             )
             counts = cur.fetchone()
+            assert counts is not None  # aggregate COUNT always returns one row
             recent_count, live_count = counts["recent_count"], counts["live_count"]
             if (
                 recent_count >= _BROWSER_PAIRING_RATE_LIMIT
