@@ -17,16 +17,17 @@ window.WisdomMap = (() => {
     similarityTimer={id,cancel};
     if(signal.aborted)cancel();else signal.addEventListener('abort',cancel,{once:true});
   });
-  async function mount(container, helpers, chosenId, chosenMode) {
+  async function mount(container, helpers, chosenId, chosenMode, chosenSourceId) {
     invalidate(); root=container; host=helpers; const generation=epoch, n=host.node;
     controller=new AbortController(); const valid=()=>generation===epoch;
+    let sourceFilter=typeof chosenSourceId==='string'&&chosenSourceId?chosenSourceId:null;
     const libs=host.libraries(); if (!libs.length) { root.append(n('p','Создайте библиотеку и добавьте материалы.')); return; }
     const library=n('select',null,{id:'map-library'});
     for(const lib of libs) library.append(n('option',lib.name,{value:lib.id}));
     library.value=chosenId || host.currentLibrary()?.id || libs[0].id;
     const mode=n('select',null,{id:'map-mode'});
     mode.append(n('option','Происхождение и опыт',{value:'provenance'}),n('option','Семантическая сеть',{value:'semantic'}));
-    mode.value=chosenMode === 'semantic' ? 'semantic' : 'provenance';
+    mode.value=(sourceFilter || chosenMode === 'semantic') ? 'semantic' : 'provenance';
     const controls=n('div',null,{class:'map-controls'}), content=n('div',null,{class:'card'}), list=n('div',null,{class:'map-list'});
     const details=n('aside',null,{class:'card map-details','aria-live':'polite'});
     const similarityControl=n('span',null,{class:'map-similarity-control'});
@@ -36,8 +37,9 @@ window.WisdomMap = (() => {
     similarityControl.append(n('label','Показывать близость понятий',{for:'map-similarity'}),showSimilarity,similarityStatus);
     controls.append(n('label','Библиотека',{for:'map-library'}),library,n('label','Вид карты',{for:'map-mode'}),mode,similarityControl);
     const surface=n('div',null,{class:'map-surface',tabindex:0,'aria-label':'Граф знаний. Все узлы доступны в списке ниже.'});
-    root.append(controls,content,details,list); content.append(surface);
-    let data, readSerial=0, similarityPoll=0, similarityQueued=false, similarityNotice='', similarityRefreshButton;
+    const sourceNotice=n('div',null,{'aria-live':'polite'});
+    root.append(controls,sourceNotice,content,details,list); content.append(surface);
+    let data, readSerial=0, similarityPoll=0, similarityQueued=false, similarityNotice='', similarityRefreshButton=null;
     const noConceptsNotice='В библиотеке нет доступных понятий.';
     const cancelSimilarityPoll=()=> { similarityPoll++; clearSimilarityTimer(); similarityQueued=false; similarityNotice=''; };
     const endpoint=()=>'/api/graphs/'+mode.value+'?library_id='+library.value+'&limit=200';
@@ -75,13 +77,24 @@ window.WisdomMap = (() => {
       }
     }};
     const b=(text,fn)=>n('button',text,{type:'button',onclick:act(fn)});
+    const renderSourceNotice=()=>{
+      sourceNotice.replaceChildren();
+      if(!sourceFilter)return;
+      const count=Array.isArray(data?.nodes)?data.nodes.length:null;
+      const base='Выбранный источник';
+      const scope=count===null?'Показаны связанные понятия.':count?'Показано связанных понятий: '+count+'.':'В доступной выдаче связанных понятий пока нет.';
+      sourceNotice.append(n('p',base+' · '+scope),b('Показать все понятия',()=>{sourceFilter=null;renderSourceNotice();return load();}));
+    };
+    renderSourceNotice();
     async function renderDetail(node) {
       const selectedId=node.id,selectedMode=mode.value,selectedLibrary=library.value,selection=++readSerial;
       const signal=controller.signal;
       details.replaceChildren(n('p','Загрузка подробностей…'));
       let freshNode;
-      if(selectedMode==='semantic') {
+      if(selectedMode==='semantic' && node.kind==='concept') {
         freshNode=await host.api('/api/graphs/concepts/'+encodeURIComponent(node.entity_id)+'?library_id='+encodeURIComponent(selectedLibrary),{signal});
+      } else if(selectedMode==='semantic') {
+        freshNode=node;
       } else {
         const fresh=await host.api(endpoint(),{signal});
         freshNode=fresh.nodes.find(value=>value.id===selectedId);
@@ -94,12 +107,36 @@ window.WisdomMap = (() => {
       if(node.body) details.append(n('p',node.body));
       if(node.basis==='manual_without_evidence') details.append(n('p','Ручное понятие без подтверждающего источника.'));
       if(node.basis==='manual_revision_with_inherited_sources') details.append(n('p','Ручная правка. Источники унаследованы от предыдущей версии; проверьте новую формулировку.'));
-      if(node.kind==='source') details.append(b('Открыть источник',()=>host.openSource(node.entity_id)));
+      if(node.kind==='source') {
+        details.append(b('Открыть источник',()=>host.openSource(node.entity_id)));
+        const sourceId=typeof node.entity_id==='string'?node.entity_id:'';
+        if(sourceId) details.append(b('Показать связанные понятия',()=>{
+          sourceFilter=sourceId;mode.value='semantic';renderSourceNotice();return load();
+        }));
+      }
       if(node.kind==='rule') details.append(b('Открыть правило',()=>host.openRuleVersion(node.entity_id,node.version_no)));
-      for(const cite of node.evidence||[]) details.append(n('blockquote',cite.quote),n('p',cite.title),b('Открыть источник',()=>host.openSource(cite.source_id)));
+      const evidence=Array.isArray(node.evidence)?node.evidence:[];
+      for(const cite of evidence) {
+        const quote=typeof cite.quote==='string'?cite.quote:'';
+        const locator=cite.locator&&typeof cite.locator==='object'?cite.locator:{};
+        const place=[
+          locator.chapter!=null&&locator.chapter!==''?'Глава: '+locator.chapter:null,
+          locator.file_page!=null?'Страница файла '+locator.file_page:null,
+          locator.printed_label?'Печатная метка: '+locator.printed_label:null,
+          locator.paragraph!=null?'Абзац: '+locator.paragraph:null,
+          locator.table_index!=null?'Таблица '+locator.table_index+(locator.cell_row!=null||locator.cell_column!=null?', ячейка '+String(locator.cell_row??'?')+':'+String(locator.cell_column??'?'):''):null
+        ].filter(Boolean).join(' · ');
+        details.append(n('blockquote',quote||'Текст цитаты не указан.'),n('p',[cite.title,place].filter(value=>value!=null&&value!=='').join(' · ')||'Источник цитаты'));
+        const hasLocator=['chapter','file_page','printed_label','paragraph','table_index','cell_row','cell_column'].some(key=>locator[key]!=null);
+        if(typeof cite.source_id==='string'&&cite.source_id) details.append(b(quote||hasLocator?'Открыть точное место':'Открыть источник',()=>host.openSource(cite.source_id,{
+          quote,locator,returnLabel:'Вернуться к понятию',onReturn:()=>{if(valid()&&selection===readSerial)return renderDetail(node);}
+        })));
+      }
       if(node.kind==='concept') {
-        const ids=[...new Set((node.evidence||[]).map(c=>c.source_id))];
-        details.append(b('Исследовать понятие',()=>window.WisdomResearch.question('Что означает '+node.label+'?',ids,library.value)));
+        const ids=[...new Set(evidence.map(cite=>cite?.source_id).filter(id=>typeof id==='string'&&id))];
+        if(sourceFilter) details.append(n('a','Вернуться к материалу',{href:host.librarySourcesPath(selectedLibrary)}));
+        if(ids.length) details.append(b('Исследовать понятие',()=>window.WisdomResearch.question('Что означает '+node.label+'?',ids,library.value)));
+        else details.append(n('p','Доступных источников для исследования этого понятия нет.'));
         if(data.capabilities?.can_review && node.publication==='draft') details.append(b('Подтвердить понятие',()=>review(node.entity_id,'concept','publish')));
         if(data.capabilities?.can_review && node.publication!=='withdrawn') details.append(b('Снять понятие с публикации',()=>review(node.entity_id,'concept','withdraw')));
       }
@@ -112,9 +149,19 @@ window.WisdomMap = (() => {
       const preserveSimilarityPoll=options.preserveSimilarityPoll===true;
       if(!preserveSimilarityPoll) cancelSimilarityPoll();
       const serial=++readSerial; details.replaceChildren();
-      const fresh=await host.api(endpoint(),{signal:controller.signal}); if(!valid() || serial!==readSerial) return; data=fresh;
-      content.querySelector('.map-error')?.remove();
+      const fresh=await host.api(endpoint(),{signal:controller.signal}); if(!valid() || serial!==readSerial) return;
       const semantic=mode.value==='semantic';
+      if(semantic&&sourceFilter) {
+        const concepts=fresh.nodes.filter(value=>value.kind==='concept'&&Array.isArray(value.evidence)&&value.evidence.some(cite=>cite&&cite.source_id===sourceFilter));
+        const conceptIds=new Set(concepts.map(value=>value.id));
+        const typedEdges=Array.isArray(fresh.edges)?fresh.edges:[];
+        const similarity=fresh.similarity&&typeof fresh.similarity==='object'?{
+          ...fresh.similarity,
+          edges:Array.isArray(fresh.similarity.edges)?fresh.similarity.edges.filter(edge=>edge&&conceptIds.has(edge.source)&&conceptIds.has(edge.target)):[]
+        }:fresh.similarity;
+        data={...fresh,nodes:concepts,edges:typedEdges.filter(edge=>edge&&conceptIds.has(edge.source)&&conceptIds.has(edge.target)),similarity};
+      } else data=fresh;
+      renderSourceNotice(); content.querySelector('.map-error')?.remove();
       manual.hidden=!semantic || !data.capabilities?.can_create;
       relationButton.hidden=!semantic || !data.capabilities?.can_create;
       renderSimilarityState();
@@ -152,6 +199,7 @@ window.WisdomMap = (() => {
     mode.addEventListener('change',act(()=> {
       document.querySelectorAll('dialog[data-wisdom-private]').forEach(d=>d.close());
       const semantic=mode.value==='semantic';
+      if(!semantic) { sourceFilter=null;renderSourceNotice(); }
       similarityControl.hidden=!semantic;
       if(similarityRefreshButton) { similarityRefreshButton.hidden=!semantic; similarityRefreshButton.disabled=true; }
       if(!semantic) similarityStatus.replaceChildren();

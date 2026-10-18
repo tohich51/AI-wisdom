@@ -48,15 +48,28 @@ window.WisdomResearch = (() => {
       runStatus.delete(id); runStatus.set(id,status);
       if (runStatus.size>100) runStatus.delete(runStatus.keys().next().value);
     };
-    const locate = cite => [cite.locator?.chapter, cite.locator?.file_page != null ? 'Страница файла '+cite.locator.file_page : null,
-      cite.locator?.printed_label, cite.locator?.paragraph != null ? 'Абзац '+cite.locator.paragraph : null].filter(Boolean).join(' · ');
+    const locate = cite => {
+      const locator=cite.locator&&typeof cite.locator==='object'?cite.locator:{};
+      return [
+        locator.chapter!=null&&locator.chapter!==''?'Глава: '+locator.chapter:null,
+        locator.file_page!=null?'Страница файла '+locator.file_page:null,
+        locator.printed_label?'Печатная метка: '+locator.printed_label:null,
+        locator.paragraph!=null?'Абзац: '+locator.paragraph:null,
+        locator.table_index!=null?'Таблица '+locator.table_index+(locator.cell_row!=null||locator.cell_column!=null?', ячейка '+String(locator.cell_row??'?')+':'+String(locator.cell_column??'?'):''):null
+      ].filter(Boolean).join(' · ')||'Локатор не указан.';
+    };
     async function citation(id) {
       const runId=currentRun, selection=runSerial;
-      const fresh=await freshRun(runId); if(runId!==currentRun || selection!==runSerial) return; const cite=fresh.result?.citations.find(c=>c.id===id);
+      const fresh=await freshRun(runId); if(runId!==currentRun || selection!==runSerial) return;
+      const citations=Array.isArray(fresh.result?.citations)?fresh.result.citations:[];
+      const cite=citations.find(c=>c.id===id);
       if (!cite) throw Error('Цитата больше не доступна.');
-      const d=n('dialog',null,{'data-wisdom-private':'true'});
-      d.append(n('h2',cite.title),n('p',[cite.author,cite.edition].filter(Boolean).join(' · ')),n('p',locate(cite)),n('blockquote',cite.quote));
-      d.append(b('Открыть источник',()=>host.openSource(cite.source_id)),b('Закрыть',()=>d.close()));
+      const d=n('dialog',null,{'data-wisdom-private':'true'}), quote=typeof cite.quote==='string'?cite.quote:'';
+      const metadata=[cite.author,cite.edition].filter(Boolean).join(' · ');
+      d.append(n('h2',cite.title||'Цитата'),n('p',metadata||'Метаданные источника не указаны.'),n('p','Локатор: '+locate(cite)),n('blockquote',quote||'Текст цитаты не указан.'));
+      if(typeof cite.source_id==='string'&&cite.source_id) d.append(b('Открыть точное место',()=>host.openSource(cite.source_id,{quote,locator:cite.locator&&typeof cite.locator==='object'?cite.locator:{}})));
+      else d.append(n('p','Источник цитаты недоступен в текущем ответе. Выберите другую цитату в результате.'));
+      d.append(b('Вернуться к результату',()=>d.close()));
       d.addEventListener('close',()=>d.remove()); document.body.append(d); d.showModal();
     }
     function renderNote(note) {

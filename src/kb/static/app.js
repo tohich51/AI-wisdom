@@ -18,9 +18,27 @@ const node = (tag, text, attrs = {}) => {
   }
   return n;
 };
-let identity, selected, libraries = [], activeJob, libraryView = 0;
+let identity, selected, libraries = [], activeJob, libraryView = 0, sourceViewSerial = 0, sourceViewController, searchSerial = 0, searchController, latestClickTrigger = null;
+const SOURCE_PAGE_SIZE = 200;
+const SOURCE_AUTO_SEARCH_PAGES = 3;
+const SOURCE_REQUEST_TIMEOUT_MS = 12000;
 const message = text => { byId('status').textContent = text; };
 window.WisdomData.onMessage(message);
+window.WisdomData.onInvalidate(reason => {
+  if (reason !== 'denied' && reason !== 'access') return;
+  sourceViewSerial++;
+  sourceViewController?.abort();
+  searchSerial++;
+  searchController?.abort();
+  searchController = null;
+  const results = byId('search-results');
+  if (results) results.replaceChildren(node('p', 'Введите запрос для поиска.'));
+});
+document.addEventListener('click', event => {
+  const trigger = event.target instanceof Element ? event.target.closest('button, a[href]') : null;
+  latestClickTrigger = trigger;
+  queueMicrotask(() => { if (latestClickTrigger === trigger) latestClickTrigger = null; });
+}, true);
 const safe = fn => async event => {
   event?.preventDefault();
   try { await fn(event); } catch (error) { message(error.message); }
@@ -110,14 +128,120 @@ async function processSource(id, extract, idempotencyKey = crypto.randomUUID()) 
   const job = await post('/api/sources/' + id + '/process', {idempotency_key: idempotencyKey, extract});
   await trackJob(job.job_id);
 }
-async function viewSource(id) {
-  const d = node('dialog',null,{'data-wisdom-private':'true'});
-  const initial = await api('/api/sources/' + id + '?from_fragment=0&limit=200');
-  d.append(node('h2', initial.source.title));
+async function viewSource(id, options = {}) {
+  sourceViewController?.abort();
+  const controller = new AbortController();
+  const selection = ++sourceViewSerial;
+  sourceViewController = controller;
+  const isCurrent = () => selection === sourceViewSerial && !controller.signal.aborted;
+  const explicitReturnFocus = options.returnFocus instanceof Element ? options.returnFocus : null;
+  const clickedReturnFocus = latestClickTrigger instanceof Element && latestClickTrigger.isConnected ? latestClickTrigger : null;
+  const activeReturnFocus = document.activeElement instanceof Element ? document.activeElement : null;
+  const returnFocus = explicitReturnFocus || clickedReturnFocus || activeReturnFocus;
+  const requestSource = async path => {
+    if (!isCurrent()) throw new DOMException('Просмотр источника отменён.', 'AbortError');
+    const requestController = new AbortController();
+    const forwardAbort = () => requestController.abort();
+    if (controller.signal.aborted) requestController.abort();
+    else controller.signal.addEventListener('abort', forwardAbort, {once: true});
+    let timedOut = false;
+    const timer = setTimeout(() => {
+      timedOut = true;
+      requestController.abort();
+    }, SOURCE_REQUEST_TIMEOUT_MS);
+    try {
+      return await api(path, {signal: requestController.signal});
+    } catch (error) {
+      if (timedOut && !controller.signal.aborted) throw new Error('Время ожидания ответа источника истекло. Повторите открытие.');
+      throw error;
+    } finally {
+      clearTimeout(timer);
+      controller.signal.removeEventListener('abort', forwardAbort);
+    }
+  };
+  const targetQuote = typeof options.quote === 'string' && options.quote.length ? options.quote : '';
+  const targetLocator = options.locator && typeof options.locator === 'object' ? options.locator : {};
+  const locatorPairs = [
+    ['chapter', 'chapter'], ['file_page', 'file_page'], ['printed_label', 'printed_label'],
+    ['paragraph', 'paragraph'], ['table_index', 'table_index'], ['cell_row', 'cell_row'], ['cell_column', 'cell_column']
+  ].filter(([key]) => targetLocator[key] != null);
+  const hasTarget = Boolean(targetQuote || locatorPairs.length);
+  const matchesTarget = part => {
+    if (targetQuote && (typeof part.text !== 'string' || !part.text.includes(targetQuote))) return false;
+    return locatorPairs.every(([locatorKey, fragmentKey]) => String(part[fragmentKey] ?? '') === String(targetLocator[locatorKey]));
+  };
+  let initial, displayPage, displayFrom = 0, previousStarts = [], targetPart = null;
+  let pagesScanned = 0, fragmentsScanned = 0, searchStop = 'none';
+  try {
+    initial = await requestSource('/api/sources/' + encodeURIComponent(id) + '?from_fragment=0&limit=' + SOURCE_PAGE_SIZE);
+    if (!isCurrent()) return;
+    pagesScanned = 1;
+    fragmentsScanned = initial.fragments.length;
+    if (hasTarget) {
+      let page = initial, pageFrom = 0, priorStarts = [], previousOrdinal = null;
+      for (let pageNumber = 1; pageNumber <= SOURCE_AUTO_SEARCH_PAGES && isCurrent(); pageNumber++) {
+        const match = page.fragments.find(matchesTarget) || null;
+        if (match) {
+          targetPart = match;
+          displayPage = page;
+          displayFrom = pageFrom;
+          previousStarts = priorStarts.slice();
+          searchStop = 'found';
+          break;
+        }
+        const last = page.fragments.at(-1);
+        if (page.fragments.length < SOURCE_PAGE_SIZE) { searchStop = 'end'; break; }
+        if (!Number.isInteger(last?.ordinal) || last.ordinal < 0 ||
+            (previousOrdinal !== null && last.ordinal <= previousOrdinal)) {
+          searchStop = 'ordinal';
+          break;
+        }
+        if (pageNumber === SOURCE_AUTO_SEARCH_PAGES) { searchStop = 'limit'; break; }
+        previousOrdinal = last.ordinal;
+        const nextFrom = last.ordinal + 1;
+        priorStarts.push(pageFrom);
+        pageFrom = nextFrom;
+        page = await requestSource('/api/sources/' + encodeURIComponent(id) + '?from_fragment=' + encodeURIComponent(nextFrom) + '&limit=' + SOURCE_PAGE_SIZE);
+        if (!isCurrent()) return;
+        pagesScanned = pageNumber + 1;
+        fragmentsScanned += page.fragments.length;
+      }
+    }
+    if (!displayPage) { displayPage = initial; displayFrom = 0; previousStarts = []; }
+  } catch (error) {
+    if (!isCurrent()) return;
+    throw error;
+  }
+  const headingId = 'source-view-title-' + crypto.randomUUID();
+  const d = node('dialog',null,{'data-wisdom-private':'true','aria-labelledby':headingId});
+  d.append(node('h2', initial.source.title, {id:headingId}));
   d.append(node('p', 'Автор: ' + (initial.source.author ?? 'не указан') + ' · Издание: ' + (initial.source.edition ?? 'не указано')));
   d.append(node('a', 'Скачать оригинал', {href: '/api/sources/' + id + '/original', download: initial.source.title}));
-  const content = node('div'), pagerLine = node('p');
-  let currentFrom = 0, currentLastOrdinal = initial.fragments.at(-1)?.ordinal, previousFrom = [], pending = false, hasNext = initial.fragments.length === 200;
+  const content = node('div'), pagerLine = node('p'), targetLine = node('p');
+  const locationOf = part => [
+    part.chapter != null && part.chapter !== '' ? 'Глава: ' + part.chapter : null,
+    part.file_page != null ? 'Страница файла ' + part.file_page : null,
+    part.printed_label ? 'Печатная метка: ' + part.printed_label : null,
+    part.paragraph != null ? 'Абзац: ' + part.paragraph : null,
+    part.table_index != null ? 'Таблица ' + part.table_index + (part.cell_row != null || part.cell_column != null ? ', ячейка ' + String(part.cell_row ?? '?') + ':' + String(part.cell_column ?? '?') : '') : null,
+    Number.isInteger(part.ordinal) ? 'Фрагмент ' + part.ordinal : null
+  ].filter(Boolean).join(' · ');
+  const samePart = part => Boolean(targetPart && (part === targetPart || (Number.isInteger(part?.ordinal) && part.ordinal === targetPart.ordinal)));
+  if (hasTarget) {
+    targetLine.setAttribute('role', 'status');
+    const targetDescription = targetQuote ? (locatorPairs.length ? 'цитаты и локатора' : 'цитаты') : 'локатора';
+    if (targetPart) {
+      targetLine.textContent = (targetQuote ? 'Цитата найдена' : 'Фрагмент найден') + ' в источнике' + (locationOf(targetPart) ? ' · ' + locationOf(targetPart) : '') + '.';
+    } else if (searchStop === 'limit') {
+      targetLine.textContent = 'Точное совпадение ' + targetDescription + ' не найдено в первых ' + SOURCE_AUTO_SEARCH_PAGES + ' страницах (' + fragmentsScanned + ' фрагментов). Источник может продолжаться; автоматический поиск ограничен тремя страницами.';
+    } else if (searchStop === 'ordinal') {
+      targetLine.textContent = 'Точное совпадение ' + targetDescription + ' не найдено среди ' + fragmentsScanned + ' фрагментов. Автоматическое продолжение остановлено: сервер не вернул корректный следующий порядковый номер.';
+    } else {
+      targetLine.textContent = 'Точное совпадение ' + targetDescription + ' не найдено среди ' + fragmentsScanned + ' фрагментов доступной выдачи источника. Проверьте данные или вернитесь к результату.';
+    }
+  } else targetLine.hidden = true;
+  let currentFrom = displayFrom, currentLastOrdinal = displayPage.fragments.at(-1)?.ordinal;
+  let previousFrom = previousStarts.slice(), pending = false, hasNext = displayPage.fragments.length === SOURCE_PAGE_SIZE;
   const previous = button('Предыдущая часть', async () => {
     if (pending || !previousFrom.length) return;
     await renderPage(previousFrom.at(-1));
@@ -126,43 +250,94 @@ async function viewSource(id) {
     if (pending) return;
     pending = true; next.disabled = true;
     try {
-      const nextFrom = typeof currentLastOrdinal === 'number' ? currentLastOrdinal + 1 : currentFrom + 200;
-      const page = await api('/api/sources/' + id + '?from_fragment=' + encodeURIComponent(nextFrom) + '&limit=200');
-      if (page.fragments.length) {
-        const lastOrdinal = page.fragments.at(-1)?.ordinal;
-        previousFrom.push(currentFrom);
-        currentFrom = nextFrom;
-        currentLastOrdinal = typeof lastOrdinal === 'number' ? lastOrdinal : nextFrom + page.fragments.length - 1;
-        renderFragments(page.fragments);
+      if (!Number.isInteger(currentLastOrdinal)) {
+        hasNext = false;
+        pagerLine.textContent = 'Сервер не указал порядковый номер последнего фрагмента, поэтому продолжение вычислять нельзя.';
       } else {
-        hasNext = false; pagerLine.textContent = 'Дальше фрагментов нет.';
+        const nextFrom = currentLastOrdinal + 1;
+        const page = await requestSource('/api/sources/' + encodeURIComponent(id) + '?from_fragment=' + encodeURIComponent(nextFrom) + '&limit=' + SOURCE_PAGE_SIZE);
+        if (!isCurrent() || !d.isConnected) return;
+        if (page.fragments.length) {
+          const lastOrdinal = page.fragments.at(-1)?.ordinal;
+          previousFrom.push(currentFrom);
+          currentFrom = nextFrom;
+          currentLastOrdinal = Number.isInteger(lastOrdinal) ? lastOrdinal : null;
+          hasNext = page.fragments.length === SOURCE_PAGE_SIZE;
+          renderFragments(page.fragments);
+        } else {
+          hasNext = false; pagerLine.textContent = 'Дальше фрагментов нет.';
+        }
       }
-    } catch (error) { pagerLine.textContent = error.message; }
-    finally { pending = false; next.disabled = !hasNext; previous.disabled = previousFrom.length === 0; }
+    } catch (error) {
+      if (isCurrent() && d.isConnected) pagerLine.textContent = 'Не удалось загрузить следующую часть: ' + error.message;
+    } finally {
+      if (isCurrent() && d.isConnected) {
+        pending = false;
+        next.disabled = !hasNext;
+        previous.disabled = previousFrom.length === 0;
+      }
+    }
   });
   async function renderPage(from) {
     pending = true; previous.disabled = true; next.disabled = true; pagerLine.textContent = 'Загружаю фрагменты…';
     try {
-      const page = await api('/api/sources/' + id + '?from_fragment=' + encodeURIComponent(from) + '&limit=200');
+      const page = await requestSource('/api/sources/' + encodeURIComponent(id) + '?from_fragment=' + encodeURIComponent(from) + '&limit=' + SOURCE_PAGE_SIZE);
+      if (!isCurrent() || !d.isConnected) return;
       if (!page.fragments.length) { pagerLine.textContent = 'Предыдущая часть фрагментов не найдена.'; return; }
       previousFrom.pop(); currentFrom = from;
       const lastOrdinal = page.fragments.at(-1)?.ordinal;
-      currentLastOrdinal = typeof lastOrdinal === 'number' ? lastOrdinal : from + page.fragments.length - 1;
+      currentLastOrdinal = Number.isInteger(lastOrdinal) ? lastOrdinal : null;
+      hasNext = page.fragments.length === SOURCE_PAGE_SIZE;
       renderFragments(page.fragments);
-    } catch (error) { pagerLine.textContent = error.message; }
-    finally { pending = false; previous.disabled = previousFrom.length === 0; next.disabled = !hasNext; }
+    } catch (error) {
+      if (isCurrent() && d.isConnected) pagerLine.textContent = 'Не удалось загрузить предыдущую часть: ' + error.message;
+    } finally {
+      if (isCurrent() && d.isConnected) {
+        pending = false;
+        previous.disabled = previousFrom.length === 0;
+        next.disabled = !hasNext;
+      }
+    }
   }
   function renderFragments(fragments) {
+    if (!isCurrent() || !d.isConnected) return;
     content.replaceChildren();
-    hasNext = fragments.length === 200;
+    hasNext = fragments.length === SOURCE_PAGE_SIZE;
     for (const part of fragments) {
-      content.append(node('p', [part.chapter, part.file_page != null ? 'Страница файла ' + part.file_page : null, part.printed_label ? 'Печатная метка ' + part.printed_label : null, part.paragraph != null ? 'Абзац ' + part.paragraph : null, part.table_index ? 'Таблица ' + part.table_index + ', ячейка ' + part.cell_row + ':' + part.cell_column : null].filter(Boolean).join(' · ')), node('pre', part.text));
+      const pre = node('pre');
+      const text = typeof part.text === 'string' ? part.text : '';
+      if (samePart(part) && targetQuote) {
+        const at = text.indexOf(targetQuote);
+        if (at >= 0) pre.append(document.createTextNode(text.slice(0, at)), node('mark', text.slice(at, at + targetQuote.length)), document.createTextNode(text.slice(at + targetQuote.length)));
+        else pre.append(document.createTextNode(text));
+      } else pre.append(document.createTextNode(text));
+      content.append(node('p', locationOf(part) || 'Место в тексте не указано.'), pre);
     }
     pagerLine.textContent = fragments.length ? 'Показано фрагментов: ' + fragments.length + (hasNext ? ' · возможно, есть продолжение' : '') : 'Фрагментов в источнике пока нет.';
   }
-  d.append(previous, next, pagerLine, content, button('Закрыть', () => d.close())); d.addEventListener('close', () => d.remove());
-  document.body.append(d); d.showModal();
-  renderFragments(initial.fragments); currentLastOrdinal = initial.fragments.at(-1)?.ordinal; previous.disabled = true; next.disabled = !hasNext;
+  d.append(previous, next, pagerLine, targetLine, content);
+  if (typeof options.onReturn === 'function') {
+    const returnLabel = typeof options.returnLabel === 'string' && options.returnLabel.trim() ? options.returnLabel : 'Вернуться';
+    d.append(button(returnLabel, () => { d.close(); return options.onReturn(); }));
+  }
+  d.append(button('Закрыть', () => d.close()));
+  d.addEventListener('close', () => {
+    const ownsView = sourceViewController === controller;
+    if (ownsView) sourceViewController = null;
+    controller.abort();
+    d.remove();
+    if (ownsView && returnFocus?.isConnected && typeof returnFocus.focus === 'function') returnFocus.focus({preventScroll: true});
+  });
+  document.body.append(d);
+  if (!isCurrent()) {
+    if (sourceViewController === controller) sourceViewController = null;
+    d.remove();
+    return;
+  }
+  d.showModal();
+  renderFragments(displayPage.fragments);
+  previous.disabled = previousFrom.length === 0;
+  next.disabled = !hasNext;
 }
 async function openLibrary(lib, {guard = null} = {}) {
   if (!lib) return;
@@ -264,7 +439,8 @@ async function openLibrary(lib, {guard = null} = {}) {
     empty: 'Источников пока нет. Загрузите материал выше.',
     renderItem: source => {
       const card = node('article', null, {class: 'card'});
-      card.append(button(source.title, () => viewSource(source.id)), node('p', 'Статус: ' + source.processing));
+      card.append(button(source.title, () => viewSource(source.id)), node('p', 'Статус: ' + source.processing),
+        button('Показать связанные понятия', () => featureHost.navigateMapSource(lib.id, source.id)));
       if (contributor) {
         card.append(button('Разобрать текст', () => processSource(source.id, false)));
         const extractAction = button('Извлечь / продолжить черновики', () => processSource(source.id, true));
@@ -390,62 +566,105 @@ byId('create-library').addEventListener('submit', safe(async event => {
   const result = await post(project ? '/api/projects' : '/api/libraries', data);
   event.target.reset(); await ensureLibraries(); await openLibrary(project ? result.project : result);
 }));
-byId('search').addEventListener('submit', safe(async event => {
-  const query = new FormData(event.target).get('q'); const result = await api('/api/search?q=' + encodeURIComponent(query));
-  const list = byId('search-results'); list.replaceChildren(node('p', ({semantic:'Поиск по смыслу',hybrid:'Поиск по смыслу и словам',lexical:'Поиск по словам'}[result.mode] || result.mode) + ' · ' + result.hits.length + ' совпадений'));
-  if (result.indexed_library_count != null || result.pending_library_count != null) {
-    const counts = [];
-    if (result.indexed_library_count != null) counts.push('индекс готов — ' + result.indexed_library_count);
-    if (result.pending_library_count != null) counts.push('индекс не готов — ' + result.pending_library_count);
-    list.append(node('p', 'Библиотеки: ' + counts.join(' · ') + '.'));
+const searchForm = byId('search');
+const searchInput = searchForm.querySelector('input[name="q"]');
+const existingClear = searchForm.querySelector('[data-wisdom-clear-search]') || Array.from(searchForm.querySelectorAll('button')).find(candidate => /^(Очистить поиск|Clear search)$/i.test((candidate.textContent || '').trim()));
+const searchClear = existingClear || node('button', 'Очистить поиск', {type: 'button'});
+searchClear.type = 'button';
+searchClear.setAttribute('data-wisdom-clear-search', 'true');
+if (!existingClear) searchForm.append(searchClear);
+searchClear.hidden = !String(searchInput?.value || '').trim();
+searchClear.addEventListener('click', () => {
+  searchController?.abort(); searchController = null; searchSerial++;
+  searchForm.reset(); searchClear.hidden = true; searchInput?.focus();
+  byId('search-results').replaceChildren(node('p', 'Введите запрос для поиска.'));
+});
+searchInput?.addEventListener('input', () => { searchClear.hidden = !String(searchInput.value || '').trim(); });
+searchForm.addEventListener('submit', safe(async event => {
+  const query = String(new FormData(event.target).get('q') || '').trim();
+  const list = byId('search-results');
+  if (!query) {
+    searchController?.abort(); searchController = null; searchSerial++;
+    searchClear.hidden = true;
+    list.replaceChildren(node('p', 'Введите запрос для поиска.'));
+    message('Введите запрос для поиска.');
+    return;
   }
-  if (result.fallback_reason === 'index_pending_or_unavailable') {
-    list.append(node('p', 'Пока ищем по словам: индекс библиотеки ещё не готов или временно недоступен.'));
-  }
-  const hits = pager({
-    empty: 'Совпадений не найдено.',
-    size: 10,
-    renderItem: hit => {
-      const block = node('article', null, {class: 'search-hit'});
-      block.append(node('p', hit.statement));
-      const citations = Array.isArray(hit.provenance) ? hit.provenance : [];
-      if (!citations.length) block.append(node('p', 'Источник и место в тексте не указаны.'));
-      for (const provenance of citations) {
-        const source = provenance.source && typeof provenance.source === 'object' ? provenance.source : provenance;
-        const locator = provenance.locator && typeof provenance.locator === 'object' ? provenance.locator : {};
-        const label = value => typeof value === 'string' || typeof value === 'number' ? String(value) : null;
-        const citation = [
-          label(source.title),
-          label(source.author) ? 'Автор: ' + label(source.author) : null,
-          label(source.publication_ref),
-          label(locator.chapter),
-          label(locator.file_page) !== null ? 'Страница файла ' + label(locator.file_page) : null,
-          label(locator.printed_label) ? 'Печатная метка ' + label(locator.printed_label) : null,
-          label(locator.paragraph) !== null ? 'Абзац ' + label(locator.paragraph) : null
-        ].filter(Boolean);
-        const details = node('p', citation.length ? citation.join(' · ') : 'Источник и место в тексте не указаны.');
-        const sourceId = provenance.source_id;
-        if (typeof sourceId === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(sourceId)) {
-          details.append(document.createTextNode(' · '), button('Открыть источник', () => viewSource(sourceId)));
-        }
-        if (typeof source.url === 'string') {
-          try {
-            const url = new URL(source.url);
-            if (['http:', 'https:'].includes(url.protocol)) details.append(document.createTextNode(' · '), node('a', 'Ссылка', {href: url.href}));
-          } catch {}
-        }
-        block.append(details);
-      }
-      return block;
+  searchController?.abort();
+  const controller = new AbortController(), serial = ++searchSerial;
+  searchController = controller; searchClear.hidden = false;
+  list.replaceChildren(node('p', 'Ищу совпадения…', {role: 'status'}));
+  try {
+    const result = await api('/api/search?q=' + encodeURIComponent(query), {signal: controller.signal});
+    if (serial !== searchSerial || controller.signal.aborted) return;
+    list.replaceChildren(node('p', ({semantic:'Поиск по смыслу',hybrid:'Поиск по смыслу и словам',lexical:'Поиск по словам'}[result.mode] || result.mode) + ' · ' + result.hits.length + ' совпадений'));
+    if (result.indexed_library_count != null || result.pending_library_count != null) {
+      const counts = [];
+      if (result.indexed_library_count != null) counts.push('индекс готов — ' + result.indexed_library_count);
+      if (result.pending_library_count != null) counts.push('индекс не готов — ' + result.pending_library_count);
+      list.append(node('p', 'Библиотеки: ' + counts.join(' · ') + '.'));
     }
-  });
-  hits.set(result.hits);
-  list.append(hits.element, hits.navigation, hits.status);
+    if (result.fallback_reason === 'index_pending_or_unavailable') list.append(node('p', 'Пока ищем по словам: индекс библиотеки ещё не готов или временно недоступен.'));
+    const hits = pager({
+      empty: 'Совпадений не найдено.',
+      size: 10,
+      renderItem: hit => {
+        const block = node('article', null, {class: 'search-hit'});
+        block.append(node('p', hit.statement));
+        const citations = Array.isArray(hit.provenance) ? hit.provenance : [];
+        if (!citations.length) block.append(node('p', 'Источник и место в тексте не указаны.'));
+        for (const provenance of citations) {
+          const source = provenance.source && typeof provenance.source === 'object' ? provenance.source : provenance;
+          const locator = provenance.locator && typeof provenance.locator === 'object' ? provenance.locator : {};
+          const label = value => typeof value === 'string' || typeof value === 'number' ? String(value) : null;
+          const citation = [
+            label(source.title),
+            label(source.author) ? 'Автор: ' + label(source.author) : null,
+            label(source.publication_ref),
+            label(locator.chapter) != null ? 'Глава: ' + label(locator.chapter) : null,
+            label(locator.file_page) !== null ? 'Страница файла ' + label(locator.file_page) : null,
+            label(locator.printed_label) ? 'Печатная метка ' + label(locator.printed_label) : null,
+            label(locator.paragraph) !== null ? 'Абзац ' + label(locator.paragraph) : null,
+            label(locator.table_index) !== null ? 'Таблица ' + label(locator.table_index) + (locator.cell_row != null || locator.cell_column != null ? ', ячейка ' + String(locator.cell_row ?? '?') + ':' + String(locator.cell_column ?? '?') : '') : null
+          ].filter(Boolean);
+          const details = node('p', citation.length ? citation.join(' · ') : 'Источник и место в тексте не указаны.');
+          const sourceId = provenance.source_id, quote = typeof provenance.quote === 'string' ? provenance.quote : '';
+          const hasLocator = ['chapter','file_page','printed_label','paragraph','table_index','cell_row','cell_column'].some(key => locator[key] != null);
+          if (typeof sourceId === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(sourceId)) {
+            details.append(document.createTextNode(' · '), button(quote || hasLocator ? 'Открыть точное место' : 'Открыть источник', () => viewSource(sourceId, {quote, locator})));
+          }
+          if (typeof source.url === 'string') {
+            try {
+              const url = new URL(source.url);
+              if (['http:', 'https:'].includes(url.protocol)) details.append(document.createTextNode(' · '), node('a', 'Ссылка', {href: url.href}));
+            } catch {}
+          }
+          block.append(details);
+        }
+        return block;
+      }
+    });
+    hits.set(result.hits);
+    list.append(hits.element, hits.navigation, hits.status);
+  } catch (error) {
+    if (serial !== searchSerial || error.name === 'AbortError') return;
+    const text = 'Поиск не завершён. ' + (error.message ? error.message + ' ' : 'Сервер не указал причину. ') + 'Проверьте запрос и повторите поиск.';
+    list.replaceChildren(node('p', text, {role: 'alert'}));
+    message(text);
+  } finally {
+    if (serial === searchSerial) searchController = null;
+  }
 }));
 byId('logout').addEventListener('click', safe(async () => { await post('/auth/logout'); location.reload(); }));
 const featureHost={node,button,api,post,notify:message,libraries:()=>libraries,currentLibrary:()=>selected,identity:()=>identity,
   refreshLibrary:()=>selected?openLibrary(selected):Promise.resolve(),
-  openSource:viewSource,download:(filename,text,type)=>downloadBlob(filename,new Blob([text],{type})),
+  openSource:viewSource,
+  librarySourcesPath:libraryId=>router.path('libraries',[libraryId,'sources']),
+  navigateMapSource:(libraryId,sourceId)=>{
+    const query = new URLSearchParams({library:libraryId,view:'semantic',source:sourceId});
+    router.navigate(router.path('maps') + '?' + query.toString());
+  },
+  download:(filename,text,type)=>downloadBlob(filename,new Blob([text],{type})),
   downloadBlob,dialog:dialogForm,navigateResearch:()=>router.navigate('research'),
   openRuleVersion:async(id,version)=>{
     const rule=await api('/api/rules/'+id);const d=node('dialog',null,{'data-wisdom-private':'true'});
@@ -543,7 +762,8 @@ router.register('maps', {
     await ensureLibraries(); if (!context.isCurrent()) return;
     const chosen = context.query.get('library') || undefined;
     const chosenMode = context.query.get('view') || context.query.get('mode') || undefined;
-    await window.WisdomMap.mount(byId('maps-workspace'), featureHost, chosen, chosenMode);
+    const chosenSource = context.query.get('source') || undefined;
+    await window.WisdomMap.mount(byId('maps-workspace'), featureHost, chosen, chosenMode, chosenSource);
   }
 });
 router.register('access', {
