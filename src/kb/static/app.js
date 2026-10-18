@@ -151,6 +151,14 @@ const USE_STATE_LABELS = new Map([
   ['completed','Завершено'],
   ['abandoned','Оставлено без результата']
 ]);
+const SOURCE_PROCESSING_LABELS = new Map([
+  ['queued', 'В очереди'],
+  ['running', 'Обрабатывается'],
+  ['partial', 'Готово частично'],
+  ['needs_ocr', 'Требуется распознавание текста'],
+  ['failed', 'Ошибка обработки'],
+  ['done', 'Готово']
+]);
 const visibleEnum = (labels, value, missing = 'не указан') => {
   const text = String(value ?? '');
   return labels.get(text) || (!text.trim() ? missing : 'Неизвестное значение (' + text + ')');
@@ -184,6 +192,7 @@ function cancelSourceView() {
 }
 const clearPrivateRoots = () => {
   invalidatePrivateDialogs();
+  if (typeof window.WisdomCompletion?.invalidate === 'function') window.WisdomCompletion.invalidate();
   if (typeof window.WisdomResearch?.invalidate === 'function') window.WisdomResearch.invalidate();
   if (typeof window.WisdomMap?.invalidate === 'function') window.WisdomMap.invalidate();
   sourceProcessRequests.clear();
@@ -432,16 +441,7 @@ const sourceProcessRequests = new Map();
 async function trackJob(id) {
   activeJob = id;
   const job = await api('/api/jobs/' + id);
-  const statusLabels=new Map([
-    ['queued','В очереди'],
-    ['running','Обрабатывается'],
-    ['done','Готово'],
-    ['partial','Готово частично'],
-    ['failed','Ошибка обработки'],
-    ['needs_ocr','Требуется распознавание текста'],
-    ['cancelled','Отменено']
-  ]);
-  const statusLabel=statusLabels.get(job.status) || ('неизвестный статус ('+String(job.status)+')');
+  const statusLabel=visibleEnum(SOURCE_PROCESSING_LABELS, job.status);
   const doneText=job.chunks_done == null ? '' : ' · готово: '+job.chunks_done;
   const totalText=job.chunks_total == null ? '' : ' · всего: '+job.chunks_total;
   const errorText=job.error_code ? ' · код ошибки: '+job.error_code : '';
@@ -903,7 +903,7 @@ async function openLibrary(lib, {guard = null} = {}) {
     empty: 'Источников пока нет. Загрузите материал выше.',
     renderItem: source => {
       const card = node('article', null, {class: 'card'});
-      card.append(button(source.title, () => viewSource(source.id, {isCurrent:current})), node('p', 'Статус: ' + source.processing),
+      card.append(button(source.title, () => viewSource(source.id, {isCurrent:current})), node('p', 'Статус: ' + visibleEnum(SOURCE_PROCESSING_LABELS, source.processing)),
         button('Показать связанные понятия', () => featureHost.navigateMapSource(lib.id, source.id)));
       if (contributor) {
         card.append(button('Разобрать текст', () => processSource(source.id, false)));

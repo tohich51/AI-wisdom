@@ -46,8 +46,8 @@ window.WisdomMap = (() => {
       return {nodes,edges};
     };
     const entityIdentity=value=>{
-      const kind=typeof value?.kind==='string'?value.kind:'',entityId=graphId(value?.entity_id);
-      return kind&&entityId?JSON.stringify([kind,entityId]):'';
+      if(typeof value?.kind!=='string'||!value.kind.trim()||typeof value.entity_id!=='string'||!uuid.test(value.entity_id))return null;
+      return JSON.stringify([value.kind,value.entity_id]);
     };
     controller=new AbortController(); const valid=()=>host.routeIsCurrent(routeToken)&&generation===epoch&&!controller.signal.aborted;
     let sourceFilter=typeof chosenSourceId==='string'&&chosenSourceId?chosenSourceId:null;
@@ -181,6 +181,7 @@ window.WisdomMap = (() => {
         if(!selectedCurrent()||signal.aborted)return;
         details.replaceChildren(n('p','Подробности узла недоступны: идентичность записи не подтверждена однозначно. Обновите карту.'));
       };
+      if(!selectedIdentity){showUnavailable();return;}
       const currentNodes=Array.isArray(data?.nodes)?data.nodes:[];
       const currentIdentityMatches=currentNodes.filter(value=>entityIdentity(value)===selectedIdentity);
       const visibleCurrentNodes=visibleGraphRows(data).nodes;
@@ -189,14 +190,12 @@ window.WisdomMap = (() => {
       let freshNode;
       if(selectedMode==='semantic' && node.kind==='concept') {
         freshNode=await host.api('/api/graphs/concepts/'+encodeURIComponent(node.entity_id)+'?library_id='+encodeURIComponent(selectedLibrary),{signal});
-      } else if(selectedMode==='semantic') {
-        freshNode=node;
       } else {
         const fresh=await host.api(endpoint(),{signal});
         const freshNodes=Array.isArray(fresh?.nodes)?fresh.nodes:[];
         const identityMatches=freshNodes.filter(value=>entityIdentity(value)===selectedIdentity);
         const visibleFreshNodes=visibleGraphRows(fresh).nodes;
-        if(identityMatches.length!==1||!visibleFreshNodes.includes(identityMatches[0])){showUnavailable();return;}
+        if(identityMatches.length!==1||!identityMatches[0]||!visibleFreshNodes.includes(identityMatches[0])){showUnavailable();return;}
         freshNode=identityMatches[0];
       }
       if(!selectedCurrent() || signal.aborted) return;

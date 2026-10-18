@@ -1,6 +1,16 @@
 'use strict';
 (() => {
+  let privateEpoch = 0;
   let accessEpoch = 0;
+  let jobsEpoch = 0;
+  let libraryEpoch = 0;
+  let usesEpoch = 0;
+  const identityMatches = (host, accountId, principalId) => {
+    const current = host.identity();
+    return typeof accountId === 'string' && accountId.length > 0
+      && typeof principalId === 'string' && principalId.length > 0
+      && current?.account_id === accountId && current?.principal_id === principalId;
+  };
   const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
   const el = (tag, text, attrs = {}) => {
     const out = document.createElement(tag);
@@ -26,16 +36,17 @@
     if (typeof error === 'string' && error.trim()) return error;
     return 'Неизвестная ошибка.';
   };
-  const action = (label, fn, kind = 'secondary') => {
+  const action = (label, fn, kind = 'secondary', isCurrent = () => true) => {
     const button = el('button', label, {type: 'button', class: kind});
     let pending = false;
     button.addEventListener('click', async () => {
-      if (pending) return;
+      if (pending || !isCurrent()) return;
       pending = true;
       const disabled = button.disabled, busy = button.getAttribute('aria-busy');
       button.disabled = true;
       button.setAttribute('aria-busy', 'true');
-      try { await fn(); } catch (error) {
+      try { if (isCurrent()) await fn(); } catch (error) {
+        if (!isCurrent()) return;
         const text = errorMessage(error);
         if (window.WisdomCompletionHost?.notify) window.WisdomCompletionHost.notify(text);
         else button.insertAdjacentElement('afterend', el('span', text, {role:'alert', class:'completion-error'}));
@@ -101,9 +112,15 @@
   const invitationStatusLabel = value => localizedEnum(INVITATION_STATUS_LABELS, value, 'неизвестный статус приглашения');
 
   async function mountJobs(root, host) {
+    const mountEpoch=++jobsEpoch, privateAtStart=privateEpoch, routeToken=host.routeToken();
+    const identity=host.identity(), accountId=identity?.account_id, principalId=identity?.principal_id;
+    const current=()=>mountEpoch===jobsEpoch&&privateAtStart===privateEpoch&&host.routeIsCurrent(routeToken)&&identityMatches(host, accountId, principalId)&&root.isConnected;
+    if (!current()) return;
     root.replaceChildren(el('p', 'Загружаю задания…', {role: 'status'}));
     try {
+      const dataGeneration=window.WisdomData.generation();
       const jobs = await host.api('/api/jobs');
+      if (!current() || dataGeneration !== window.WisdomData.generation()) return;
       const list = el('div', null, {class: 'completion-grid'});
       if (!jobs.length) empty(list, 'Заданий пока нет. Они появятся после обработки источника.');
       const statusLabels=new Map([
@@ -131,23 +148,26 @@
       const paged = window.WisdomList && jobs.length ? window.WisdomList.create(host, {label: 'Страницы списка заданий', library: null, renderItem: jobCard}) : null;
       if (paged) { paged.set(jobs); list.append(paged.element, paged.navigation, paged.status); }
       else for (const job of jobs) list.append(jobCard(job));
-      root.replaceChildren(action('Обновить список', () => mountJobs(root, host)), list);
-    } catch (error) { fail(root, error); }
+      if (!current()) return;
+      root.replaceChildren(action('Обновить список', () => mountJobs(root, host), 'secondary', current), list);
+    } catch (error) { if (current()) fail(root, error); }
   }
 
   async function mountAccess(root, host) {
-    const mountEpoch=++accessEpoch, routeToken=host.routeToken();
-    const current=()=>mountEpoch===accessEpoch&&host.routeIsCurrent(routeToken)&&root.isConnected;
+    const mountEpoch=++accessEpoch, privateAtStart=privateEpoch, routeToken=host.routeToken();
+    const identity=host.identity(), accountId=identity?.account_id, principalId=identity?.principal_id;
+    const current=()=>mountEpoch===accessEpoch&&privateAtStart===privateEpoch&&host.routeIsCurrent(routeToken)&&identityMatches(host, accountId, principalId)&&root.isConnected;
+    if (!current()) return;
     root.replaceChildren(el('p', 'Загружаю доступ…', {role: 'status'}));
     try {
-      const accountId = host.identity()?.account_id;
       if (!accountId) throw Error('В текущем профиле не найден идентификатор организации.');
+      const dataGeneration=window.WisdomData.generation();
       const [members, groups, invitations] = await Promise.all([
         host.api('/api/orgs/' + encodeURIComponent(accountId) + '/members'),
         host.api('/api/orgs/' + encodeURIComponent(accountId) + '/groups'),
         host.api('/api/orgs/' + encodeURIComponent(accountId) + '/invitations')
       ]);
-      if(!current())return;
+      if(!current() || dataGeneration !== window.WisdomData.generation())return;
       const content = el('div', null, {class: 'completion-grid'});
       const libraries = host.libraries().filter(item => item?.id);
       const activeMembers = members.filter(member => member.status === 'active' && member.principal_id);
@@ -180,12 +200,14 @@
           form.append(reason.wrap, confirmed.wrap, submit);
           window.WisdomForms.submit(form, async event => {
             event.preventDefault();
+            if (!current()) return;
             submit.disabled = true;
             try {
               const result = await host.post('/api/orgs/' + encodeURIComponent(accountId) + '/members/' + encodeURIComponent(member.principal_id) + '/deactivate', {reason: reason.input.value.trim() || null});
+              if (!current()) return;
               host.notify(result.revocation_outstanding ? 'Участник заблокирован; отзыв сессии ожидает оператора.' : 'Участник заблокирован, отзыв сессии подтверждён.');
               await mountAccess(root, host);
-            } catch (error) { window.WisdomForms.formError(form, errorMessage(error)); } finally { submit.disabled = false; }
+            } catch (error) { if (current()) window.WisdomForms.formError(form, errorMessage(error)); } finally { submit.disabled = false; }
           });
           deactivate.append(form); memberLine.append(deactivate);
         }
@@ -209,6 +231,7 @@
       subject.input.addEventListener('input', clearInvitationErrors);
       window.WisdomForms.submit(inviteForm, async event => {
         event.preventDefault();
+        if (!current()) return;
         if (bothInvitationFieldsEmpty()) {
           window.WisdomForms.showErrors(inviteForm, [
             {control: email.input, message: 'Укажите почту или subject.', active: bothInvitationFieldsEmpty},
@@ -220,9 +243,11 @@
         clearInvitationErrors();
         submit.disabled = true;
         try {
+          if (!current()) return;
           await host.post('/api/orgs/' + encodeURIComponent(accountId) + '/invitations', {email: email.input.value.trim() || null, subject: subject.input.value.trim() || null});
+          if (!current()) return;
           await mountAccess(root, host);
-        } catch (error) { window.WisdomForms.formError(inviteForm, errorMessage(error)); } finally { submit.disabled = false; }
+        } catch (error) { if (current()) window.WisdomForms.formError(inviteForm, errorMessage(error)); } finally { submit.disabled = false; }
       });
       inviteBox.append(inviteForm);
       const groupBox = card('Группы');
@@ -236,10 +261,15 @@
         memberSelect.addEventListener('change', () => window.WisdomForms.clearErrors(membershipForm, [memberSelect]));
         const add = el('button', 'Добавить участника', {type: 'submit'}); membershipForm.append(add);
         window.WisdomForms.submit(membershipForm, async () => {
-          if (!memberSelect.value) return;
+          if (!current() || !memberSelect.value) return;
           add.disabled = true;
-          try { await host.api('/api/orgs/' + encodeURIComponent(accountId) + '/groups/' + encodeURIComponent(group.id) + '/members/' + encodeURIComponent(memberSelect.value), {method: 'PUT'}); host.notify('Участник добавлен в группу.'); await mountAccess(root, host); }
-          catch (error) { window.WisdomForms.formError(membershipForm, errorMessage(error)); } finally { add.disabled = false; }
+          try {
+            await host.api('/api/orgs/' + encodeURIComponent(accountId) + '/groups/' + encodeURIComponent(group.id) + '/members/' + encodeURIComponent(memberSelect.value), {method: 'PUT'});
+            if (!current()) return;
+            host.notify('Участник добавлен в группу.');
+            await mountAccess(root, host);
+          } catch (error) { if (current()) window.WisdomForms.formError(membershipForm, errorMessage(error)); }
+          finally { add.disabled = false; }
         });
         const removeForm = el('form', null, {class: 'completion-form'});
         const removeMember = selectField(removeForm, 'Участник для удаления из группы', 'principal_id', activeMembers, 'principal_id', member => [member.display_name, member.email].filter(Boolean).join(' · ') || member.principal_id);
@@ -251,11 +281,11 @@
           window.WisdomForms.submit(removeForm, async event => {
             event.preventDefault();
             if (removePending || !removeMember.value) return;
+            const actionCurrent=current;
+            if (!actionCurrent()) return;
             const memberId = removeMember.value, libraryId = explainLibrary?.value || '';
             const memberLabel = removeMember.selectedOptions[0]?.textContent || memberId;
             const groupLabel = group.name || group.id;
-            const actionEpoch=accessEpoch, actionRouteToken=host.routeToken();
-            const actionCurrent=()=>actionEpoch===accessEpoch&&host.routeIsCurrent(actionRouteToken)&&root.isConnected;
             const disabled = remove.disabled, busy = remove.getAttribute('aria-busy');
             removePending = true;
             remove.disabled = true;
@@ -271,12 +301,13 @@
               if (!actionCurrent()) return;
               let outcome = 'Участник удалён из группы.';
               if (libraryId) {
+                const accessGeneration=window.WisdomData.generation();
                 try {
                   const detail = await host.api('/api/orgs/' + encodeURIComponent(accountId) + '/access/' + encodeURIComponent(memberId) + '/libraries/' + encodeURIComponent(libraryId));
-                  if(!actionCurrent())return;
+                  if(!actionCurrent() || accessGeneration !== window.WisdomData.generation())return;
                   const paths = detail.paths.map(path => path.kind === 'direct' ? 'прямое разрешение ' + roleLabel(path.role) : 'группа ' + (path.group_name || path.group_id) + ' · ' + roleLabel(path.role));
                   outcome += ' После изменения: ' + (detail.denied ? 'доступ отсутствует (' + detail.reason + ')' : 'эффективная роль ' + (roleLabel(detail.effective_role) || 'не указана')) + (paths.length ? '; пути: ' + paths.join(', ') : '; активных путей нет') + ' (ревизия ' + detail.policy_revision + ').';
-                } catch (error) { if (actionCurrent()) outcome += ' Проверка оставшегося доступа не удалась: ' + errorMessage(error); }
+                } catch (error) { if (actionCurrent() && accessGeneration === window.WisdomData.generation()) outcome += ' Проверка оставшегося доступа не удалась: ' + errorMessage(error); }
               }
               if (!actionCurrent()) return;
               host.notify(outcome);
@@ -292,17 +323,19 @@
         groupCard.append(membershipForm, removeForm);
 
         const grantsPath = '/api/orgs/' + encodeURIComponent(accountId) + '/groups/' + encodeURIComponent(group.id) + '/grants';
+        let grantsGeneration=null;
         try {
+          grantsGeneration=window.WisdomData.generation();
           const grants = await host.api(grantsPath);
-          if(!current())return;
+          if(!current() || grantsGeneration !== window.WisdomData.generation())return;
           if (!grants.length) empty(groupCard, 'Разрешений группы на библиотеки пока нет.');
           for (const grant of grants) {
             const library = libraries.find(item => item.id === grant.library_id);
             const row = el('p', (library?.name || grant.library_id) + ' · ' + roleLabel(grant.role));
             const revoke = action('Отозвать разрешение', async () => {
               const libraryLabel = library?.name || grant.library_id, groupLabel = group.name || group.id;
-              const actionEpoch=accessEpoch, actionRouteToken=host.routeToken();
-              const actionCurrent=()=>actionEpoch===accessEpoch&&host.routeIsCurrent(actionRouteToken)&&root.isConnected;
+              const actionCurrent=current;
+              if (!actionCurrent()) return;
               try {
                 const confirmed = await host.confirm({
                   title: 'Отозвать разрешение группы',
@@ -314,20 +347,25 @@
                 if (!actionCurrent()) return;
                 await mountAccess(root, host);
               } catch (error) { if (actionCurrent()) throw error; }
-            }, 'secondary');
+            }, 'secondary', current);
             row.append(document.createTextNode(' · '), revoke); groupCard.append(row);
           }
-        } catch (error) { groupCard.append(el('p', error.message, {role: 'alert', class: 'completion-error'})); }
+        } catch (error) { if (current() && grantsGeneration === window.WisdomData.generation()) groupCard.append(el('p', error.message, {role: 'alert', class: 'completion-error'})); }
         if (libraries.length) {
           const grantForm = el('form', null, {class: 'completion-form'});
           const librarySelect = selectField(grantForm, 'Библиотека для группы', 'library_id', libraries, 'id', item => item.name || item.id);
           librarySelect.required = true;
           const role = roleField(grantForm); const save = el('button', 'Назначить роль группе', {type: 'submit'}); grantForm.append(save);
           window.WisdomForms.submit(grantForm, async event => {
-            event.preventDefault(); if (!librarySelect.value) return;
+            event.preventDefault(); if (!current() || !librarySelect.value) return;
             save.disabled = true;
-            try { await host.api(grantsPath + '/' + encodeURIComponent(librarySelect.value), {method: 'PUT', body: JSON.stringify({role: role.value})}); host.notify('Роль группы сохранена.'); await mountAccess(root, host); }
-            catch (error) { window.WisdomForms.formError(grantForm, errorMessage(error)); } finally { save.disabled = false; }
+            try {
+              await host.api(grantsPath + '/' + encodeURIComponent(librarySelect.value), {method: 'PUT', body: JSON.stringify({role: role.value})});
+              if (!current()) return;
+              host.notify('Роль группы сохранена.');
+              await mountAccess(root, host);
+            } catch (error) { if (current()) window.WisdomForms.formError(grantForm, errorMessage(error)); }
+            finally { save.disabled = false; }
           });
           groupCard.append(grantForm);
         }
@@ -340,20 +378,27 @@
       const groupName = field('Название группы (латиница, цифры, _ или -)', 'name'); groupName.input.pattern = '[a-z][a-z0-9_-]{1,63}'; groupName.input.required = true;
       const create = el('button', 'Создать группу', {type: 'submit'}); groupForm.append(groupName.wrap, create);
       window.WisdomForms.submit(groupForm, async event => {
-        event.preventDefault(); create.disabled = true;
-        try { await host.post('/api/orgs/' + encodeURIComponent(accountId) + '/groups', {name: groupName.input.value}); await mountAccess(root, host); }
-        catch (error) { window.WisdomForms.formError(groupForm, errorMessage(error)); } finally { create.disabled = false; }
+        event.preventDefault(); if (!current()) return;
+        create.disabled = true;
+        try {
+          await host.post('/api/orgs/' + encodeURIComponent(accountId) + '/groups', {name: groupName.input.value});
+          if (!current()) return;
+          await mountAccess(root, host);
+        } catch (error) { if (current()) window.WisdomForms.formError(groupForm, errorMessage(error)); }
+        finally { create.disabled = false; }
       });
       groupBox.append(groupForm);
       const directBox = card('Прямые разрешения и объяснение доступа');
       for (const library of libraries) {
         const libraryCard = card(library.name || library.id);
+        let policyGeneration=null;
         try {
+          policyGeneration=window.WisdomData.generation();
           const [policy, grants] = await Promise.all([
             host.api('/api/libraries/' + encodeURIComponent(library.id) + '/policy'),
             host.api('/api/libraries/' + encodeURIComponent(library.id) + '/grants')
           ]);
-          if(!current())return;
+          if(!current() || policyGeneration !== window.WisdomData.generation())return;
           const manager = policy.effective_role === 'manager';
           if (!grants.length) empty(libraryCard, 'Видимых прямых разрешений нет.');
           for (const grant of grants) {
@@ -362,8 +407,8 @@
             if (manager) row.append(document.createTextNode(' · '), action('Отозвать', async () => {
               const libraryLabel = library.name || library.id;
               const memberLabel = [member?.display_name, member?.email].filter(Boolean).join(' · ') || grant.principal_id;
-              const actionEpoch=accessEpoch, actionRouteToken=host.routeToken();
-              const actionCurrent=()=>actionEpoch===accessEpoch&&host.routeIsCurrent(actionRouteToken)&&root.isConnected;
+              const actionCurrent=current;
+              if (!actionCurrent()) return;
               try {
                 const confirmed = await host.confirm({
                   title: 'Отозвать прямое разрешение',
@@ -375,7 +420,7 @@
                 if (!actionCurrent()) return;
                 await mountAccess(root, host);
               } catch (error) { if (actionCurrent()) throw error; }
-            }, 'secondary'));
+            }, 'secondary', current));
             libraryCard.append(row);
           }
           libraryCard.append(el('p', 'Действующая роль с учётом прямых и групповых разрешений: ' + (roleLabel(policy.effective_role) || 'нет доступа'), {class: 'muted'}));
@@ -386,14 +431,19 @@
             memberSelect.addEventListener('change', () => window.WisdomForms.clearErrors(form, [memberSelect]));
             const role = roleField(form); const save = el('button', 'Сохранить прямую роль', {type: 'submit'}); form.append(save);
             window.WisdomForms.submit(form, async () => {
-              if (!memberSelect.value) return;
+              if (!current() || !memberSelect.value) return;
               save.disabled = true;
-              try { await host.api('/api/libraries/' + encodeURIComponent(library.id) + '/grants', {method: 'PUT', body: JSON.stringify({principal_id: memberSelect.value, role: role.value})}); host.notify('Прямое разрешение сохранено.'); await mountAccess(root, host); }
-              catch (error) { window.WisdomForms.formError(form, errorMessage(error)); } finally { save.disabled = false; }
+              try {
+                await host.api('/api/libraries/' + encodeURIComponent(library.id) + '/grants', {method: 'PUT', body: JSON.stringify({principal_id: memberSelect.value, role: role.value})});
+                if (!current()) return;
+                host.notify('Прямое разрешение сохранено.');
+                await mountAccess(root, host);
+              } catch (error) { if (current()) window.WisdomForms.formError(form, errorMessage(error)); }
+              finally { save.disabled = false; }
             });
             libraryCard.append(form);
           } else libraryCard.append(el('p', 'Менять прямые разрешения может только менеджер этой библиотеки.', {class: 'muted'}));
-        } catch (error) { libraryCard.append(el('p', error.message, {role: 'alert', class: 'completion-error'})); }
+        } catch (error) { if (current() && policyGeneration === window.WisdomData.generation()) libraryCard.append(el('p', error.message, {role: 'alert', class: 'completion-error'})); }
         directBox.append(libraryCard);
       }
       if (libraries.length) {
@@ -404,36 +454,47 @@
         const lookup = el('button', 'Показать пути доступа', {type: 'submit'}), result = el('div', null, {class: 'completion-access-result'});
         explain.append(lookup, result);
         window.WisdomForms.submit(explain, async event => {
-          event.preventDefault(); if (!member.value || !library.value) return;
+          event.preventDefault(); if (!current() || !member.value || !library.value) return;
           lookup.disabled = true; result.replaceChildren(el('p', 'Проверяю действующие пути…', {role: 'status'}));
+          let dataGeneration=null;
           try {
+            dataGeneration=window.WisdomData.generation();
             const detail = await host.api('/api/orgs/' + encodeURIComponent(accountId) + '/access/' + encodeURIComponent(member.value) + '/libraries/' + encodeURIComponent(library.value));
+            if (!current() || dataGeneration !== window.WisdomData.generation()) return;
             result.replaceChildren(el('p', (detail.denied ? 'Доступ отсутствует: ' + detail.reason : 'Доступ разрешён') + ' · эффективная роль: ' + (roleLabel(detail.effective_role) || 'нет доступа') + ' · ревизия политики: ' + detail.policy_revision));
             if (!detail.paths.length) result.append(el('p', 'Активных путей доступа нет.'));
             for (const path of detail.paths) result.append(el('p', path.kind === 'direct' ? 'Прямое разрешение · ' + roleLabel(path.role) : 'Группа ' + (path.group_name || path.group_id) + ' · ' + roleLabel(path.role)));
-          } catch (error) { window.WisdomForms.formError(explain, errorMessage(error)); result.replaceChildren(el('p', errorMessage(error), {role: 'alert', class: 'completion-error'})); }
+          } catch (error) {
+            if (!current() || dataGeneration !== window.WisdomData.generation()) return;
+            window.WisdomForms.formError(explain, errorMessage(error)); result.replaceChildren(el('p', errorMessage(error), {role: 'alert', class: 'completion-error'}));
+          }
           finally { lookup.disabled = false; }
         });
         directBox.append(explain);
       }
       if(!current())return;
       content.append(memberBox, inviteBox, groupBox, directBox);
-      root.replaceChildren(action('Обновить доступ', () => mountAccess(root, host)), content);
+      root.replaceChildren(action('Обновить доступ', () => mountAccess(root, host), 'secondary', current), content);
     } catch (error) { if (current()) fail(root, error); }
   }
 
   async function enhanceLibrary(root, library, host) {
-    const routeToken = host.routeToken();
+    const mountEpoch=++libraryEpoch, privateAtStart=privateEpoch, routeToken=host.routeToken();
+    const identity=host.identity(), accountId=identity?.account_id, principalId=identity?.principal_id;
+    const bound=()=>mountEpoch===libraryEpoch&&privateAtStart===privateEpoch&&host.routeIsCurrent(routeToken)&&identityMatches(host, accountId, principalId)&&host.currentLibrary()?.id===library.id&&root.isConnected;
+    if (!bound()) return;
     root.querySelector('.completion-library')?.remove();
     const area = el('section', null, {class: 'completion-library'});
     const policyCard = card('Обработка и экспорт');
     policyCard.append(el('p', 'Получаю действующие ограничения библиотеки…', {role: 'status'}));
     area.append(policyCard);
-    if (!host.currentLibrary() || host.currentLibrary().id !== library.id) return;
     root.insertBefore(area, root.children[2] || null);
+    const current=()=>bound()&&area.isConnected;
+    if (!current()) return;
     try {
+      const policyGeneration=window.WisdomData.generation();
       const policy = await host.api('/api/libraries/' + encodeURIComponent(library.id) + '/policy');
-      if (!host.currentLibrary() || host.currentLibrary().id !== library.id) return;
+      if (!current() || policyGeneration !== window.WisdomData.generation()) return;
       policyCard.replaceChildren(el('h3', 'Обработка и экспорт'));
       const manager = policy.effective_role === 'manager';
       const canReview = manager || policy.effective_role === 'curator';
@@ -451,22 +512,27 @@
       if (manager) {
         const save = el('button', 'Сохранить ограничения', {type: 'submit'}); form.append(save);
         window.WisdomForms.submit(form, async event => {
-          event.preventDefault(); save.disabled = true;
+          event.preventDefault(); if (!current()) return;
+          save.disabled = true;
           try {
             const payload = Object.fromEntries(names.map(([key]) => [key, form.elements[key].checked]));
-            const next = await host.api('/api/libraries/' + encodeURIComponent(library.id) + '/policy', {method: 'PUT', body: JSON.stringify(payload)});
-            if (!host.currentLibrary() || host.currentLibrary().id !== library.id) return;
+            if (!current()) return;
+            await host.api('/api/libraries/' + encodeURIComponent(library.id) + '/policy', {method: 'PUT', body: JSON.stringify(payload)});
+            if (!current()) return;
             host.notify('Ограничения сохранены.');
             if (host.refreshLibrary) await host.refreshLibrary(); else await enhanceLibrary(root, library, host);
-          } catch (error) { window.WisdomForms.formError(form, errorMessage(error)); } finally { save.disabled = false; }
+          } catch (error) { if (current()) window.WisdomForms.formError(form, errorMessage(error)); }
+          finally { save.disabled = false; }
         });
       } else policyCard.append(el('p', 'Изменять ограничения может только менеджер библиотеки.', {class: 'muted'}));
       policyCard.append(form);
+      if (!current()) return;
+      const draftsGeneration=window.WisdomData.generation();
       const [knowledge, rules] = await Promise.all([
         host.api('/api/libraries/' + encodeURIComponent(library.id) + '/knowledge'),
         host.api('/api/libraries/' + encodeURIComponent(library.id) + '/rules')
       ]);
-      if (!host.currentLibrary() || host.currentLibrary().id !== library.id) return;
+      if (!current() || draftsGeneration !== window.WisdomData.generation()) return;
       const drafts = [...knowledge.filter(item => ['draft', 'needs_review'].includes(item.publication)).map(item => ({...item, item_kind: 'knowledge'})),
         ...rules.filter(item => ['draft', 'needs_review'].includes(item.publication)).map(item => ({...item, item_kind: 'rule'}))];
       const review = card('Проверка черновиков');
@@ -481,7 +547,7 @@
         label.append(el('span', (item.title || item.statement || 'Без названия') + ' · ' + itemKindLabel(item.item_kind) + ' · ' + publicationLabel(item.publication)));
         review.append(label);
         if (item.item_kind === 'knowledge') {
-          const canEdit = canReview || Boolean(item.created_by && item.created_by === host.identity()?.principal_id);
+          const canEdit = canReview || Boolean(item.created_by && item.created_by === principalId);
           const editor = el('details'); editor.append(el('summary', canEdit ? 'Редактировать текст и свидетельство' : 'Свидетельства'));
           const provenance = item.provenance || [];
           if (!provenance.length) editor.append(el('p', 'Связанные свидетельства не указаны.', {class: 'muted'}));
@@ -497,9 +563,9 @@
               quote: proof.quote,
               locator: proof.locator,
               fragmentId: proof.fragment_id,
-              isCurrent: () => host.routeIsCurrent(routeToken) && host.currentLibrary()?.id === library.id && area.isConnected
+              isCurrent: current
             };
-            if (typeof proof.source_id === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(proof.source_id)) line.append(document.createTextNode(' · '), action(hasExactTarget ? 'Открыть точное место' : 'Открыть источник', () => host.openSource(proof.source_id, sourceOptions)));
+            if (typeof proof.source_id === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(proof.source_id)) line.append(document.createTextNode(' · '), action(hasExactTarget ? 'Открыть точное место' : 'Открыть источник', () => host.openSource(proof.source_id, sourceOptions), 'secondary', current));
             editor.append(line);
           }
           if (canEdit) {
@@ -511,31 +577,27 @@
             const save = el('button', 'Сохранить текст', {type: 'submit'});
             const cancel = el('button', 'Отмена', {type: 'button'});
             cancel.addEventListener('click', () => {
+              if (!current()) return;
               window.WisdomForms.discardDraft(form);
               editor.remove();
             });
             actions.append(save, cancel);
             form.append(text, actions);
             window.WisdomForms.submit(form, async () => {
+              if (!current()) return;
               editor.querySelector('[data-knowledge-save-error]')?.remove();
               try {
                 await host.api('/api/knowledge/' + encodeURIComponent(item.id), {method: 'PATCH', body: JSON.stringify({statement: text.value, expected_statement: item.statement, kind: item.kind})});
               } catch (error) {
+                if (!current()) return;
                 const detail = error?.message ? ': ' + error.message : '.';
                 editor.append(el('p', 'Черновик не сохранён' + detail, {role: 'alert', 'data-knowledge-save-error': 'true'}));
                 return;
               }
               window.WisdomForms.discardDraft(form);
-              if (!host.currentLibrary() || host.currentLibrary().id !== library.id) return;
-              try {
-                await enhanceLibrary(root, library, host);
-              } catch (error) {
-                if (!host.currentLibrary() || host.currentLibrary().id !== library.id) return;
-                const detail = error?.message ? ': ' + error.message : '';
-                host.notify('Черновик обновлён, но список не обновился' + detail + '. Обновите страницу.');
-                return;
-              }
-              if (host.currentLibrary()?.id === library.id) host.notify('Черновик обновлён.');
+              if (!current()) return;
+              host.notify('Черновик обновлён.');
+              await enhanceLibrary(root, library, host);
             });
             editor.append(form);
           }
@@ -552,31 +614,33 @@
         confirmation.append(action('Подтвердить', async () => {
           const now = checks.filter(({check}) => check.checked).map(({item}) => item.id);
           if (JSON.stringify(now) !== JSON.stringify(selected.map(({item}) => item.id))) throw Error('Выбор изменился. Повторите действие.');
+          if (!current()) return;
           await host.post('/api/libraries/' + encodeURIComponent(library.id) + '/review', {item_kind: selected[0].item.item_kind, item_ids: now, decision});
-          if (!host.currentLibrary() || host.currentLibrary().id !== library.id) return;
-          try {
-            await enhanceLibrary(root, library, host);
-          } catch (error) {
-            if (!host.currentLibrary() || host.currentLibrary().id !== library.id) return;
-            const detail = error?.message ? ': ' + error.message : '';
-            host.notify('Решение сохранено, но список не обновился' + detail + '. Обновите страницу.');
-            return;
-          }
-          if (host.currentLibrary()?.id === library.id) host.notify('Решение сохранено.');
-        }), action('Отмена', () => confirmation.remove()));
+          if (!current()) return;
+          host.notify('Решение сохранено.');
+          await enhanceLibrary(root, library, host);
+        }, 'secondary', current), action('Отмена', () => confirmation.remove(), 'secondary', current));
         review.append(confirmation);
-      }, decision === 'publish' ? 'primary' : 'secondary'));
+      }, decision === 'publish' ? 'primary' : 'secondary', current));
+      if (!current()) return;
       area.append(review);
-    } catch (error) { fail(policyCard, error); }
+    } catch (error) { if (current()) fail(policyCard, error); }
   }
 
   async function enhanceUses(root, host) {
+    const mountEpoch=++usesEpoch, privateAtStart=privateEpoch, routeToken=host.routeToken();
+    const identity=host.identity(), accountId=identity?.account_id, principalId=identity?.principal_id;
+    const bound=()=>mountEpoch===usesEpoch&&privateAtStart===privateEpoch&&host.routeIsCurrent(routeToken)&&identityMatches(host, accountId, principalId)&&root.isConnected;
+    if (!bound()) return;
     root.querySelector('.completion-experience')?.remove();
     const area = el('section', null, {class: 'completion-experience'});
     area.append(el('p', 'Загружаю сводку…', {role: 'status'}));
     root.append(area);
+    const current=()=>bound()&&area.isConnected;
     try {
+      const summaryGeneration=window.WisdomData.generation();
       const result = await host.api('/api/experience-summary');
+      if (!current() || summaryGeneration !== window.WisdomData.generation()) return;
       const list = el('div', null, {class: 'completion-grid'});
       if (!result.by_rule_version.length) empty(list, 'Сводка появится после записей о собственном применении правил.');
       for (const row of result.by_rule_version) {
@@ -586,13 +650,25 @@
         box.append(el('p', 'Средняя самооценка: ' + (row.average_rating ?? 'нет оценки') + ' · оценок: ' + row.rated)); list.append(box);
       }
       area.replaceChildren(el('p', 'Сводка учитывает только ваш опыт. Просмотр и поиск не считаются применением; отсутствие записи результата не означает неудачу.', {class: 'muted'}), el('p','Выдач материалов в доступной личной истории: ' + (result.visible_issuance_count ?? 'неизвестно') + '. Выдача не доказывает чтение.'), list);
-      const journal = el('details'); journal.append(el('summary','Последние выдачи материалов'));
+      if (!current()) return;
+      const retrievalsGeneration=window.WisdomData.generation();
       const entries = await host.api('/api/retrievals');
+      if (!current() || retrievalsGeneration !== window.WisdomData.generation()) return;
+      const journal = el('details'); journal.append(el('summary','Последние выдачи материалов'));
       if (!entries.length) journal.append(el('p','История выдачи пока пуста.'));
       for (const entry of entries) journal.append(el('p',(entry.title ?? 'Материал') + ' · ' + itemKindLabel(entry.item_kind) + (entry.version_no ? ' · v' + entry.version_no : '') + ' · ' + entry.delivered_at));
+      if (!current()) return;
       area.append(journal);
-    } catch (error) { fail(area, error); }
+    } catch (error) { if (current()) fail(area, error); }
   }
 
-  window.WisdomCompletion = {mountAccess, mountJobs, enhanceLibrary, enhanceUses};
+  const invalidate = () => {
+    privateEpoch++;
+    accessEpoch++;
+    jobsEpoch++;
+    libraryEpoch++;
+    usesEpoch++;
+  };
+
+  window.WisdomCompletion = {invalidate, mountAccess, mountJobs, enhanceLibrary, enhanceUses};
 })();
