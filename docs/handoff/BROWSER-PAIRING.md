@@ -28,8 +28,8 @@ Deployment prerequisites, with exact client rollback snapshots:
 
 New 0025 auth metadata is additive and backward compatible. Code rollback can
 leave it in place; never drop active session or pairing state to roll back.
-0026 replaces only the existing effective_role body with one equivalent plan;
-its owner, ACL, signature, security mode and search path must remain unchanged.
+The proposed role-helper rewrite was rejected after the isolated-copy benchmark
+showed a slowdown; the existing centralized access functions remain unchanged.
 
 Acceptance: real PostgreSQL binding/replay/concurrency/scope/revocation tests,
 actual same-realm Keycloak exchange, independent MiniMax and Sol source gates,
