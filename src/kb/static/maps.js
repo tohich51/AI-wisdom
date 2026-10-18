@@ -93,6 +93,12 @@ window.WisdomMap = (() => {
     root.append(controls,searchPanel,sourceNotice,content,detailStatus,details,list); content.append(surface);
     let data, loading=true, readSerial=0, graphSerial=0, similarityPoll=0, similarityQueued=false, similarityNotice='', similarityRefreshButton=null;
     const noConceptsNotice='В библиотеке нет доступных понятий.';
+    const edgeStatusText=edge=>{
+      const publicationText=publication[edge.publication]||(typeof edge.publication==='string'&&edge.publication?edge.publication:'не указана');
+      const hypothesisText=edge.hypothesis?'да':edge.hypothesis===false?'нет':'не указана';
+      const basisText=typeof edge.basis==='string'&&edge.basis.trim()?edge.basis.trim():'не указано';
+      return ['Публикация: '+publicationText,'Гипотеза: '+hypothesisText,'Пояснение связи: '+basisText].join(' · ');
+    };
     const filterGraphToSource=(graph,graphMode=mode.value,activeSource=sourceFilter)=>{
       if(graphMode!=='semantic'||!activeSource)return graph;
       const graphRows=visibleGraphRows(graph);
@@ -255,7 +261,7 @@ window.WisdomMap = (() => {
       const predicateText=typeof edge.predicate==='string'&&edge.predicate?(predicates[edge.predicate]||edge.predicate):'тип связи не указан';
       const headingText=[sourceText,predicateText,targetText].join(' → ');
       const heading=n('h2',headingText,{id:'map-edge-heading-'+crypto.randomUUID(),tabindex:'-1'});
-      const statusText=[publication[edge.publication],typeof edge.basis==='string'?edge.basis:'',edge.hypothesis?'Гипотеза':''].filter(Boolean).join(' · ')||'Типизированная связь';
+      const statusText=edgeStatusText(edge);
       details.replaceChildren(heading,n('p',statusText));
       detailStatus.textContent='Готово: связь открыта.';
       const evidence=Array.isArray(edge.evidence)?edge.evidence:[];
@@ -345,7 +351,7 @@ window.WisdomMap = (() => {
         relationButton.setAttribute('aria-label','Открыть связь: '+relationText);
         const relationHeading=n('h3','');
         relationHeading.append(relationButton);
-        const status=(edge.hypothesis?'Гипотеза · ':'')+(publication[edge.publication]||edge.basis||'Типизированная связь');
+        const status=edgeStatusText(edge);
         row.append(relationHeading,n('p',status));
         const evidence=Array.isArray(edge.evidence)?edge.evidence:[];
         if (!evidence.length) row.append(n('p','Доказательства не указаны: эта связь не подтверждена.',{class:'muted'}));

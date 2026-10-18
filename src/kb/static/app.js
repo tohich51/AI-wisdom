@@ -945,6 +945,12 @@ async function openLibrary(lib, {guard = null} = {}) {
   const contributor = curator || role === 'contributor';
   const extractionAllowed = Boolean(policy.generation_allowed && policy.external_processing_allowed);
   root.append(node('p', 'Тип: ' + visibleEnum(LIBRARY_KIND_LABELS, lib.kind, 'Тип не указан') + ' · Доступ: ' + visibleEnum(ROLE_LABELS, role)));
+  const extractionPolicyNoteId = 'library-extraction-policy-' + uuid();
+  if (contributor && !extractionAllowed) {
+    root.append(node('p', 'Извлечение знаний и правил отключено политикой библиотеки. Параметры внешней обработки и генерации находятся в разделе «Доступ».', {
+      id: extractionPolicyNoteId, class: 'muted', role: 'note'
+    }));
+  }
   if (contributor) {
     const form = node('form');
     form.dataset.draftKey = UUID_PATTERN.test(String(lib.id || '')) ? 'upload:' + lib.id : '';
@@ -954,7 +960,7 @@ async function openLibrary(lib, {guard = null} = {}) {
     const extract = node('input', null, {type: 'checkbox', id: 'extract'});
     extract.disabled = !extractionAllowed;
     form.append(extract, node('label', 'Извлечь знания и правила через мою подписку MiniMax (для владельца)', {for: 'extract'}));
-    if (!extractionAllowed) form.append(node('p', 'Извлечение отключено политикой библиотеки. Менеджер может включить внешнюю обработку и генерацию выше.', {class: 'muted'}));
+    if (!extractionAllowed) extract.setAttribute('aria-describedby', extractionPolicyNoteId);
     form.append(node('button', 'Загрузить и обработать', {type: 'submit'}));
     let pendingUpload = null;
     window.WisdomForms.submit(form, async () => {
@@ -997,7 +1003,7 @@ async function openLibrary(lib, {guard = null} = {}) {
     const extractUrl = node('input', null, {type: 'checkbox', id: 'extract-url'});
     extractUrl.disabled = !extractionAllowed;
     urlForm.append(extractUrl, node('label', 'Извлечь знания и правила через мою подписку MiniMax (для владельца)', {for: 'extract-url'}));
-    if (!extractionAllowed) urlForm.append(node('p', 'Извлечение отключено политикой библиотеки. Менеджер может включить внешнюю обработку и генерацию выше.', {class: 'muted'}));
+    if (!extractionAllowed) extractUrl.setAttribute('aria-describedby', extractionPolicyNoteId);
     const urlSubmit = node('button', 'Добавить и обработать', {type: 'submit'});
     urlForm.append(urlSubmit);
     let pendingUrlOperation = null;
@@ -1094,8 +1100,12 @@ async function openLibrary(lib, {guard = null} = {}) {
         card.append(button('Разобрать текст', () => processSource(source.id, false)));
         const extractAction = button('Извлечь / продолжить черновики', () => processSource(source.id, true));
         extractAction.disabled = !extractionAllowed;
-        if (!extractionAllowed) { extractAction.title = 'Отключено политикой библиотеки'; card.append(extractAction, node('p', 'Извлечение отключено политикой библиотеки.', {class: 'muted'})); }
-        else card.append(extractAction);
+        if (!extractionAllowed) {
+          extractAction.title = 'Отключено политикой библиотеки';
+          extractAction.setAttribute('aria-describedby', extractionPolicyNoteId);
+          extractAction.textContent = 'Извлечение отключено';
+          card.append(extractAction);
+        } else card.append(extractAction);
       }
       return card;
     }
