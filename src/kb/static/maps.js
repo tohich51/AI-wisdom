@@ -19,7 +19,7 @@ window.WisdomMap = (() => {
   });
   async function mount(container, helpers, chosenId, chosenMode, chosenSourceId) {
     invalidate(); root=container; host=helpers; const generation=epoch, n=host.node;
-    controller=new AbortController(); const valid=()=>generation===epoch;
+    controller=new AbortController(); const valid=()=>generation===epoch&&!controller.signal.aborted;
     let sourceFilter=typeof chosenSourceId==='string'&&chosenSourceId?chosenSourceId:null;
     const libs=host.libraries(); if (!libs.length) { root.append(n('p','Создайте библиотеку и добавьте материалы.')); return; }
     const library=n('select',null,{id:'map-library'});
@@ -38,9 +38,27 @@ window.WisdomMap = (() => {
     controls.append(n('label','Библиотека',{for:'map-library'}),library,n('label','Вид карты',{for:'map-mode'}),mode,similarityControl);
     const surface=n('div',null,{class:'map-surface',tabindex:0,'aria-label':'Граф знаний. Все узлы доступны в списке ниже.'});
     const sourceNotice=n('div',null,{'aria-live':'polite'});
-    root.append(controls,sourceNotice,content,details,list); content.append(surface);
-    let data, readSerial=0, similarityPoll=0, similarityQueued=false, similarityNotice='', similarityRefreshButton=null;
+    const searchPanel=n('div',null,{class:'map-search card'}), searchId='map-search-'+crypto.randomUUID();
+    const searchInput=n('input',null,{id:searchId,type:'search',autocomplete:'off',enterkeyhint:'search',spellcheck:'false',disabled:true,placeholder:'Название или описание','aria-describedby':searchId+'-help '+searchId+'-status'});
+    const clearSearch=n('button','Очистить поиск',{type:'button'});
+    const searchHelp=n('p','Ищет только по названию и описанию уже загруженных доступных узлов; запросы не отправляются. Граф, фильтр источника и скачиваемый JSON не меняются. Enter открывает первый результат.',{class:'muted',id:searchId+'-help'});
+    const searchStatus=n('p','Поиск станет доступен после загрузки карты.',{class:'map-search-status',id:searchId+'-status',role:'status','aria-live':'polite','aria-atomic':'true'});
+    let searchQuery='',searchHighlightId=null,searchComposing=false;
+    searchPanel.append(n('label','Поиск по загруженной карте',{for:searchId}),searchInput,clearSearch,searchHelp,searchStatus);
+    root.append(controls,searchPanel,sourceNotice,content,details,list); content.append(surface);
+    let data, loading=true, readSerial=0, graphSerial=0, similarityPoll=0, similarityQueued=false, similarityNotice='', similarityRefreshButton=null;
     const noConceptsNotice='В библиотеке нет доступных понятий.';
+    const filterGraphToSource=(graph,graphMode=mode.value,activeSource=sourceFilter)=>{
+      if(graphMode!=='semantic'||!activeSource)return graph;
+      const nodes=(Array.isArray(graph.nodes)?graph.nodes:[]).filter(value=>value&&value.kind==='concept'&&Array.isArray(value.evidence)&&value.evidence.some(cite=>cite&&String(cite.source_id)===String(activeSource)));
+      const nodeIds=new Set(nodes.map(value=>value.id));
+      const keepPair=edge=>edge&&nodeIds.has(edge.source)&&nodeIds.has(edge.target);
+      const similarity=graph.similarity&&typeof graph.similarity==='object'?{
+        ...graph.similarity,
+        edges:Array.isArray(graph.similarity.edges)?graph.similarity.edges.filter(keepPair):[]
+      }:graph.similarity;
+      return {...graph,nodes,edges:(Array.isArray(graph.edges)?graph.edges:[]).filter(keepPair),similarity};
+    };
     const cancelSimilarityPoll=()=> { similarityPoll++; clearSimilarityTimer(); similarityQueued=false; similarityNotice=''; };
     const endpoint=()=>'/api/graphs/'+mode.value+'?library_id='+library.value+'&limit=200';
     const renderSimilarityState=()=> {
@@ -69,26 +87,47 @@ window.WisdomMap = (() => {
       similarityRefreshButton.disabled=!semantic||similarityQueued||!data?.capabilities?.can_create||noEligible;
     };
     const act=fn=>async e=> { e?.preventDefault(); try { await fn(); } catch(error) {
-      if(valid() && error.name!=='AbortError') {
-        content.querySelector('.map-error')?.remove();
-        const failure=n('p','Не удалось обновить карту: '+error.message); failure.className='map-error map-summary'; content.prepend(failure);
-        if(!canvas && !surface.hasChildNodes()) surface.append(n('p','Карта сейчас недоступна. Попробуйте обновить её позже.'));
-        host.notify(error.message);
-      }
+        if(valid() && error.name!=='AbortError') {
+          content.querySelector('.map-error')?.remove();
+          const failure=n('p','Не удалось обновить карту: '+error.message); failure.className='map-error map-summary'; content.prepend(failure);
+          if(!canvas) surface.replaceChildren(n('p','Карта сейчас недоступна. Попробуйте обновить её позже.'));
+          host.notify(error.message);
+        }
     }};
     const b=(text,fn)=>n('button',text,{type:'button',onclick:act(fn)});
+    const renderCitation=(cite,returnLabel,onReturn,isCallerCurrent)=>{
+      const block=n('div',null,{class:'graph-citation'});
+      const quote=typeof cite.quote==='string'?cite.quote:'';
+      const locator=cite.locator&&typeof cite.locator==='object'?cite.locator:{};
+      const place=[
+        locator.chapter!=null&&locator.chapter!==''?'Глава: '+locator.chapter:null,
+        locator.file_page!=null?'Страница файла '+locator.file_page:null,
+        locator.printed_label?'Печатная метка: '+locator.printed_label:null,
+        locator.paragraph!=null?'Абзац: '+locator.paragraph:null,
+        locator.table_index!=null?'Таблица '+locator.table_index+(locator.cell_row!=null||locator.cell_column!=null?', ячейка '+String(locator.cell_row??'?')+':'+String(locator.cell_column??'?'):''):null
+      ].filter(Boolean).join(' · ');
+      block.append(n('blockquote',quote||'Текст цитаты не указан.'),n('p',[cite.title,place].filter(value=>value!=null&&value!=='').join(' · ')||'Источник цитаты'));
+      const hasLocator=['chapter','file_page','printed_label','paragraph','table_index','cell_row','cell_column'].some(key=>locator[key]!=null);
+      if(typeof cite.source_id==='string'&&cite.source_id) {
+        const sourceOptions={quote,locator,isCurrent:isCallerCurrent,returnLabel,onReturn:onReturn?()=>{if(isCallerCurrent())return onReturn();}:undefined};
+        if(cite.fragment_id!=null)sourceOptions.fragmentId=cite.fragment_id;
+        block.append(b(quote||cite.fragment_id!=null||hasLocator?'Открыть точное место':'Открыть источник',()=>host.openSource(cite.source_id,sourceOptions)));
+      }
+      return block;
+    };
     const renderSourceNotice=()=>{
       sourceNotice.replaceChildren();
       if(!sourceFilter)return;
       const count=Array.isArray(data?.nodes)?data.nodes.length:null;
       const base='Выбранный источник';
-      const scope=count===null?'Показаны связанные понятия.':count?'Показано связанных понятий: '+count+'.':'В доступной выдаче связанных понятий пока нет.';
-      sourceNotice.append(n('p',base+' · '+scope),b('Показать все понятия',()=>{sourceFilter=null;renderSourceNotice();return load();}));
+      const scope=loading?'Загружаю связанные понятия…':count===null?'Связанные понятия не загружены; предыдущий граф очищен.':count?'Показано связанных понятий: '+count+'.':'В доступной выдаче связанных понятий пока нет.';
+      sourceNotice.append(n('p',base+' · '+scope),b('Показать все понятия',()=>host.navigateMapSource(library.value,null,mode.value)));
+      sourceNotice.append(n('p','Ручное создание понятия скрыто: понятие без доказательства не сохранилось бы в этом режиме источника. Сначала откройте сеть всей библиотеки.',{class:'muted'}));
     };
-    renderSourceNotice();
     async function renderDetail(node) {
       const selectedId=node.id,selectedMode=mode.value,selectedLibrary=library.value,selection=++readSerial;
       const signal=controller.signal;
+      const selectedCurrent=()=>valid()&&selection===readSerial&&selectedMode===mode.value&&selectedLibrary===library.value;
       details.replaceChildren(n('p','Загрузка подробностей…'));
       let freshNode;
       if(selectedMode==='semantic' && node.kind==='concept') {
@@ -99,111 +138,179 @@ window.WisdomMap = (() => {
         const fresh=await host.api(endpoint(),{signal});
         freshNode=fresh.nodes.find(value=>value.id===selectedId);
       }
-      if(!valid() || signal.aborted || selection!==readSerial || selectedMode!==mode.value || selectedLibrary!==library.value) return;
+      if(!selectedCurrent() || signal.aborted) return;
       if(freshNode?.id!==selectedId) throw Error('Узел больше не доступен. Обновите карту.');
       node=freshNode;
-      details.replaceChildren(n('h2',node.label),n('p',[types[node.kind]||node.kind,publication[node.publication]||node.publication,
+      const detailHeading=n('h2',node.label,{id:'map-detail-heading-'+crypto.randomUUID(),tabindex:'-1'});
+      details.replaceChildren(detailHeading,n('p',[types[node.kind]||node.kind,publication[node.publication]||node.publication,
         node.version_no?'Версия '+node.version_no:null].filter(Boolean).join(' · ')));
       if(node.body) details.append(n('p',node.body));
       if(node.basis==='manual_without_evidence') details.append(n('p','Ручное понятие без подтверждающего источника.'));
       if(node.basis==='manual_revision_with_inherited_sources') details.append(n('p','Ручная правка. Источники унаследованы от предыдущей версии; проверьте новую формулировку.'));
       if(node.kind==='source') {
-        details.append(b('Открыть источник',()=>host.openSource(node.entity_id)));
+        details.append(b('Открыть источник',()=>host.openSource(node.entity_id,{isCurrent:selectedCurrent})));
         const sourceId=typeof node.entity_id==='string'?node.entity_id:'';
-        if(sourceId) details.append(b('Показать связанные понятия',()=>{
-          sourceFilter=sourceId;mode.value='semantic';renderSourceNotice();return load();
-        }));
+        if(sourceId) details.append(b('Показать связанные понятия',()=>host.navigateMapSource(selectedLibrary,sourceId,'semantic')));
       }
       if(node.kind==='rule') details.append(b('Открыть правило',()=>host.openRuleVersion(node.entity_id,node.version_no)));
       const evidence=Array.isArray(node.evidence)?node.evidence:[];
-      for(const cite of evidence) {
-        const quote=typeof cite.quote==='string'?cite.quote:'';
-        const locator=cite.locator&&typeof cite.locator==='object'?cite.locator:{};
-        const place=[
-          locator.chapter!=null&&locator.chapter!==''?'Глава: '+locator.chapter:null,
-          locator.file_page!=null?'Страница файла '+locator.file_page:null,
-          locator.printed_label?'Печатная метка: '+locator.printed_label:null,
-          locator.paragraph!=null?'Абзац: '+locator.paragraph:null,
-          locator.table_index!=null?'Таблица '+locator.table_index+(locator.cell_row!=null||locator.cell_column!=null?', ячейка '+String(locator.cell_row??'?')+':'+String(locator.cell_column??'?'):''):null
-        ].filter(Boolean).join(' · ');
-        details.append(n('blockquote',quote||'Текст цитаты не указан.'),n('p',[cite.title,place].filter(value=>value!=null&&value!=='').join(' · ')||'Источник цитаты'));
-        const hasLocator=['chapter','file_page','printed_label','paragraph','table_index','cell_row','cell_column'].some(key=>locator[key]!=null);
-        if(typeof cite.source_id==='string'&&cite.source_id) details.append(b(quote||hasLocator?'Открыть точное место':'Открыть источник',()=>host.openSource(cite.source_id,{
-          quote,locator,returnLabel:'Вернуться к понятию',onReturn:()=>{if(valid()&&selection===readSerial)return renderDetail(node);}
-        })));
-      }
+      for(const cite of evidence) details.append(renderCitation(cite,'Вернуться к понятию',()=>{if(selectedCurrent())return renderDetail(node);},selectedCurrent));
       if(node.kind==='concept') {
         const ids=[...new Set(evidence.map(cite=>cite?.source_id).filter(id=>typeof id==='string'&&id))];
         if(sourceFilter) details.append(n('a','Вернуться к материалу',{href:host.librarySourcesPath(selectedLibrary)}));
-        if(ids.length) details.append(b('Исследовать понятие',()=>window.WisdomResearch.question('Что означает '+node.label+'?',ids,library.value)));
+        if(ids.length) details.append(b('Исследовать понятие',()=>window.WisdomResearch.question('Что означает '+node.label+'?',ids,selectedLibrary)));
         else details.append(n('p','Доступных источников для исследования этого понятия нет.'));
         if(data.capabilities?.can_review && node.publication==='draft') details.append(b('Подтвердить понятие',()=>review(node.entity_id,'concept','publish')));
         if(data.capabilities?.can_review && node.publication!=='withdrawn') details.append(b('Снять понятие с публикации',()=>review(node.entity_id,'concept','withdraw')));
       }
-      details.scrollIntoView({block:'nearest'});
+      if(selectedCurrent()) {
+        detailHeading.focus({preventScroll:true});
+        details.scrollIntoView({block:'nearest'});
+      }
     }
     async function review(entityId,entityKind,decision) {
       await host.post('/api/graphs/review',{entity_id:entityId,entity_kind:entityKind,decision}); await load();
     }
+    const foldSearch=value=>String(value??'').toLocaleLowerCase().replace(/\s+/g,' ').trim();
+    const matchingNodes=()=> {
+      const nodes=Array.isArray(data?.nodes)?data.nodes:[];
+      return searchQuery?nodes.filter(node=>foldSearch(node?.label).includes(searchQuery)||foldSearch(node?.body).includes(searchQuery)):nodes.slice();
+    };
+    const renderLoadedList=()=>{
+      const allNodes=Array.isArray(data?.nodes)?data.nodes:[],nodes=matchingNodes();
+      const nodeIds=new Set(nodes.map(node=>String(node.id)));
+      const allEdges=Array.isArray(data?.edges)?data.edges:[];
+      const edges=allEdges.filter(edge=>nodeIds.has(String(edge?.source))&&nodeIds.has(String(edge?.target)));
+      const serial=graphSerial,selectedMode=mode.value,selectedLibrary=library.value,selectedSource=sourceFilter;
+      const graphCurrent=()=>valid()&&serial===graphSerial&&selectedMode===mode.value&&selectedLibrary===library.value&&selectedSource===sourceFilter;
+      if(searchQuery&&searchHighlightId===null)searchHighlightId=nodes[0]?.id??null;
+      list.replaceChildren(n('h2',searchQuery?'Результаты поиска':'Узлы и связи'));
+      if(selectedMode==='semantic'&&!data?.similarity?.available)
+        list.append(n('p','Слой близости недоступен. '+(data.similarity?.reason?'Причина: '+data.similarity.reason+'.':'Причина не указана.')+' На карте остаются только типизированные связи; сходство не является доказательством.'));
+      if(!nodes.length) list.append(n('p',searchQuery?'Совпадений не найдено. Очистите поиск, чтобы вернуть полный список.':'Узлов пока нет.'));
+      else {
+        const nodeList=window.WisdomList?window.WisdomList.create(host,{empty:'Узлов пока нет.',label:'Страницы списка узлов',renderItem:node=>{
+          const button=b((types[node.kind]||node.kind)+' · '+node.label,()=> {
+            if(searchQuery) { searchHighlightId=node.id; renderLoadedList(); }
+            return renderDetail(node);
+          });
+          if(searchQuery) {
+            button.classList.add('map-search-match');
+            if(String(node.id)===String(searchHighlightId)) {
+              button.classList.add('map-search-current');
+              button.setAttribute('aria-current','true');
+              button.prepend(n('strong','Выделенный результат: '));
+            }
+          }
+          return button;
+        }}):null;
+        if(nodeList) { nodeList.set(nodes); list.append(nodeList.element,nodeList.navigation,nodeList.status); }
+        else for(const node of nodes) list.append(b((types[node.kind]||node.kind)+' · '+node.label,()=>renderDetail(node)));
+      }
+      const labels=new Map(nodes.map(value=>[String(value.id),value.label]));
+      for(const edge of edges) {
+        const row=n('article',null,{class:'graph-relation'});
+        const relationCurrent=()=>graphCurrent()&&row.isConnected;
+        const relationTarget=n('p',labels.get(String(edge.source))+' → '+(predicates[edge.predicate]||edge.predicate)+' → '+labels.get(String(edge.target)),{id:'map-relation-'+crypto.randomUUID(),tabindex:'-1'});
+        row.append(relationTarget,n('p',(edge.hypothesis?'Гипотеза · ':'')+(publication[edge.publication]||edge.basis)));
+        if(data.capabilities?.can_review && selectedMode==='semantic' && edge.publication==='draft') row.append(b('Подтвердить связь',()=>review(edge.entity_id,'relation','publish')));
+        for(const cite of Array.isArray(edge.evidence)?edge.evidence:[]) row.append(renderCitation(cite,'Вернуться к связи',()=>{
+          if(!relationCurrent())return;
+          relationTarget.focus({preventScroll:true});row.scrollIntoView({block:'nearest'});
+        },relationCurrent));
+        list.append(row);
+      }
+      searchInput.disabled=loading||!data;
+      clearSearch.disabled=loading||!data||!searchInput.value;
+      let text;
+      if(loading) text='Загружаю карту для локального поиска…';
+      else if(!data) text='Нет загруженной карты для поиска.';
+      else if(searchQuery) text=(nodes.length?'Найдено узлов: '+nodes.length+' из '+allNodes.length+'.':'Совпадений не найдено: 0 из '+allNodes.length+' узлов.')+' Показано связанных строк: '+edges.length+' из '+allEdges.length+'.';
+      else text='Показаны все узлы: '+allNodes.length+'; типизированных связей: '+edges.length+'.';
+      if(data?.truncated)text+=' Поиск ограничен загруженной частью карты.';
+      searchStatus.textContent=text;
+    };
+    const applyLocalSearch=value=> {
+      if(loading||!data)return;
+      const nextQuery=foldSearch(value);
+      if(nextQuery!==searchQuery) { ++readSerial; details.replaceChildren(); }
+      searchQuery=nextQuery;
+      searchHighlightId=null;
+      renderLoadedList();
+    };
+    const openFirstSearchMatch=()=> {
+      if(!searchQuery||loading||!data)return;
+      const node=matchingNodes()[0];
+      if(!node)return;
+      searchHighlightId=node.id;
+      renderLoadedList();
+      return renderDetail(node);
+    };
+    searchInput.addEventListener('compositionstart',()=>{searchComposing=true;});
+    searchInput.addEventListener('compositionend',()=>{searchComposing=false;applyLocalSearch(searchInput.value);});
+    searchInput.addEventListener('input',event=>{if(!searchComposing&&!event.isComposing)applyLocalSearch(event.currentTarget.value);});
+    searchInput.addEventListener('keydown',event=>{
+      if(event.key!=='Enter'||searchComposing||event.isComposing||event.keyCode===229)return;
+      act(openFirstSearchMatch)(event);
+    });
+    clearSearch.addEventListener('click',()=> {
+      searchComposing=false;searchInput.value='';searchQuery='';searchHighlightId=null;
+      ++readSerial;details.replaceChildren();
+      if(data&&!loading)renderLoadedList();
+      searchInput.focus();
+    });
     async function load(options={}) {
       const preserveSimilarityPoll=options.preserveSimilarityPoll===true;
       if(!preserveSimilarityPoll) cancelSimilarityPoll();
-      const serial=++readSerial; details.replaceChildren();
-      const fresh=await host.api(endpoint(),{signal:controller.signal}); if(!valid() || serial!==readSerial) return;
-      const semantic=mode.value==='semantic';
-      if(semantic&&sourceFilter) {
-        const concepts=fresh.nodes.filter(value=>value.kind==='concept'&&Array.isArray(value.evidence)&&value.evidence.some(cite=>cite&&cite.source_id===sourceFilter));
-        const conceptIds=new Set(concepts.map(value=>value.id));
-        const typedEdges=Array.isArray(fresh.edges)?fresh.edges:[];
-        const similarity=fresh.similarity&&typeof fresh.similarity==='object'?{
-          ...fresh.similarity,
-          edges:Array.isArray(fresh.similarity.edges)?fresh.similarity.edges.filter(edge=>edge&&conceptIds.has(edge.source)&&conceptIds.has(edge.target)):[]
-        }:fresh.similarity;
-        data={...fresh,nodes:concepts,edges:typedEdges.filter(edge=>edge&&conceptIds.has(edge.source)&&conceptIds.has(edge.target)),similarity};
-      } else data=fresh;
-      renderSourceNotice(); content.querySelector('.map-error')?.remove();
-      manual.hidden=!semantic || !data.capabilities?.can_create;
-      relationButton.hidden=!semantic || !data.capabilities?.can_create;
-      renderSimilarityState();
-      canvas?.destroy();canvas=null; surface.replaceChildren();list.replaceChildren(n('h2','Узлы и связи'));
+      const serial=++graphSerial, selectedMode=mode.value, selectedLibrary=library.value, selectedSource=sourceFilter;
+      ++readSerial;
+      loading=true; data=null; details.replaceChildren();
+      canvas?.destroy();canvas=null;
+      surface.replaceChildren(n('p','Загружаю карту…',{class:'map-loading',role:'status'}));
+      list.replaceChildren(n('h2','Узлы и связи'),n('p','Узлы и связи загружаются…',{class:'map-loading',role:'status'}));
+      searchInput.disabled=true;clearSearch.disabled=true;searchStatus.textContent='Загружаю карту для локального поиска…';
+      content.querySelector('.map-error')?.remove();content.querySelector('.map-summary')?.remove();
+      manual.hidden=true;relationButton.hidden=true;renderSourceNotice();
+      try {
+        const fresh=await host.api(endpoint(),{signal:controller.signal});
+        if(!valid() || controller.signal.aborted || serial!==graphSerial || selectedMode!==mode.value || selectedLibrary!==library.value || selectedSource!==sourceFilter) return;
+        data=filterGraphToSource(fresh,selectedMode,selectedSource);loading=false;
+        renderSourceNotice(); content.querySelector('.map-error')?.remove();
+        manual.hidden=selectedMode!=='semantic' || !data.capabilities?.can_create || Boolean(selectedSource);
+        relationButton.hidden=selectedMode!=='semantic' || !data.capabilities?.can_create;
+        renderSimilarityState();
+        canvas?.destroy();canvas=null; surface.replaceChildren();list.replaceChildren(n('h2','Узлы и связи'));
       const status=n('p',(mode.value==='semantic'?'Понятия и направленные смысловые связи':'Источник → фрагмент → знание или правило → опыт → результат')+
         ' · '+data.nodes.length+' узлов · '+data.edges.length+' связей'+(data.truncated?' · Показана часть карты.':''));
       content.querySelector('.map-summary')?.remove();status.className='map-summary'; content.prepend(status);
       if(data.nodes.length>40) status.append(n('span',' Нажмите на узел или выберите его в списке, чтобы увидеть подробности.'));
-      if(mode.value==='semantic' && !data.similarity?.available)
-        list.append(n('p','Слой близости недоступен. '+(data.similarity?.reason?'Причина: '+data.similarity.reason+'.':'Причина не указана.')+' На карте остаются только типизированные связи; сходство не является доказательством.'));
+      renderLoadedList();
       if(!data.nodes.length) {
-        surface.append(n('p',mode.value==='semantic'?'Пока нет понятий и связей. Создайте сеть в Studio или добавьте понятие вручную.':'После загрузки источников здесь появится их происхождение.'));
+        const emptyMessage=mode.value==='semantic'?(sourceFilter?'В режиме выбранного источника нет связанных понятий.':'Пока нет понятий и связей. Создайте сеть в Studio или добавьте понятие вручную.'):'После загрузки источников здесь появится их происхождение.';
+        surface.append(n('p',emptyMessage));
         if(mode.value==='semantic') surface.append(b('Открыть Studio',()=>window.WisdomResearch.question('',[],library.value)));
       } else {
         // Граф грузится лениво: библиотека нужна только здесь и только когда есть узлы.
         if(typeof window.WisdomGraphCanvas.ensureLibrary==='function') await window.WisdomGraphCanvas.ensureLibrary();
-        if(!valid() || serial!==readSerial) return;
+        if(!valid() || serial!==graphSerial) return;
         canvas=window.WisdomGraphCanvas.render(surface,data,mode.value,node=>act(()=>renderDetail(node))(),{showSimilarity:showSimilarity.checked});
       }
-      const nodeList=window.WisdomList?window.WisdomList.create(host,{empty:'Узлов пока нет.',label:'Страницы списка узлов',
-        renderItem:node=>b((types[node.kind]||node.kind)+' · '+node.label,()=>renderDetail(node))}):null;
-      if(nodeList) { nodeList.set(data.nodes); list.append(nodeList.element,nodeList.navigation,nodeList.status); }
-      else for(const node of data.nodes) list.append(b((types[node.kind]||node.kind)+' · '+node.label,()=>renderDetail(node)));
-      const labels=new Map(data.nodes.map(v=>[v.id,v.label]));
-      for(const edge of data.edges) {
-        const row=n('article',null,{class:'graph-relation'});
-        row.append(n('p',labels.get(edge.source)+' → '+(predicates[edge.predicate]||edge.predicate)+' → '+labels.get(edge.target)),
-          n('p',(edge.hypothesis?'Гипотеза · ':'')+(publication[edge.publication]||edge.basis)));
-        if(data.capabilities?.can_review && mode.value==='semantic' && edge.publication==='draft') row.append(b('Подтвердить связь',()=>review(edge.entity_id,'relation','publish')));
-        for(const cite of Array.isArray(edge.evidence)?edge.evidence:[]) row.append(n('blockquote',cite.quote),n('p',cite.title));
-        list.append(row);
+      } catch(error) {
+        if(valid()&&serial===graphSerial) {
+          loading=false;renderSourceNotice();
+          if(!data) {
+            searchInput.disabled=true;clearSearch.disabled=true;
+            searchStatus.textContent='Локальный поиск недоступен: данные карты не загружены.';
+          }
+        }
+        throw error;
       }
     }
-    library.addEventListener('change',act(()=>mount(root,host,library.value,mode.value)));
+    library.addEventListener('change',act(()=>host.navigateMapSource(library.value,null,mode.value)));
     mode.addEventListener('change',act(()=> {
       document.querySelectorAll('dialog[data-wisdom-private]').forEach(d=>d.close());
       const semantic=mode.value==='semantic';
-      if(!semantic) { sourceFilter=null;renderSourceNotice(); }
-      similarityControl.hidden=!semantic;
-      if(similarityRefreshButton) { similarityRefreshButton.hidden=!semantic; similarityRefreshButton.disabled=true; }
-      if(!semantic) similarityStatus.replaceChildren();
-      return load();
+      return host.navigateMapSource(library.value,semantic?sourceFilter:null,mode.value);
     }));
     showSimilarity.addEventListener('change',act(load));
     async function refreshSimilarity() {
@@ -240,13 +347,16 @@ window.WisdomMap = (() => {
     similarityRefreshButton=b('Обновить близость',refreshSimilarity);
     similarityRefreshButton.disabled=true;
     controls.append(b('Обновить',load),similarityRefreshButton,b('Уместить граф',()=>canvas?.fit(30)),b('Приблизить',()=>canvas?.zoom(canvas.zoom()*1.2)),b('Отдалить',()=>canvas?.zoom(canvas.zoom()/1.2)),
-      b('Скачать JSON',async()=> { const fresh=await host.api(endpoint(),{signal:controller.signal});if(valid())host.download('knowledge-graph.json',JSON.stringify(fresh,null,2),'application/json'); }),
+      b('Скачать JSON',async()=> { const selectedMode=mode.value,selectedLibrary=library.value,selectedSource=sourceFilter;const fresh=await host.api('/api/graphs/'+selectedMode+'?library_id='+encodeURIComponent(selectedLibrary)+'&limit=200',{signal:controller.signal});if(valid()&&!controller.signal.aborted&&selectedMode===mode.value&&selectedLibrary===library.value&&selectedSource===sourceFilter)host.download('knowledge-graph.json',JSON.stringify(filterGraphToSource(fresh,selectedMode,selectedSource),null,2),'application/json'); }),
       b('Скачать PNG',async()=> { await load(); if(!canvas)throw Error('В карте пока нет узлов.');const blob=await canvas.png({output:'blob-promise',bg:'#ffffff',full:true,scale:2});if(valid())host.downloadBlob('knowledge-graph.png',blob); }));
-    const manual=b('Добавить понятие',()=>host.dialog('Понятие без источника',form=> {
+    const manual=b('Добавить понятие',()=> {
+      if(sourceFilter)throw Error('Сначала откройте сеть всей библиотеки: ручное понятие без доказательства не входит в фильтр источника.');
+      return host.dialog('Понятие без источника',form=> {
       for(const [name,label] of [['label','Название понятия'],['body','Описание']]) {
         const id='concept-'+name,input=n(name==='body'?'textarea':'input',null,{id,name,required:true,maxlength:name==='body'?2000:500});form.append(n('label',label,{for:id}),input);
       }
-    },async fields=> { await host.post('/api/graphs/concepts',{library_id:library.value,label:fields.get('label'),body:fields.get('body')});if(valid())await load(); }));
+      },async fields=> { await host.post('/api/graphs/concepts',{library_id:library.value,label:fields.get('label'),body:fields.get('body')});if(valid())await load(); });
+    });
     controls.append(manual);
     const relationButton=b('Добавить связь',()=> {
       if(mode.value!=='semantic' || data.nodes.length<2) throw Error('Откройте семантическую сеть с двумя понятиями.');

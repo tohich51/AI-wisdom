@@ -8,6 +8,7 @@
 const {api, post} = window.WisdomData;
 const router = window.WisdomRouter;
 const byId = id => document.getElementById(id);
+const uuid = () => globalThis.crypto?.randomUUID?.() || Date.now().toString(36) + '-' + Math.random().toString(36).slice(2);
 const node = (tag, text, attrs = {}) => {
   const n = document.createElement(tag);
   if (text !== undefined && text !== null) n.textContent = String(text);
@@ -24,28 +25,75 @@ const SOURCE_AUTO_SEARCH_PAGES = 3;
 const SOURCE_REQUEST_TIMEOUT_MS = 12000;
 const message = text => { byId('status').textContent = text; };
 window.WisdomData.onMessage(message);
-window.WisdomData.onInvalidate(reason => {
-  if (reason !== 'denied' && reason !== 'access') return;
-  sourceViewSerial++;
-  sourceViewController?.abort();
+window.WisdomData.onInvalidate(() => {
+  cancelSourceView();
   searchSerial++;
   searchController?.abort();
   searchController = null;
+  const form = byId('search');
+  if (form instanceof HTMLFormElement) form.reset();
+  const clear = form?.querySelector('[data-wisdom-clear-search]');
+  if (clear) clear.hidden = true;
   const results = byId('search-results');
   if (results) results.replaceChildren(node('p', 'Введите запрос для поиска.'));
 });
+function cancelSourceView() {
+  sourceViewSerial++;
+  const active = sourceViewController;
+  active?.abort();
+  document.querySelectorAll('dialog[data-wisdom-source-view]').forEach(dialog => dialog.close());
+  if (sourceViewController === active) sourceViewController = null;
+}
 document.addEventListener('click', event => {
   const trigger = event.target instanceof Element ? event.target.closest('button, a[href]') : null;
   latestClickTrigger = trigger;
   queueMicrotask(() => { if (latestClickTrigger === trigger) latestClickTrigger = null; });
 }, true);
-const safe = fn => async event => {
-  event?.preventDefault();
-  try { await fn(event); } catch (error) { message(error.message); }
+const readableError = error => {
+  if (typeof error?.message === 'string' && error.message.trim()) return error.message;
+  if (typeof error === 'string' && error.trim()) return error;
+  return 'Неизвестная ошибка.';
+};
+const currentReturnFocus = () => document.activeElement instanceof HTMLElement && document.activeElement !== document.body
+  ? document.activeElement
+  : latestClickTrigger instanceof HTMLElement && latestClickTrigger.isConnected ? latestClickTrigger : null;
+const restoreFocus = target => queueMicrotask(() => {
+  if (target instanceof HTMLElement && target.isConnected && typeof target.focus === 'function' && !target.matches(':disabled')) {
+    target.focus({preventScroll: true});
+  }
+});
+const safe = (fn, onError) => {
+  let pending = false;
+  return async event => {
+    event?.preventDefault();
+    if (pending) return;
+    pending = true;
+    const current = event?.currentTarget instanceof HTMLElement ? event.currentTarget : null;
+    const submitter = event?.type === 'submit'
+      ? (event.submitter instanceof HTMLElement ? event.submitter : current?.querySelector('button[type=submit]'))
+      : null;
+    const target = submitter || current;
+    const disabled = target && 'disabled' in target ? Boolean(target.disabled) : null;
+    const busy = target?.getAttribute('aria-busy');
+    if (target) target.setAttribute('aria-busy', 'true');
+    try {
+      const operation = fn(event);
+      if (target && disabled !== null) target.disabled = true;
+      await operation;
+    } catch (error) {
+      if (onError) onError(error, event); else message(readableError(error));
+    } finally {
+      pending = false;
+      if (target) {
+        if (disabled !== null) target.disabled = disabled;
+        if (busy === null) target.removeAttribute('aria-busy'); else target.setAttribute('aria-busy', busy);
+      }
+    }
+  };
 };
 const button = (text, fn) => node('button', text, {type: 'button', onclick: safe(fn)});
 function field(form, title, name, value = '', type = 'text') {
-  const id = 'f-' + crypto.randomUUID();
+  const id = 'f-' + uuid();
   form.append(node('label', title, {for: id}));
   const input = node(type === 'textarea' ? 'textarea' : 'input', null, {id, name});
   if (type !== 'textarea') input.type = type;
@@ -54,13 +102,65 @@ function field(form, title, name, value = '', type = 'text') {
   return input;
 }
 function dialogForm(title, render, submit) {
-  const dialog = node('dialog',null,{'data-wisdom-private':'true'}); const form = node('form');
-  dialog.append(node('h2', title), form);
+  const returnFocus = currentReturnFocus();
+  const headingId = 'dialog-title-' + uuid(), errorId = 'dialog-error-' + uuid();
+  const dialog = node('dialog', null, {'data-wisdom-private':'true','aria-labelledby':headingId});
+  const form = node('form');
+  const errorSummary = node('div', null, {id:errorId, role:'alert', tabindex:'-1', class:'dialog-form-error'});
+  errorSummary.hidden = true;
+  form.setAttribute('aria-describedby', errorId);
+  dialog.append(node('h2', title, {id:headingId}), form);
   render(form);
-  form.append(node('button', 'Сохранить', {type: 'submit'}), button('Отмена', () => dialog.close()));
-  form.addEventListener('submit', safe(async () => { await submit(new FormData(form)); dialog.close(); }));
-  dialog.addEventListener('close', () => dialog.remove());
-  document.body.append(dialog); dialog.showModal();
+  const submitButton = node('button', 'Сохранить', {type: 'submit'});
+  submitButton.setAttribute('aria-describedby', errorId);
+  form.append(errorSummary, submitButton, button('Отмена', () => dialog.close()));
+  form.addEventListener('submit', safe(async () => {
+    errorSummary.textContent = '';
+    errorSummary.hidden = true;
+    const data = new FormData(form);
+    await submit(data);
+    dialog.close();
+  }, error => {
+    errorSummary.textContent = 'Не удалось выполнить действие. Проверьте значения формы и повторите попытку. Причина: ' + readableError(error);
+    errorSummary.hidden = false;
+    errorSummary.focus();
+  }));
+  dialog.addEventListener('close', () => {
+    dialog.remove();
+    restoreFocus(returnFocus);
+  });
+  document.body.append(dialog);
+  dialog.showModal();
+}
+function confirmDialog({title = 'Подтверждение действия', description, confirmLabel = 'Подтвердить', cancelLabel = 'Отмена'} = {}) {
+  const returnFocus = currentReturnFocus();
+  return new Promise(resolve => {
+    const titleId = 'confirm-title-' + uuid(), descriptionId = 'confirm-description-' + uuid();
+    const dialog = node('dialog', null, {'data-wisdom-private':'true','aria-labelledby':titleId,'aria-describedby':descriptionId});
+    let settled = false;
+    const finish = value => {
+      if (settled) return;
+      settled = true;
+      resolve(Boolean(value));
+      if (dialog.open) dialog.close();
+    };
+    dialog.append(
+      node('h2', title, {id:titleId}),
+      node('p', description || 'Подтвердите выполнение действия.', {id:descriptionId})
+    );
+    const cancelButton = node('button', cancelLabel, {type:'button', onclick:() => finish(false)});
+    const confirmButton = node('button', confirmLabel, {type:'button', onclick:() => finish(true)});
+    dialog.append(cancelButton, confirmButton);
+    dialog.addEventListener('cancel', event => { event.preventDefault(); finish(false); });
+    dialog.addEventListener('close', () => {
+      if (!settled) { settled = true; resolve(false); }
+      dialog.remove();
+      restoreFocus(returnFocus);
+    });
+    document.body.append(dialog);
+    dialog.showModal();
+    cancelButton.focus({preventScroll:true});
+  });
 }
 const pager = options => window.WisdomList.create(featureHost, options);
 const titledList = (root, title, items, options) => {
@@ -132,8 +232,9 @@ async function viewSource(id, options = {}) {
   sourceViewController?.abort();
   const controller = new AbortController();
   const selection = ++sourceViewSerial;
+  const callerIsCurrent = typeof options.isCurrent === 'function' ? options.isCurrent : () => true;
   sourceViewController = controller;
-  const isCurrent = () => selection === sourceViewSerial && !controller.signal.aborted;
+  const isCurrent = () => callerIsCurrent() && selection === sourceViewSerial && !controller.signal.aborted;
   const explicitReturnFocus = options.returnFocus instanceof Element ? options.returnFocus : null;
   const clickedReturnFocus = latestClickTrigger instanceof Element && latestClickTrigger.isConnected ? latestClickTrigger : null;
   const activeReturnFocus = document.activeElement instanceof Element ? document.activeElement : null;
@@ -150,7 +251,9 @@ async function viewSource(id, options = {}) {
       requestController.abort();
     }, SOURCE_REQUEST_TIMEOUT_MS);
     try {
-      return await api(path, {signal: requestController.signal});
+      const response = await api(path, {signal: requestController.signal});
+      if (!isCurrent()) throw new DOMException('Просмотр источника отменён.', 'AbortError');
+      return response;
     } catch (error) {
       if (timedOut && !controller.signal.aborted) throw new Error('Время ожидания ответа источника истекло. Повторите открытие.');
       throw error;
@@ -160,13 +263,15 @@ async function viewSource(id, options = {}) {
     }
   };
   const targetQuote = typeof options.quote === 'string' && options.quote.length ? options.quote : '';
+  const targetFragmentId = options.fragmentId != null && String(options.fragmentId) ? String(options.fragmentId) : '';
   const targetLocator = options.locator && typeof options.locator === 'object' ? options.locator : {};
   const locatorPairs = [
     ['chapter', 'chapter'], ['file_page', 'file_page'], ['printed_label', 'printed_label'],
     ['paragraph', 'paragraph'], ['table_index', 'table_index'], ['cell_row', 'cell_row'], ['cell_column', 'cell_column']
   ].filter(([key]) => targetLocator[key] != null);
-  const hasTarget = Boolean(targetQuote || locatorPairs.length);
+  const hasTarget = Boolean(targetQuote || targetFragmentId || locatorPairs.length);
   const matchesTarget = part => {
+    if (targetFragmentId && String(part.id ?? part.fragment_id ?? '') !== targetFragmentId) return false;
     if (targetQuote && (typeof part.text !== 'string' || !part.text.includes(targetQuote))) return false;
     return locatorPairs.every(([locatorKey, fragmentKey]) => String(part[fragmentKey] ?? '') === String(targetLocator[locatorKey]));
   };
@@ -212,8 +317,8 @@ async function viewSource(id, options = {}) {
     if (!isCurrent()) return;
     throw error;
   }
-  const headingId = 'source-view-title-' + crypto.randomUUID();
-  const d = node('dialog',null,{'data-wisdom-private':'true','aria-labelledby':headingId});
+  const headingId = 'source-view-title-' + uuid();
+  const d = node('dialog',null,{'data-wisdom-private':'true','data-wisdom-source-view':'true','aria-labelledby':headingId});
   d.append(node('h2', initial.source.title, {id:headingId}));
   d.append(node('p', 'Автор: ' + (initial.source.author ?? 'не указан') + ' · Издание: ' + (initial.source.edition ?? 'не указано')));
   d.append(node('a', 'Скачать оригинал', {href: '/api/sources/' + id + '/original', download: initial.source.title}));
@@ -229,7 +334,11 @@ async function viewSource(id, options = {}) {
   const samePart = part => Boolean(targetPart && (part === targetPart || (Number.isInteger(part?.ordinal) && part.ordinal === targetPart.ordinal)));
   if (hasTarget) {
     targetLine.setAttribute('role', 'status');
-    const targetDescription = targetQuote ? (locatorPairs.length ? 'цитаты и локатора' : 'цитаты') : 'локатора';
+    const targetDescription = [
+      targetFragmentId ? 'фрагмента' : null,
+      targetQuote ? 'цитаты' : null,
+      locatorPairs.length ? 'локатора' : null
+    ].filter(Boolean).join(' и ');
     if (targetPart) {
       targetLine.textContent = (targetQuote ? 'Цитата найдена' : 'Фрагмент найден') + ' в источнике' + (locationOf(targetPart) ? ' · ' + locationOf(targetPart) : '') + '.';
     } else if (searchStop === 'limit') {
@@ -299,26 +408,43 @@ async function viewSource(id, options = {}) {
       }
     }
   }
+  let targetFocus = null;
   function renderFragments(fragments) {
     if (!isCurrent() || !d.isConnected) return;
     content.replaceChildren();
+    targetFocus = null;
     hasNext = fragments.length === SOURCE_PAGE_SIZE;
     for (const part of fragments) {
+      const fragment = node('article', null, {class:'source-fragment'});
+      const exactTarget = samePart(part) && (targetQuote || targetFragmentId);
+      if (exactTarget) {
+        fragment.id = 'source-fragment-' + uuid();
+        fragment.tabIndex = -1;
+        fragment.dataset.sourceFragmentTarget = 'true';
+        targetFocus = fragment;
+      }
       const pre = node('pre');
       const text = typeof part.text === 'string' ? part.text : '';
-      if (samePart(part) && targetQuote) {
+      if (exactTarget && targetQuote) {
         const at = text.indexOf(targetQuote);
         if (at >= 0) pre.append(document.createTextNode(text.slice(0, at)), node('mark', text.slice(at, at + targetQuote.length)), document.createTextNode(text.slice(at + targetQuote.length)));
         else pre.append(document.createTextNode(text));
       } else pre.append(document.createTextNode(text));
-      content.append(node('p', locationOf(part) || 'Место в тексте не указано.'), pre);
+      fragment.append(node('p', locationOf(part) || 'Место в тексте не указано.'), pre);
+      content.append(fragment);
     }
     pagerLine.textContent = fragments.length ? 'Показано фрагментов: ' + fragments.length + (hasNext ? ' · возможно, есть продолжение' : '') : 'Фрагментов в источнике пока нет.';
   }
   d.append(previous, next, pagerLine, targetLine, content);
   if (typeof options.onReturn === 'function') {
     const returnLabel = typeof options.returnLabel === 'string' && options.returnLabel.trim() ? options.returnLabel : 'Вернуться';
-    d.append(button(returnLabel, () => { d.close(); return options.onReturn(); }));
+    d.append(button(returnLabel, async () => {
+      const closed = new Promise(resolve => d.addEventListener('close', resolve, {once:true}));
+      d.close();
+      await closed;
+      if (!callerIsCurrent()) return;
+      return options.onReturn();
+    }));
   }
   d.append(button('Закрыть', () => d.close()));
   d.addEventListener('close', () => {
@@ -328,6 +454,10 @@ async function viewSource(id, options = {}) {
     d.remove();
     if (ownsView && returnFocus?.isConnected && typeof returnFocus.focus === 'function') returnFocus.focus({preventScroll: true});
   });
+  if (!isCurrent()) {
+    if (sourceViewController === controller) sourceViewController = null;
+    return;
+  }
   document.body.append(d);
   if (!isCurrent()) {
     if (sourceViewController === controller) sourceViewController = null;
@@ -335,7 +465,12 @@ async function viewSource(id, options = {}) {
     return;
   }
   d.showModal();
+  if (!isCurrent()) { d.close(); return; }
   renderFragments(displayPage.fragments);
+  if (targetFocus) {
+    targetFocus.scrollIntoView({block:'center'});
+    targetFocus.focus({preventScroll:true});
+  }
   previous.disabled = previousFrom.length === 0;
   next.disabled = !hasNext;
 }
@@ -439,7 +574,7 @@ async function openLibrary(lib, {guard = null} = {}) {
     empty: 'Источников пока нет. Загрузите материал выше.',
     renderItem: source => {
       const card = node('article', null, {class: 'card'});
-      card.append(button(source.title, () => viewSource(source.id)), node('p', 'Статус: ' + source.processing),
+      card.append(button(source.title, () => viewSource(source.id, {isCurrent:current})), node('p', 'Статус: ' + source.processing),
         button('Показать связанные понятия', () => featureHost.navigateMapSource(lib.id, source.id)));
       if (contributor) {
         card.append(button('Разобрать текст', () => processSource(source.id, false)));
@@ -580,7 +715,8 @@ searchClear.addEventListener('click', () => {
   byId('search-results').replaceChildren(node('p', 'Введите запрос для поиска.'));
 });
 searchInput?.addEventListener('input', () => { searchClear.hidden = !String(searchInput.value || '').trim(); });
-searchForm.addEventListener('submit', safe(async event => {
+searchForm.addEventListener('submit', async event => {
+  event.preventDefault();
   const query = String(new FormData(event.target).get('q') || '').trim();
   const list = byId('search-results');
   if (!query) {
@@ -631,7 +767,9 @@ searchForm.addEventListener('submit', safe(async event => {
           const sourceId = provenance.source_id, quote = typeof provenance.quote === 'string' ? provenance.quote : '';
           const hasLocator = ['chapter','file_page','printed_label','paragraph','table_index','cell_row','cell_column'].some(key => locator[key] != null);
           if (typeof sourceId === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(sourceId)) {
-            details.append(document.createTextNode(' · '), button(quote || hasLocator ? 'Открыть точное место' : 'Открыть источник', () => viewSource(sourceId, {quote, locator})));
+            const sourceOptions = {quote, locator, isCurrent:() => serial === searchSerial && !controller.signal.aborted};
+            if (provenance.fragment_id != null) sourceOptions.fragmentId = provenance.fragment_id;
+            details.append(document.createTextNode(' · '), button(quote || provenance.fragment_id != null || hasLocator ? 'Открыть точное место' : 'Открыть источник', () => viewSource(sourceId, sourceOptions)));
           }
           if (typeof source.url === 'string') {
             try {
@@ -654,21 +792,22 @@ searchForm.addEventListener('submit', safe(async event => {
   } finally {
     if (serial === searchSerial) searchController = null;
   }
-}));
+});
 byId('logout').addEventListener('click', safe(async () => { await post('/auth/logout'); location.reload(); }));
-const featureHost={node,button,api,post,notify:message,libraries:()=>libraries,currentLibrary:()=>selected,identity:()=>identity,
+const featureHost={node,button,api,post,notify:message,confirm:confirmDialog,libraries:()=>libraries,currentLibrary:()=>selected,identity:()=>identity,
   refreshLibrary:()=>selected?openLibrary(selected):Promise.resolve(),
   openSource:viewSource,
   librarySourcesPath:libraryId=>router.path('libraries',[libraryId,'sources']),
-  navigateMapSource:(libraryId,sourceId)=>{
-    const query = new URLSearchParams({library:libraryId,view:'semantic',source:sourceId});
+  navigateMapSource:(libraryId,sourceId,view='semantic')=>{
+    const query = new URLSearchParams({library:libraryId,view});
+    if (sourceId) query.set('source',sourceId);
     router.navigate(router.path('maps') + '?' + query.toString());
   },
   download:(filename,text,type)=>downloadBlob(filename,new Blob([text],{type})),
   downloadBlob,dialog:dialogForm,navigateResearch:()=>router.navigate('research'),
   openRuleVersion:async(id,version)=>{
-    const rule=await api('/api/rules/'+id);const d=node('dialog',null,{'data-wisdom-private':'true'});
-    d.append(node('h2',rule.title+' · Версия '+(version||rule.version_no)),node('p',rule.when_to_apply),node('p',rule.expected_effect));
+    const rule=await api('/api/rules/'+id);const headingId='rule-version-title-'+uuid();const d=node('dialog',null,{'data-wisdom-private':'true','aria-labelledby':headingId});
+    d.append(node('h2',rule.title+' · Версия '+(version||rule.version_no),{id:headingId}),node('p',rule.when_to_apply),node('p',rule.expected_effect));
     for(const a of rule.actions||[])d.append(node('p',a.body||a));
     d.append(button('Закрыть',()=>d.close()));d.addEventListener('close',()=>d.remove());document.body.append(d);d.showModal();
   }
@@ -702,6 +841,7 @@ ready().catch(() => {});
 
 router.register('libraries', {
   title: 'AI-wisdom — Библиотеки знаний',
+  leave: cancelSourceView,
   mount: async (container, context) => {
     await ready(); if (!context.isCurrent()) return;
     await ensureLibraries(); if (!context.isCurrent()) return;
@@ -718,6 +858,7 @@ router.register('libraries', {
 // контекст по-прежнему монтируется на её экране — этот адрес его не заменяет.
 router.register('context', {
   title: 'AI-wisdom — Контекст проекта',
+  leave: cancelSourceView,
   mount: async (container, context) => {
     await ready(); if (!context.isCurrent()) return;
     await ensureLibraries(); if (!context.isCurrent()) return;
@@ -740,6 +881,7 @@ router.register('context', {
 });
 router.register('uses', {
   title: 'AI-wisdom — Опыт применения',
+  leave: cancelSourceView,
   mount: async (container, context) => {
     await ready(); if (!context.isCurrent()) return;
     await loadUses();
@@ -747,7 +889,7 @@ router.register('uses', {
 });
 router.register('research', {
   title: 'AI-wisdom — Исследование и Studio',
-  leave: () => window.WisdomResearch.invalidate(),
+  leave: () => { cancelSourceView(); window.WisdomResearch.invalidate(); },
   mount: async (container, context) => {
     await ready(); if (!context.isCurrent()) return;
     await ensureLibraries(); if (!context.isCurrent()) return;
@@ -756,7 +898,7 @@ router.register('research', {
 });
 router.register('maps', {
   title: 'AI-wisdom — Карта знаний',
-  leave: () => window.WisdomMap.invalidate(),
+  leave: () => { cancelSourceView(); window.WisdomMap.invalidate(); },
   mount: async (container, context) => {
     await ready(); if (!context.isCurrent()) return;
     await ensureLibraries(); if (!context.isCurrent()) return;
@@ -768,6 +910,7 @@ router.register('maps', {
 });
 router.register('access', {
   title: 'AI-wisdom — Доступ',
+  leave: cancelSourceView,
   mount: async (container, context) => {
     await ready(); if (!context.isCurrent()) return;
     await ensureLibraries(); if (!context.isCurrent()) return;
@@ -776,6 +919,7 @@ router.register('access', {
 });
 router.register('jobs', {
   title: 'AI-wisdom — Задания',
+  leave: cancelSourceView,
   mount: async (container, context) => {
     await ready(); if (!context.isCurrent()) return;
     await window.WisdomCompletion.mountJobs(byId('jobs-workspace'), featureHost);
@@ -812,6 +956,7 @@ function clearRouteFailure(target) {
 }
 router.onChange((current, previous, error) => {
   if (previous && current && previous.name !== current.name) router.focusHeading();
+  if (previous && current && previous.name === current.name) cancelSourceView();
   if (!current) return;
   if (error) routeFailure(current, error);
   else clearRouteFailure(current);

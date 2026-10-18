@@ -18,16 +18,33 @@
     if (required) input.required = true;
     wrap.append(input); return {wrap, input};
   };
+  const errorMessage = error => {
+    if (typeof error?.message === 'string' && error.message.trim()) return error.message;
+    if (typeof error === 'string' && error.trim()) return error;
+    return 'Неизвестная ошибка.';
+  };
   const action = (label, fn, kind = 'secondary') => {
     const button = el('button', label, {type: 'button', class: kind});
+    let pending = false;
     button.addEventListener('click', async () => {
+      if (pending) return;
+      pending = true;
+      const disabled = button.disabled, busy = button.getAttribute('aria-busy');
       button.disabled = true;
-      try { await fn(); } catch (error) { window.WisdomCompletionHost?.notify(error.message); }
-      finally { button.disabled = false; }
+      button.setAttribute('aria-busy', 'true');
+      try { await fn(); } catch (error) {
+        const text = errorMessage(error);
+        if (window.WisdomCompletionHost?.notify) window.WisdomCompletionHost.notify(text);
+        else button.insertAdjacentElement('afterend', el('span', text, {role:'alert', class:'completion-error'}));
+      } finally {
+        pending = false;
+        button.disabled = disabled;
+        if (busy === null) button.removeAttribute('aria-busy'); else button.setAttribute('aria-busy', busy);
+      }
     }); return button;
   };
   const fail = (root, error) => {
-    root.replaceChildren(el('p', error.message || 'Не удалось загрузить данные. Попробуйте обновить раздел.', {role: 'alert', class: 'completion-error'}));
+    root.replaceChildren(el('p', errorMessage(error), {role: 'alert', class: 'completion-error'}));
   };
   const empty = (root, text) => root.append(el('p', text, {class: 'completion-empty'}));
 
@@ -146,22 +163,42 @@
         const explainLibrary = libraries.length ? selectField(removeForm, 'Проверить оставшийся доступ к библиотеке (необязательно)', 'library_id', libraries, 'id', item => item.name || item.id) : null;
         const remove = el('button', 'Убрать из группы', {type: 'submit'}); removeForm.append(remove);
         removeForm.append(el('p', 'Показываются активные участники организации. API не предоставляет отдельный список состава группы; отсутствие участника будет показано как отказ API.', {class: 'muted'}));
+        let removePending = false;
         removeForm.addEventListener('submit', async event => {
-          event.preventDefault(); if (!removeMember.value) return;
-          if (!window.confirm('Убрать выбранного участника из группы? Его прямые разрешения сохранятся.')) return;
+          event.preventDefault();
+          if (removePending || !removeMember.value) return;
+          const memberId = removeMember.value, libraryId = explainLibrary?.value || '';
+          const memberLabel = removeMember.selectedOptions[0]?.textContent || memberId;
+          const groupLabel = group.name || group.id;
+          const disabled = remove.disabled, busy = remove.getAttribute('aria-busy');
+          removePending = true;
           remove.disabled = true;
+          remove.setAttribute('aria-busy', 'true');
           try {
-            await host.api('/api/orgs/' + encodeURIComponent(accountId) + '/groups/' + encodeURIComponent(group.id) + '/members/' + encodeURIComponent(removeMember.value), {method: 'DELETE'});
-          } catch (error) { host.notify(error.message); remove.disabled = false; return; }
-          let outcome = 'Участник удалён из группы.';
-          if (explainLibrary?.value) {
-            try {
-              const detail = await host.api('/api/orgs/' + encodeURIComponent(accountId) + '/access/' + encodeURIComponent(removeMember.value) + '/libraries/' + encodeURIComponent(explainLibrary.value));
-              const paths = detail.paths.map(path => path.kind === 'direct' ? 'прямое разрешение ' + path.role : 'группа ' + (path.group_name || path.group_id) + ' · ' + path.role);
-              outcome += ' После изменения: ' + (detail.denied ? 'доступ отсутствует (' + detail.reason + ')' : 'эффективная роль ' + (detail.effective_role || 'не указана')) + (paths.length ? '; пути: ' + paths.join(', ') : '; активных путей нет') + ' (ревизия ' + detail.policy_revision + ').';
-            } catch (error) { outcome += ' Проверка оставшегося доступа не удалась: ' + error.message; }
+            const confirmed = await host.confirm({
+              title: 'Убрать участника из группы',
+              description: 'Убрать «' + memberLabel + '» из группы «' + groupLabel + '»? Доступ через эту группу перестанет предоставляться. Прямые разрешения участника и доступ через другие группы сохранятся.',
+              confirmLabel: 'Убрать из группы'
+            });
+            if (!confirmed) return;
+            await host.api('/api/orgs/' + encodeURIComponent(accountId) + '/groups/' + encodeURIComponent(group.id) + '/members/' + encodeURIComponent(memberId), {method: 'DELETE'});
+            let outcome = 'Участник удалён из группы.';
+            if (libraryId) {
+              try {
+                const detail = await host.api('/api/orgs/' + encodeURIComponent(accountId) + '/access/' + encodeURIComponent(memberId) + '/libraries/' + encodeURIComponent(libraryId));
+                const paths = detail.paths.map(path => path.kind === 'direct' ? 'прямое разрешение ' + path.role : 'группа ' + (path.group_name || path.group_id) + ' · ' + path.role);
+                outcome += ' После изменения: ' + (detail.denied ? 'доступ отсутствует (' + detail.reason + ')' : 'эффективная роль ' + (detail.effective_role || 'не указана')) + (paths.length ? '; пути: ' + paths.join(', ') : '; активных путей нет') + ' (ревизия ' + detail.policy_revision + ').';
+              } catch (error) { outcome += ' Проверка оставшегося доступа не удалась: ' + errorMessage(error); }
+            }
+            host.notify(outcome);
+            await mountAccess(root, host);
+          } catch (error) {
+            host.notify(errorMessage(error));
+          } finally {
+            removePending = false;
+            remove.disabled = disabled;
+            if (busy === null) remove.removeAttribute('aria-busy'); else remove.setAttribute('aria-busy', busy);
           }
-          host.notify(outcome); await mountAccess(root, host);
         });
         groupCard.append(membershipForm, removeForm);
 
@@ -173,7 +210,13 @@
             const library = libraries.find(item => item.id === grant.library_id);
             const row = el('p', (library?.name || grant.library_id) + ' · ' + grant.role);
             const revoke = action('Отозвать разрешение', async () => {
-              if (!window.confirm('Отозвать разрешение группы «' + group.name + '» для этой библиотеки?')) return;
+              const libraryLabel = library?.name || grant.library_id, groupLabel = group.name || group.id;
+              const confirmed = await host.confirm({
+                title: 'Отозвать разрешение группы',
+                description: 'Отозвать роль «' + grant.role + '» группы «' + groupLabel + '» для библиотеки «' + libraryLabel + '»? Доступ через эту группу для этой библиотеки перестанет предоставляться. Прямые разрешения участников и доступ через другие группы могут сохранить доступ.',
+                confirmLabel: 'Отозвать разрешение'
+              });
+              if (!confirmed) return;
               await host.api(grantsPath + '/' + encodeURIComponent(grant.library_id), {method: 'DELETE'}); await mountAccess(root, host);
             }, 'secondary');
             row.append(document.createTextNode(' · '), revoke); groupCard.append(row);
@@ -219,7 +262,14 @@
             const member = members.find(item => item.principal_id === grant.principal_id);
             const row = el('p', [member?.display_name || grant.principal_id, member?.email, grant.role].filter(Boolean).join(' · '));
             if (manager) row.append(document.createTextNode(' · '), action('Отозвать', async () => {
-              if (!window.confirm('Отозвать прямое разрешение участника на «' + (library.name || library.id) + '»? Групповой доступ при этом может сохраниться.')) return;
+              const libraryLabel = library.name || library.id;
+              const memberLabel = [member?.display_name, member?.email].filter(Boolean).join(' · ') || grant.principal_id;
+              const confirmed = await host.confirm({
+                title: 'Отозвать прямое разрешение',
+                description: 'Отозвать роль «' + grant.role + '» участника «' + memberLabel + '» на библиотеку «' + libraryLabel + '»? Прямой доступ перестанет предоставляться; доступ через группы может сохраниться.',
+                confirmLabel: 'Отозвать разрешение'
+              });
+              if (!confirmed) return;
               await host.api('/api/libraries/' + encodeURIComponent(library.id) + '/grants/' + encodeURIComponent(grant.principal_id), {method: 'DELETE'}); await mountAccess(root, host);
             }, 'secondary'));
             libraryCard.append(row);

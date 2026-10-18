@@ -64,10 +64,15 @@ window.WisdomResearch = (() => {
       const citations=Array.isArray(fresh.result?.citations)?fresh.result.citations:[];
       const cite=citations.find(c=>c.id===id);
       if (!cite) throw Error('Цитата больше не доступна.');
-      const d=n('dialog',null,{'data-wisdom-private':'true'}), quote=typeof cite.quote==='string'?cite.quote:'';
+      const headingId='research-citation-title-'+crypto.randomUUID();
+      const d=n('dialog',null,{'data-wisdom-private':'true','aria-labelledby':headingId}), quote=typeof cite.quote==='string'?cite.quote:'';
       const metadata=[cite.author,cite.edition].filter(Boolean).join(' · ');
-      d.append(n('h2',cite.title||'Цитата'),n('p',metadata||'Метаданные источника не указаны.'),n('p','Локатор: '+locate(cite)),n('blockquote',quote||'Текст цитаты не указан.'));
-      if(typeof cite.source_id==='string'&&cite.source_id) d.append(b('Открыть точное место',()=>host.openSource(cite.source_id,{quote,locator:cite.locator&&typeof cite.locator==='object'?cite.locator:{}})));
+      d.append(n('h2',cite.title||'Цитата',{id:headingId}),n('p',metadata||'Метаданные источника не указаны.'),n('p','Локатор: '+locate(cite)),n('blockquote',quote||'Текст цитаты не указан.'));
+      if(typeof cite.source_id==='string'&&cite.source_id) {
+        const sourceOptions={quote,locator:cite.locator&&typeof cite.locator==='object'?cite.locator:{},isCurrent:()=>valid()&&runId===currentRun&&selection===runSerial};
+        if(cite.fragment_id!=null)sourceOptions.fragmentId=cite.fragment_id;
+        d.append(b('Открыть точное место',()=>host.openSource(cite.source_id,sourceOptions)));
+      }
       else d.append(n('p','Источник цитаты недоступен в текущем ответе. Выберите другую цитату в результате.'));
       d.append(b('Вернуться к результату',()=>d.close()));
       d.addEventListener('close',()=>d.remove()); document.body.append(d); d.showModal();
