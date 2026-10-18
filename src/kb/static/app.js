@@ -146,11 +146,10 @@ const PUBLICATION_LABELS = new Map([
   ['withdrawn','Отозвано']
 ]);
 const USE_STATE_LABELS = new Map([
-  ['planned','Запланировано'],
   ['retrieved','Получено'],
   ['applied','Применено'],
-  ['completed','Завершено'],
-  ['abandoned','Оставлено без результата']
+  ['outcomed','Результат записан'],
+  ['corrected','Результат уточнён']
 ]);
 const SOURCE_PROCESSING_LABELS = new Map([
   ['queued', 'В очереди'],
@@ -487,7 +486,7 @@ const jobPollContextCurrent = context => {
     && isRouteCurrent(context.routeToken) && location.pathname === context.libraryPath
   );
 };
-async function trackJob(id, context) {
+async function trackJob(id, context, sourceRequestBinding = null) {
   if (!jobPollContextCurrent(context))
     throw new DOMException('Контекст отслеживания задания устарел.', 'AbortError');
   cancelJobPoll();
@@ -504,6 +503,7 @@ async function trackJob(id, context) {
     libraryPath: context.libraryPath,
     routeToken: context.routeToken,
     context,
+    sourceRequestBinding,
     terminalPath: null,
     terminalRouteToken: null,
     controller,
@@ -542,6 +542,16 @@ async function trackJob(id, context) {
     requireCurrent();
     if (['done', 'partial', 'failed', 'needs_ocr', 'cancelled'].includes(job.status)) {
       requireCurrent();
+      const sourceRequestBinding = owner.sourceRequestBinding;
+      const trackedRequest = sourceRequestBinding?.request;
+      if (
+        sourceRequestBinding !== null
+        && trackedRequest != null
+        && sourceProcessRequests.get(sourceRequestBinding.key) === trackedRequest
+        && String(trackedRequest.job_id ?? '') === jobId
+      ) {
+        sourceProcessRequests.delete(sourceRequestBinding.key);
+      }
       const library = selected;
       owner.phase = 'terminal';
       owner.terminalPath = libraryRouteTarget(owner.libraryId);
@@ -563,7 +573,7 @@ async function trackJob(id, context) {
           if (jobPollOwner === owner) cancelJobPoll();
           return;
         }
-        safe(() => trackJob(owner.id, owner.context))();
+        safe(() => trackJob(owner.id, owner.context, owner.sourceRequestBinding))();
       }, 3000);
     }
   } catch (error) {
@@ -607,7 +617,10 @@ async function processSource(id, extract, request = null, onJobConfirmed = null)
   pendingRequest.idempotency_key = null;
   suppliedRequest.idempotency_key = null;
   onJobConfirmed?.(pendingRequest.job_id);
-  await trackJob(pendingRequest.job_id, pollContext);
+  await trackJob(pendingRequest.job_id, pollContext, {
+    key: requestKey,
+    request: pendingRequest
+  });
 }
 async function viewSource(id, options = {}) {
   sourceViewController?.abort();
