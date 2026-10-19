@@ -39,6 +39,7 @@ from kb.access.policy import Principal, transaction_identity
 from kb.adapters.vector_clients import Deadline
 from kb.adapters.vector_reader import IndexUnavailable, OpenVikingReader
 from kb.catalog.content import attach_knowledge_provenance, lexical_search_knowledge
+from kb.retrieval.candidate_cache import CandidateCache
 from kb.retrieval.embedding_profile import SELECTED_PROFILE
 from kb.retrieval.ranking import reciprocal_rank_fusion
 from kb.retrieval.semantic_registry import sha256
@@ -104,8 +105,15 @@ def plans(conn, principal, scopes=None) -> dict[UUID, Plan]:
 
 
 class SemanticSearch:
-    def __init__(self, reader: OpenVikingReader, connections=None):
+    def __init__(
+        self,
+        reader: OpenVikingReader,
+        connections=None,
+        *,
+        candidates: CandidateCache | None = None,
+    ):
         self.reader = reader
+        self.candidates = candidates
         # None means "the caller owns a lease and handed it to us"; anything
         # else is the shared factory, and we take our own short phases.
         self.connections = connections
@@ -194,7 +202,33 @@ class SemanticSearch:
         }
 
         # -- the external phase, with nothing held.
-        candidates, unavailable = self._external(attempted, query, limit, source_ids, deadline)
+        if self.candidates is None:
+            candidates, unavailable = self._external(attempted, query, limit, source_ids, deadline)
+        else:
+            # The complete fresh plan and identity are part of the key. No
+            # source text, authorization decision or final answer is cached.
+            key = (
+                principal.principal_id,
+                principal.account_id,
+                principal.generation_watermark,
+                principal.cloud_client,
+                SELECTED_PROFILE.profile_hash,
+                sha256(query),
+                tuple(attempted.values()),
+                None if source_ids is None else tuple(sorted(source_ids)),
+                100 if source_ids is not None else min(100, limit * 3),
+            )
+            found = self.candidates.get_or_compute(
+                key,
+                lambda: self._external(attempted, query, limit, source_ids, deadline),
+                deadline,
+            )
+            if found is None:
+                candidates, unavailable = {}, set(attempted)
+            else:
+                frozen, missing = found
+                candidates = {library: list(items) for library, items in frozen}
+                unavailable = set(missing)
 
         # -- phase 2: current ACL and generation, hydration, final checks.
         with self._phase(conn, principal, factory) as current:
@@ -389,4 +423,6 @@ class SemanticSearch:
         still in flight: the pool retires anything a live search still holds
         and closes it when that search releases it.
         """
+        if self.candidates is not None:
+            self.candidates.close()
         self.reader.close()

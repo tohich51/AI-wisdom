@@ -21,6 +21,7 @@ from kb.http.auth_config import AuthSettings
 from kb.http.router import mount_api
 from kb.mcp.server import build_mcp
 from kb.mcp.timing import MCPTimingMiddleware
+from kb.retrieval.candidate_cache import CandidateCache
 from kb.retrieval.embedding_profile import SELECTED_PROFILE
 from kb.retrieval.semantic_search import SemanticSearch
 from kb.runtime_auth import install_auth
@@ -97,7 +98,8 @@ def create_app() -> FastAPI:
                 app.state.semantic_search = SemanticSearch(
                     OpenVikingReader(
                         os.environ["KB_OPENVIKING_URL"], Path(os.environ["KB_READ_KEYS_ROOT"])
-                    )
+                    ),
+                    candidates=CandidateCache(),
                 )
             async with anyio.create_task_group() as task_group:
                 task_group.start_soon(_purge_browser_pairings, app)
