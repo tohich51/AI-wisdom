@@ -177,21 +177,38 @@ const SOURCE_PAGE_SIZE = 200;
 const SOURCE_AUTO_SEARCH_PAGES = 3;
 const SOURCE_REQUEST_TIMEOUT_MS = 12000;
 const message = text => { byId('status').textContent = text; };
+function syncSearchScope() {
+  const scope = byId('search-scope');
+  const option = scope?.querySelector('option[value="selected"]');
+  if (!scope || !option) return null;
+  const selectedId = String(selected?.id || '');
+  const current = UUID_PATTERN.test(selectedId) && selected && String(selected.id) === selectedId
+    ? libraries.find(item => String(item?.id || '') === selectedId) || selected : null;
+  option.disabled = !current;
+  option.textContent = current ? 'Выбранная библиотека: ' + String(current.name || 'Без названия') : 'Выбранная библиотека недоступна';
+  if (!current && scope.value === 'selected') scope.value = 'all';
+  return current;
+}
+function cancelSearchResults({resetForm = false, prompt = 'Введите запрос для поиска.'} = {}) {
+  searchSerial++;
+  searchController?.abort();
+  searchController = null;
+  const form = byId('search');
+  if (resetForm && form instanceof HTMLFormElement) form.reset();
+  syncSearchScope();
+  const input = form?.elements.namedItem('q');
+  const clear = form?.querySelector('[data-wisdom-clear-search]');
+  if (clear) clear.hidden = !String(input?.value || '').trim();
+  byId('search-results')?.replaceChildren(node('p', prompt));
+}
 window.WisdomData.onMessage(message);
 window.WisdomData.onInvalidate(reason => {
   if (reason === 'access' || reason === 'denied') sourceProcessRequests.clear();
   cancelSourceView();
-  searchSerial++;
-  searchController?.abort();
-  searchController = null;
   const ambiguousMutation = String(reason || '').startsWith('ambiguous ');
   const form = byId('search');
   if (!ambiguousMutation && form instanceof HTMLFormElement) form.reset();
-  const queryValue = form instanceof HTMLFormElement ? form.elements.namedItem('q')?.value : '';
-  const clear = form?.querySelector('[data-wisdom-clear-search]');
-  if (clear) clear.hidden = ambiguousMutation ? !String(queryValue || '').trim() : true;
-  const results = byId('search-results');
-  if (results) results.replaceChildren(node('p', 'Введите запрос для поиска.'));
+  cancelSearchResults({prompt: 'Введите запрос для поиска.'});
 });
 function cancelSourceView() {
   sourceViewSerial++;
@@ -218,6 +235,8 @@ const clearPrivateRoots = () => {
   if (typeof window.WisdomResearch?.invalidate === 'function') window.WisdomResearch.invalidate();
   if (typeof window.WisdomMap?.invalidate === 'function') window.WisdomMap.invalidate();
   sourceProcessRequests.clear();
+  selected = null;
+  syncSearchScope();
   for (const id of [
     'library-list', 'library-detail', 'uses-list', 'context-workspace', 'research-workspace',
     'maps-workspace', 'access-workspace', 'jobs-workspace', 'search-results'
@@ -856,7 +875,18 @@ async function loadLibraryTypes(preferred) {
   const types = await api('/api/library-types', {noCache:true});
   if (!current()) throw new DOMException('Список типов устарел.', 'AbortError');
   const select = byId('library-kind'), value = preferred || select.value;
-  for (const type of types) LIBRARY_KIND_LABELS.set(type.key, type.title);
+  const coreSeedTitles = new Map([
+    ['reference', ['Reference', 'Справочник']],
+    ['brand', ['Brand', 'Бренд']],
+    ['project', ['Project', 'Проект']],
+    ['playbook', ['Playbook', 'Плейбук']],
+    ['experience', ['Experience', 'Опыт']]
+  ]);
+  for (const type of types) {
+    const seed = coreSeedTitles.get(String(type.key || ''));
+    const title = type.is_core === true && seed && type.title === seed[0] ? seed[1] : type.title;
+    LIBRARY_KIND_LABELS.set(type.key, title);
+  }
   const registered = new Map(types.map(type => [type.key, type]));
   select.replaceChildren(...Array.from(LIBRARY_KIND_LABELS, ([key, title]) =>
     node('option', title, {value:key, 'data-base-kind':registered.get(key)?.base_kind || (CORE_LIBRARY_KIND_LABELS.has(key) ? key : '')})));
@@ -1191,6 +1221,7 @@ async function openLibrary(lib, {guard = null, confirmedMutation = '', handoff =
   let leaseOwnsReads = externalGuard === null;
   const current = () => viewLease.current() && (leaseOwnsReads || !externalGuard || externalGuard());
   selected = lib;
+  syncSearchScope();
   if (typeof handoff === 'function') {
     // Handoff проверяет владельца независимо от уже изменившегося route token,
     // фиксирует терминальный маршрут и только затем передаёт чтение lease.
@@ -1605,6 +1636,8 @@ byId('create-library').addEventListener('submit', safe(async event => {
 }));
 const searchForm = byId('search');
 const searchInput = searchForm.querySelector('input[name="q"]');
+const searchScope = byId('search-scope');
+syncSearchScope();
 const existingClear = searchForm.querySelector('[data-wisdom-clear-search]') || Array.from(searchForm.querySelectorAll('button')).find(candidate => /^(Очистить поиск|Clear search)$/i.test((candidate.textContent || '').trim()));
 const searchClear = existingClear || node('button', 'Очистить поиск', {type: 'button'});
 searchClear.type = 'button';
@@ -1612,10 +1645,10 @@ searchClear.setAttribute('data-wisdom-clear-search', 'true');
 if (!existingClear) searchForm.append(searchClear);
 searchClear.hidden = !String(searchInput?.value || '').trim();
 searchClear.addEventListener('click', () => {
-  searchController?.abort(); searchController = null; searchSerial++;
-  searchForm.reset(); searchClear.hidden = true; searchInput?.focus();
-  byId('search-results').replaceChildren(node('p', 'Введите запрос для поиска.'));
+  cancelSearchResults({resetForm: true});
+  searchInput?.focus();
 });
+searchScope?.addEventListener('change', () => cancelSearchResults());
 searchInput?.addEventListener('input', () => { searchClear.hidden = !String(searchInput.value || '').trim(); });
 let searchComposing = false;
 searchInput?.addEventListener('compositionstart', () => { searchComposing = true; });
@@ -1630,6 +1663,13 @@ window.WisdomForms.submit(searchForm, async event => {
   event.preventDefault();
   if (searchComposing || event.isComposing) return;
   const query = String(new FormData(event.target).get('q') || '').trim();
+  const requestedScope = String(searchScope?.value || 'all');
+  const scopedLibrary = requestedScope === 'selected' ? syncSearchScope() : null;
+  if (requestedScope === 'selected' && !scopedLibrary) {
+    searchScope.value = 'all';
+    cancelSearchResults({prompt: 'Выбранная библиотека больше недоступна. Выберите область поиска заново.'});
+    return;
+  }
   const list = byId('search-results');
   if (!query) {
     searchController?.abort(); searchController = null; searchSerial++;
@@ -1643,7 +1683,9 @@ window.WisdomForms.submit(searchForm, async event => {
   searchController = controller; searchClear.hidden = false;
   list.replaceChildren(node('p', 'Ищу совпадения…', {role: 'status'}));
   try {
-    const result = await api('/api/search?q=' + encodeURIComponent(query), {signal: controller.signal});
+    const params = new URLSearchParams({q: query});
+    if (scopedLibrary) params.set('library_id', String(scopedLibrary.id));
+    const result = await api('/api/search?' + params.toString(), {signal: controller.signal});
     if (serial !== searchSerial || controller.signal.aborted) return;
     list.replaceChildren(node('p', ({semantic:'Поиск по смыслу',hybrid:'Поиск по смыслу и словам',lexical:'Поиск по словам'}[result.mode] || result.mode) + ' · ' + result.hits.length + ' совпадений'));
     if (result.indexed_library_count != null || result.pending_library_count != null) {
@@ -1652,7 +1694,10 @@ window.WisdomForms.submit(searchForm, async event => {
       if (result.pending_library_count != null) counts.push('индекс не готов — ' + result.pending_library_count);
       list.append(node('p', 'Библиотеки: ' + counts.join(' · ') + '.'));
     }
-    if (result.fallback_reason === 'index_pending_or_unavailable') list.append(node('p', 'Пока ищем по словам: индекс библиотеки ещё не готов или временно недоступен.'));
+    if (['semantic', 'hybrid'].includes(result.mode) && Number(result.pending_library_count) > 0)
+      list.append(node('p', 'В библиотеках с неготовым индексом доступен поиск по словам.'));
+    else if (result.mode === 'lexical' && result.fallback_reason === 'index_pending_or_unavailable')
+      list.append(node('p', 'Пока доступен поиск по словам: индекс библиотеки ещё не готов или временно недоступен.'));
     const hits = pager({
       empty: 'Совпадений не найдено.',
       size: 10,
@@ -2076,6 +2121,7 @@ router.register('context', {
     // Контекст сам проверяет, что открыт именно он, а не другая библиотека,
     // поэтому на этом экране выбранной библиотекой становится проект.
     selected = project;
+    syncSearchScope();
     const policy = await api('/api/libraries/' + project.id + '/policy');
     if (!context.isCurrent()) return;
     workspace.append(node('h2', project.name), node('p', 'Тип: ' + visibleEnum(LIBRARY_KIND_LABELS, project.kind, 'Тип не указан') + ' · Доступ: ' + visibleEnum(ROLE_LABELS, policy.effective_role)));
@@ -2163,6 +2209,16 @@ function clearRouteFailure(target) {
 }
 router.onChange((current, previous, error) => {
   const navigated = Boolean(previous && current && previous.token !== current.token);
+  const routeChanged = Boolean(navigated && (
+    previous.name !== current.name
+    || JSON.stringify(previous.params || []) !== JSON.stringify(current.params || [])
+    || new URLSearchParams(previous.query || '').toString() !== new URLSearchParams(current.query || '').toString()
+  ));
+  if (routeChanged) {
+    cancelSearchResults({prompt: 'Введите запрос для поиска.'});
+    selected = null;
+    syncSearchScope();
+  }
   if (navigated && !error) {
     if (jobPollOwner?.phase === 'terminal' && routeSnapshot()?.route === jobPollOwner.terminalPath)
       jobPollOwner.terminalRouteToken = current.token;

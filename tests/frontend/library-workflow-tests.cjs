@@ -195,5 +195,65 @@ async function test(name,fn){await fn();passed++;console.log('PASS '+name);}
  await test('Cancelled source read cannot open a dialog',async()=>{
   const f=fixture();let resolve;f.setHandler(()=>new Promise(r=>resolve=r));const pending=f.run('viewSource("source-example",{fragmentId:'+JSON.stringify(fragmentId)+'})');f.run('cancelSourceView()');resolve(response({source:sourceRecord,fragments:[fragment(650,fragmentId)]}));await pending;assert.equal(f.dialog(),null);
  });
+
+ await test('Search scope preserves global default and uses selected UUID only on request',async()=>{
+  const f=fixture(),form=f.document.getElementById('search');
+  const input=f.add('input','search-query',form);input.name='q';input.value='synthetic heading';
+  const scope=f.add('select','search-scope',form);scope.name='scope';scope.value='all';
+  for(const value of ['all','selected']){const o=f.add('option','scope-'+value,scope);o.setAttribute('value',value);}
+  const id='11111111-1111-4111-8111-111111111111';
+  f.run('libraries=[{id:'+JSON.stringify(id)+',name:"Пример"}];selected=libraries[0];');
+  const app=source('app.js');f.run(app.slice(app.indexOf('const searchForm ='),app.indexOf("byId('logout')")));
+  f.setHandler(()=>response({mode:'semantic',indexed_library_count:1,pending_library_count:1,fallback_reason:'index_pending_or_unavailable',hits:[{statement:'Synthetic shared heading',provenance:[]}]}));
+  await f.submit(form);
+  let params=new URL(f.requests.at(-1).url,'https://fixture.invalid').searchParams;
+  assert.equal(params.get('q'),'synthetic heading');assert.equal(params.has('library_id'),false);
+  assert.match(f.document.getElementById('search-results').textContent,/Поиск по смыслу/);
+  assert.match(f.document.getElementById('search-results').textContent,/В библиотеках с неготовым индексом/);
+  assert.doesNotMatch(f.document.getElementById('search-results').textContent,/Пока доступен поиск по словам/);
+  scope.value='selected';scope.dispatchEvent(new f.context.Event('change'));
+  assert.doesNotMatch(f.document.getElementById('search-results').textContent,/Synthetic shared heading/);
+  await f.submit(form);
+  params=new URL(f.requests.at(-1).url,'https://fixture.invalid').searchParams;
+  assert.equal(params.get('library_id'),id);
+  const count=f.requests.length;
+  f.run('selected=null;');scope.value='selected';
+  await f.submit(form);
+  assert.equal(f.requests.length,count);assert.equal(scope.value,'all');
+  assert.match(f.document.getElementById('search-results').textContent,/больше недоступна/);
+ });
+ await test('Changing scope cancels pending results and stale citation actions',async()=>{
+  const f=fixture(),form=f.document.getElementById('search');
+  const input=f.add('input','search-query',form);input.name='q';input.value='synthetic needle';
+  const scope=f.add('select','search-scope',form);scope.name='scope';scope.value='all';
+  for(const value of ['all','selected']){const o=f.add('option','pending-'+value,scope);o.setAttribute('value',value);}
+  f.run('selected={id:"11111111-1111-4111-8111-111111111111",name:"Пример"};');
+  const app=source('app.js');f.run(app.slice(app.indexOf('const searchForm ='),app.indexOf("byId('logout')")));
+  let resolve;f.setHandler(()=>new Promise(r=>resolve=r));
+  await f.submit(form);const request=f.requests.at(-1);assert(resolve);
+  scope.value='selected';scope.dispatchEvent(new f.context.Event('change'));
+  assert.equal(request.opts.signal.aborted,true);
+  resolve(response({mode:'semantic',hits:[{statement:'Forbidden stale result',provenance:[{source_id:'22222222-2222-4222-8222-222222222222',fragment_id:'33333333-3333-4333-8333-333333333333'}]}]}));
+  await settle();
+  const results=f.document.getElementById('search-results');
+  assert.doesNotMatch(results.textContent,/Forbidden stale result/);
+  assert.equal(f.button(results,'Открыть точное место'),undefined);
+ });
+ await test('Core seed localization preserves renamed core and custom type titles',async()=>{
+  const f=fixture();
+  f.setHandler(()=>response([
+   {key:'reference',title:'Reference',base_kind:'reference',is_core:true},
+   {key:'brand',title:'Новый брендовый раздел',base_kind:'brand',is_core:true},
+   {key:'manual',title:'Reference',base_kind:'reference',is_core:false},
+   {key:'project',title:'Project',base_kind:'project',is_core:true}
+  ]));
+  await f.run('loadLibraryTypes()');
+  const options=f.document.getElementById('library-kind').options;
+  assert.equal(options.find(o=>o.value==='reference').textContent,'Справочник');
+  assert.equal(options.find(o=>o.value==='project').textContent,'Проект');
+  assert.equal(options.find(o=>o.value==='brand').textContent,'Новый брендовый раздел');
+  assert.equal(options.find(o=>o.value==='manual').textContent,'Reference');
+  assert.equal(options.find(o=>o.value==='manual').dataset.baseKind,'reference');
+ });
  console.log(JSON.stringify({passed,failed:0,synthetic:true,browser:false,network:false}));
 })().catch(error=>{console.error(error);process.exitCode=1;});
