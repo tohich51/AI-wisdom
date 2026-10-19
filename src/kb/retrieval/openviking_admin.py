@@ -8,7 +8,7 @@ from pathlib import Path
 
 import httpx
 from openviking_sdk import SyncHTTPClient
-from openviking_sdk.errors import AlreadyExistsError
+from openviking_sdk.errors import AlreadyExistsError, ConflictError
 
 from kb.adapters.secrets import _reject_symlinks
 from kb.retrieval.embedding_profile import SELECTED_PROFILE
@@ -149,7 +149,7 @@ class OpenVikingAdmin:
                     description="Knowledge library boundary",
                     acl={"acl_mode": "restricted", "entries": self._entries(spec)},
                 )
-            except AlreadyExistsError:
+            except (AlreadyExistsError, ConflictError):
                 client.acl_set(uri, self._entries(spec), acl_mode="restricted")
             client.wait_processed(timeout=300)
             self._verify(spec, client)
