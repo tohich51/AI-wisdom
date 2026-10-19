@@ -1781,6 +1781,7 @@ router.register('uses', {
   leave: cancelSourceView,
   mount: async (container, context) => {
     await ready(); if (!context.isCurrent()) return;
+    await ensureLibraries(); if (!context.isCurrent()) return;
     await loadUses();
   }
 });
