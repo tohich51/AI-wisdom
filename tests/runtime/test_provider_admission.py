@@ -269,3 +269,96 @@ def test_transport_failure_distinguishes_known_not_started_from_unknown(world, u
                 ).status_code
                 == 200
             )
+
+
+def test_unresolved_provider_barrier_fails_research_epoch_and_needs_fresh_action(
+    world, monkeypatch
+):
+    from test_research_grounding import parsed
+    from test_research_product import execute
+
+    from kb.jobs.research import run_research
+    from kb.research import runs
+
+    job, job_attempt = _job(world)
+    barrier_key = _key()
+
+    def lost_response():
+        raise httpx.ReadTimeout("synthetic response lost")
+
+    with psycopg.connect(world["worker"]) as conn:
+        with pytest.raises(ProviderReviewRequired):
+            _call(conn, world, job, job_attempt, barrier_key, lost_response)
+
+    source_id = parsed(world, "Измерьте результат эксперимента. Сегмент определяет аудиторию.")
+    with psycopg.connect(world["dsn"]) as conn:
+        submitted = runs.submit_research(
+            conn,
+            world["principal"],
+            world["lib"],
+            [source_id],
+            "research",
+            "Как проверить?",
+            str(uuid4()),
+        )
+    run_id = submitted["run_id"]
+    with psycopg.connect(world["admin"]) as conn:
+        assert conn.execute(
+            "SELECT status FROM kb.research_run WHERE id=%s", (run_id,)
+        ).fetchone() == ("queued",)
+
+    provider_invocations = []
+
+    def forbidden_post(*_args, **_kwargs):
+        provider_invocations.append(True)
+        raise RuntimeError("provider must not be invoked")
+
+    monkeypatch.setattr("kb.jobs.research.httpx.post", forbidden_post)
+
+    # Replay the original delivery and all six retry deliveries against the same epoch.
+    deliveries = []
+    with psycopg.connect(world["admin"]) as conn:
+        for _ in range(7):
+            assert (
+                run_research(
+                    world["worker"],
+                    run_id,
+                    world["principal"],
+                    "http://runner.test",
+                    "t" * 32,
+                )
+                is None
+            )
+            deliveries.append(
+                conn.execute(
+                    "SELECT status,error_code,completed_at IS NOT NULL,attempt_token "
+                    "FROM kb.research_run WHERE id=%s",
+                    (run_id,),
+                ).fetchone()
+            )
+        barrier = conn.execute(
+            "SELECT state FROM kb.provider_call WHERE call_key=%s", (barrier_key,)
+        ).fetchone()
+
+    assert provider_invocations == []
+    assert all(row[:3] == ("failed", "model_unavailable", True) for row in deliveries)
+    assert deliveries[0][3] is not None
+    assert len({row[3] for row in deliveries}) == 1
+    assert barrier == ("unknown",)
+
+    _resolve(world, barrier_key)
+    fresh_run_id, _ = execute(world, monkeypatch)
+    assert fresh_run_id != run_id
+
+    with psycopg.connect(world["admin"]) as conn:
+        original = conn.execute(
+            "SELECT status,error_code FROM kb.research_run WHERE id=%s", (run_id,)
+        ).fetchone()
+        fresh = conn.execute(
+            "SELECT status,error_code,jsonb_array_length(result->'citations') "
+            "FROM kb.research_run WHERE id=%s",
+            (fresh_run_id,),
+        ).fetchone()
+
+    assert original == ("failed", "model_unavailable")
+    assert fresh == ("done", None, 1)

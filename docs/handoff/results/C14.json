@@ -38,5 +38,13 @@
     "Independent Sol6.1 acceptance of same SHA",
     "Required release/build/backup/deploy/readback"
   ],
-  "mcp_latency_target": "Not closed by C14; latest prior full first response 3759ms exceeds 1-2s."
+  "mcp_latency_target": "Not closed by C14; latest prior full first response 3759ms exceeds 1-2s.",
+  "review_correction": {
+    "finding": "Finite ProviderBusy retries must not leave a durable queued research run",
+    "fix": "Terminal failed/model_unavailable/completed_at on exact current epoch; redeliveries no-op; new explicit action after provider reconciliation",
+    "executor_response_id": "0725226933e437021f58a0daab0a6a55",
+    "focused_check": "focused-5:7passed,including7redeliveries/no provider and fresh cited action",
+    "previous_full_gate": "fc802bee:1438passed,not release evidence for corrected SHA",
+    "new_exact_sha_gate": "pending"
+  }
 }

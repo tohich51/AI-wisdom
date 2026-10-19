@@ -211,14 +211,13 @@ def run_research(dsn, run_id, principal, runner_url, worker_token):
         except ProviderBusy:
             conn.rollback()
             with transaction_identity(conn, principal):
-                reset = conn.execute(
-                    "UPDATE kb.research_run SET status='queued',started_at=NULL,"
-                    "attempt_token=NULL,error_code='model_unavailable' "
-                    "WHERE id=%s AND status='running' AND attempt_token=%s RETURNING id",
+                conn.execute(
+                    "UPDATE kb.research_run SET status='failed',error_code='model_unavailable',"
+                    "completed_at=now() WHERE id=%s AND status='running' "
+                    "AND attempt_token=%s",
                     (run_id, attempt),
-                ).fetchone()
-            if reset is not None:
-                raise
+                )
+            return
         except ProviderReviewRequired as exc:
             conn.rollback()
             with transaction_identity(conn, principal):
