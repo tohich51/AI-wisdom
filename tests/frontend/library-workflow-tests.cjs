@@ -255,5 +255,43 @@ async function test(name,fn){await fn();passed++;console.log('PASS '+name);}
   assert.equal(options.find(o=>o.value==='manual').textContent,'Reference');
   assert.equal(options.find(o=>o.value==='manual').dataset.baseKind,'reference');
  });
+
+ await test('Route change clears stale detail without re-keying its saved draft',async()=>{
+  const f=fixture(),id='11111111-1111-4111-8111-111111111111';
+  const scope=f.add('select','search-scope');scope.value='selected';
+  const chosen=f.add('option','chosen-library-option',scope);chosen.setAttribute('value','selected');
+  f.route.params=[id];
+  f.run('selected={id:'+JSON.stringify(id)+',name:"Пример"};');
+  f.context.WisdomForms.configureContext(()=>({
+   accountId:'fixture-account',principalId:'fixture-reader',routeName:f.route.name,
+   params:f.route.params,query:'',route:'/app/'+f.route.name+'/'+f.route.params.join('/'),
+   libraryId:f.route.params[0]||'',projectId:'',authorized:true
+  }));
+  const makeForm=(parent)=>{
+   const form=f.add('form','route-draft',parent),input=f.add('input','route-draft-title',form);
+   input.name='title';form.dataset.draftKey='route-rule-title';form.setAttribute('aria-label','Правило');f.context.WisdomForms.enhance(form);return {form,input};
+  };
+  const old=makeForm(f.document.getElementById('library-detail'));
+  old.input.value='Несохранённый личный черновик';old.form.dispatchEvent(new f.context.Event('input',{target:old.input}));
+  f.context.WisdomRouter.onChange=fn=>{f.context.onRouteChanged=fn;};f.context.WisdomRouter.start=()=>{};
+  for(const name of ['cancelJobPoll','invalidatePrivateDialogs','clearRouteFailure']){
+   if(f.run('typeof '+name)==='undefined')f.run('var '+name+'=()=>{};');
+  }
+  const app=source('app.js');f.run(app.slice(app.indexOf('router.onChange(')));
+  const previous={...f.route,params:[...f.route.params]};
+  Object.assign(f.route,{token:2,name:'uses',params:[]});
+  f.context.onRouteChanged(f.route,previous);
+  assert.equal(f.document.getElementById('library-detail').children.length,0);
+  assert.equal(old.form.isConnected,false);assert.equal(f.run('selected'),null);assert.equal(scope.value,'all');assert.equal(chosen.disabled,true);
+  const unrelated=makeForm(f.document.body);f.context.WisdomForms.refreshRecovery();
+  assert.equal(f.button(unrelated.form,'Восстановить введённый текст'),undefined,'old private text must not be re-keyed to Experience');
+  unrelated.form.remove();
+  Object.assign(f.route,{token:3,name:'libraries',params:[id]});
+  const reopened=makeForm(f.document.getElementById('library-detail'));f.context.WisdomForms.refreshRecovery();
+  const restore=f.button(reopened.form,'Восстановить введённый текст');
+  assert(restore,'the old library draft must remain available on reopening');
+  assert.equal(restore.parentElement.hidden,false);
+ });
+
  console.log(JSON.stringify({passed,failed:0,synthetic:true,browser:false,network:false}));
 })().catch(error=>{console.error(error);process.exitCode=1;});

@@ -2216,6 +2216,8 @@ router.onChange((current, previous, error) => {
   ));
   if (routeChanged) {
     cancelSearchResults({prompt: 'Введите запрос для поиска.'});
+    // Input/change already saved drafts under the old route; do not re-key them here.
+    byId('library-detail')?.replaceChildren();
     selected = null;
     syncSearchScope();
   }
