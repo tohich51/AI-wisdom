@@ -89,9 +89,23 @@ def sources(
 
 
 @router.get("/sources/{source_id}")
-def source(source_id: UUID, conn: Db, me: Me, from_fragment: int = 0, limit: int = 20):
+def source(
+    source_id: UUID,
+    conn: Db,
+    me: Me,
+    from_fragment: int = 0,
+    limit: int = 20,
+    fragment_id: UUID | None = None,
+):
     with mapped_errors():
-        return content.read_source(conn, me, source_id, from_fragment, limit)
+        return content.read_source(
+            conn,
+            me,
+            source_id,
+            from_fragment,
+            limit,
+            fragment_id=fragment_id,
+        )
 
 
 @router.patch("/sources/{source_id}/metadata")

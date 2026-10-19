@@ -72,6 +72,7 @@ class ReadSourceArgs(ToolArgs):
     source_id: UUID
     from_fragment: int = Field(default=0, ge=0)
     limit: int = Field(default=20, ge=1, le=200)
+    fragment_id: UUID | None = None
 
 
 # 4 ----------------------------------------------------------- get rule

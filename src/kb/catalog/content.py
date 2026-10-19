@@ -321,12 +321,22 @@ def read_source(
     source_id: UUID,
     from_fragment: int = 0,
     limit: int = 20,
+    *,
+    fragment_id: UUID | None = None,
 ) -> dict[str, Any]:
-    """Read one visible source and a bounded, ordinal-ordered fragment page."""
+    """Read one visible source and a bounded, ordinal-ordered fragment page.
+
+    When ``fragment_id`` is supplied, source authorization is checked first and
+    the target must be a visible fragment of that source. ``fragment_id`` takes
+    precedence over ``from_fragment``; missing, inaccessible, or mismatched
+    targets are refused without falling back to ``from_fragment``.
+    """
     _require_principal(principal)
     source_id = _require_uuid(source_id, "source_id")
     from_fragment = _bounded_integer(from_fragment, "from_fragment", minimum=0)
     limit = _bounded_integer(limit, "limit", minimum=1, maximum=200)
+    if fragment_id is not None:
+        fragment_id = _require_uuid(fragment_id, "fragment_id")
 
     with transaction_identity(conn, principal), conn.cursor(row_factory=dict_row) as cursor:
         cursor.execute(
@@ -342,6 +352,23 @@ def read_source(
         if source_row is None:
             raise AccessDenied("forbidden")
 
+        resolved_from_fragment = from_fragment
+        if fragment_id is not None:
+            cursor.execute(
+                """
+                SELECT ordinal
+                FROM kb.fragment
+                WHERE id = %s
+                  AND source_id = %s
+                LIMIT 1
+                """,
+                (fragment_id, source_id),
+            )
+            target_row = cursor.fetchone()
+            if target_row is None:
+                raise AccessDenied("forbidden")
+            resolved_from_fragment = target_row["ordinal"]
+
         cursor.execute(
             """
             SELECT id, source_id, ordinal, locator_kind, file_page, printed_label,
@@ -354,7 +381,7 @@ def read_source(
             ORDER BY ordinal
             LIMIT %s
             """,
-            (source_id, from_fragment, limit),
+            (source_id, resolved_from_fragment, limit),
         )
         fragments = [dict(row) for row in cursor.fetchall()]
         event_id = record_retrieval(cursor, principal, item_kind="source", item_id=source_id)

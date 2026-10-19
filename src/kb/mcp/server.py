@@ -339,9 +339,27 @@ def build_mcp(app, hosts):
             }
         )
     )
-    def read_source(source_id: UUID, ctx: Context, from_fragment: int = 0, limit: int = 20):
-        args = ReadSourceArgs(source_id=source_id, from_fragment=from_fragment, limit=limit)
-        return call(ctx, content.read_source, args.source_id, args.from_fragment, args.limit)
+    def read_source(
+        source_id: UUID,
+        ctx: Context,
+        from_fragment: int = 0,
+        limit: int = 20,
+        fragment_id: UUID | None = None,
+    ):
+        args = ReadSourceArgs(
+            source_id=source_id,
+            from_fragment=from_fragment,
+            limit=limit,
+            fragment_id=fragment_id,
+        )
+        return call(
+            ctx,
+            content.read_source,
+            args.source_id,
+            args.from_fragment,
+            args.limit,
+            fragment_id=args.fragment_id,
+        )
 
     @server.tool(
         annotations=ToolAnnotations.model_validate(
