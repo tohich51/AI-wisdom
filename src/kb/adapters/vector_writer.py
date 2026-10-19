@@ -5,7 +5,7 @@ from functools import wraps
 from uuid import UUID
 
 from openviking_sdk import SyncHTTPClient
-from openviking_sdk.errors import AlreadyExistsError
+from openviking_sdk.errors import AlreadyExistsError, ConflictError
 
 from kb.retrieval.embedding_profile import SELECTED_PROFILE
 
@@ -74,7 +74,7 @@ class OpenVikingWriter:
     def prepare(self, root):
         try:
             self.client.mkdir(root, description="Knowledge generation")
-        except AlreadyExistsError:
+        except (AlreadyExistsError, ConflictError):
             pass
         self._wait()
 

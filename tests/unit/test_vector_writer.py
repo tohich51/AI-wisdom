@@ -1,6 +1,7 @@
 from uuid import uuid4
 
 import pytest
+from openviking_sdk.errors import AlreadyExistsError, ConflictError, PermissionDeniedError
 
 from kb.adapters.vector_writer import OpenVikingWriter
 from kb.retrieval.embedding_profile import SELECTED_PROFILE
@@ -130,3 +131,39 @@ def test_canary_requires_expected_level2_and_ignores_other_results(monkeypatch):
         10,
         {"context_type": "resource", "level": 2, "read_content": False},
     )
+
+
+@pytest.mark.parametrize("error", [AlreadyExistsError(ROOT), ConflictError("owned directory")])
+def test_prepare_resumes_an_existing_generation(monkeypatch, error):
+    writer = make_writer(monkeypatch)
+
+    def mkdir(uri, **kwargs):
+        raise error
+
+    monkeypatch.setattr(writer.client, "mkdir", mkdir, raising=False)
+    assert writer.prepare(ROOT) is None
+
+
+def test_prepare_conflict_does_not_bypass_processing_errors(monkeypatch):
+    monkeypatch.setattr(FakeClient, "wait_error_counts", (0, 1))
+    writer = make_writer(monkeypatch)
+
+    def mkdir(uri, **kwargs):
+        raise ConflictError("owned directory")
+
+    monkeypatch.setattr(writer.client, "mkdir", mkdir, raising=False)
+    with pytest.raises(RuntimeError, match="index_writer_unavailable"):
+        writer.prepare(ROOT)
+    assert writer.client.wait_index == 2
+
+
+def test_prepare_keeps_permission_denial_closed(monkeypatch):
+    writer = make_writer(monkeypatch)
+
+    def mkdir(uri, **kwargs):
+        raise PermissionDeniedError()
+
+    monkeypatch.setattr(writer.client, "mkdir", mkdir, raising=False)
+    with pytest.raises(RuntimeError, match="index_writer_unavailable"):
+        writer.prepare(ROOT)
+    assert writer.client.wait_index == 1
