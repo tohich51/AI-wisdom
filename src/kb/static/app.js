@@ -327,7 +327,42 @@ const safe = (fn, onError) => {
     }
   };
 };
-const button = (text, fn) => node('button', text, {type: 'button', onclick: safe(fn)});
+const safeAction = (control, fn) => {
+  const contexts = new WeakMap();
+  let errorNode = null;
+  control.addEventListener('click', event => {
+    const binding = identityCoordinates(identity);
+    contexts.set(event, {
+      routeToken: captureRouteToken(),
+      accountId: binding?.accountId,
+      principalId: binding?.principalId,
+      identitySerial: freshIdentitySerial,
+      libraryView
+    });
+    errorNode?.remove();
+    errorNode = null;
+  }, {capture: true});
+  return safe(fn, (error, event) => {
+    const context = contexts.get(event);
+    const binding = identityCoordinates(identity);
+    if (!context || context.routeToken == null || !isRouteCurrent(context.routeToken)
+        || !control.isConnected || context.libraryView !== libraryView
+        || context.identitySerial !== freshIdentitySerial
+        || binding?.accountId !== context.accountId || binding?.principalId !== context.principalId) return;
+    const parent = control.parentNode;
+    if (!parent) return;
+    errorNode?.remove();
+    errorNode = node('p', readableError(error), {
+      class: 'form-server-error', role: 'alert', 'aria-atomic': 'true', 'data-wisdom-action-error': 'true'
+    });
+    parent.insertBefore(errorNode, control.nextSibling);
+  });
+};
+const button = (text, fn) => {
+  const control = node('button', text, {type: 'button'});
+  control.addEventListener('click', safeAction(control, fn));
+  return control;
+};
 const pagerButton = (text, fn) => {
   const control = node('button', text, {type: 'button'});
   control.addEventListener('click', event => { event.preventDefault(); fn(event); });
@@ -555,6 +590,7 @@ async function trackJob(id, context, sourceRequestBinding = null) {
     routeToken: context.routeToken,
     context,
     sourceRequestBinding,
+    handoffComplete: false,
     terminalPath: null,
     terminalRouteToken: null,
     controller,
@@ -563,20 +599,26 @@ async function trackJob(id, context, sourceRequestBinding = null) {
   };
   jobPollOwner = owner;
   activeJob = jobId;
-  const current = () => {
+  const owned = () => {
     const binding = identityCoordinates(identity);
+    return jobPollOwner === owner
+      && owner.epoch === jobPollEpoch
+      && !owner.handoffComplete
+      && !controller.signal.aborted
+      && binding?.accountId === owner.accountId
+      && binding?.principalId === owner.principalId
+      && String(selected?.id ?? '') === owner.libraryId;
+  };
+  const current = () => {
     const originalRoute = isRouteCurrent(owner.routeToken) && location.pathname === owner.libraryPath;
     const terminalRoute = owner.phase === 'terminal'
       && owner.terminalRouteToken !== null
       && isRouteCurrent(owner.terminalRouteToken)
       && location.pathname === owner.terminalPath;
-    return jobPollOwner === owner
-      && owner.epoch === jobPollEpoch
-      && !controller.signal.aborted
-      && binding?.accountId === owner.accountId
-      && binding?.principalId === owner.principalId
-      && String(selected?.id ?? '') === owner.libraryId
-      && (originalRoute || terminalRoute);
+    return owned() && (originalRoute || terminalRoute);
+  };
+  const requireOwned = () => {
+    if (!owned()) throw new DOMException('Владение отслеживанием задания устарело.', 'AbortError');
   };
   const requireCurrent = () => {
     if (!current()) throw new DOMException('Отслеживание задания отменено.', 'AbortError');
@@ -593,29 +635,44 @@ async function trackJob(id, context, sourceRequestBinding = null) {
     requireCurrent();
     if (['done', 'partial', 'failed', 'needs_ocr', 'cancelled'].includes(job.status)) {
       requireCurrent();
-      const sourceRequestBinding = owner.sourceRequestBinding;
-      const trackedRequest = sourceRequestBinding?.request;
-      if (
-        sourceRequestBinding !== null
-        && trackedRequest != null
-        && sourceProcessRequests.get(sourceRequestBinding.key) === trackedRequest
-        && String(trackedRequest.job_id ?? '') === jobId
-      ) {
-        sourceProcessRequests.delete(sourceRequestBinding.key);
-      }
       const library = selected;
       owner.phase = 'terminal';
       owner.terminalPath = libraryRouteTarget(owner.libraryId);
-      const refresh = openLibrary(library, {guard: current});
-      const terminalToken = captureRouteToken();
-      if (terminalToken !== owner.routeToken && terminalToken != null) owner.terminalRouteToken = terminalToken;
-      requireCurrent();
-      await refresh;
-      requireCurrent();
-      message(job.status === 'done'
+      const terminalMessage = job.status === 'done'
         ? 'Материал обработан. Проверьте черновики перед публикацией.'
-        : 'Состояние: ' + statusLabel + errorText + '. Можно продолжить; готовые части сохраняются.');
-      cancelJobPoll();
+        : 'Состояние: ' + statusLabel + errorText + '. Можно продолжить; готовые части сохраняются.';
+      requireCurrent();
+      message(terminalMessage);
+      await openLibrary(library, {
+        guard: current,
+        handoff: lease => {
+          if (!lease?.current()
+              || String(lease.libraryId) !== owner.libraryId
+              || lease.libraryPath !== owner.terminalPath) {
+            throw new DOMException('Lease библиотеки устарела.', 'AbortError');
+          }
+          requireOwned();
+          if (owner.phase !== 'terminal' || owner.handoffComplete) {
+            throw new DOMException('Передача чтения библиотеки недействительна.', 'AbortError');
+          }
+          // libraryRoute мог уже заменить токен исходного подраздела. Переход
+          // фиксируется после создания стабильной lease и до route-aware проверки.
+          owner.terminalRouteToken = lease.routeToken;
+          requireCurrent();
+          const sourceRequestBinding = owner.sourceRequestBinding;
+          const trackedRequest = sourceRequestBinding?.request;
+          if (
+            sourceRequestBinding !== null
+            && trackedRequest != null
+            && sourceProcessRequests.get(sourceRequestBinding.key) === trackedRequest
+            && String(trackedRequest.job_id ?? '') === jobId
+          ) {
+            sourceProcessRequests.delete(sourceRequestBinding.key);
+          }
+          owner.handoffComplete = true;
+          cancelJobPoll();
+        }
+      });
     } else {
       requireCurrent();
       owner.timer = setTimeout(() => {
@@ -628,6 +685,7 @@ async function trackJob(id, context, sourceRequestBinding = null) {
       }, 3000);
     }
   } catch (error) {
+    if (owner.handoffComplete) throw error;
     if (!current()) throw new DOMException('Отслеживание задания отменено.', 'AbortError');
     cancelJobPoll();
     throw error;
@@ -668,10 +726,25 @@ async function processSource(id, extract, request = null, onJobConfirmed = null)
   pendingRequest.idempotency_key = null;
   suppliedRequest.idempotency_key = null;
   onJobConfirmed?.(pendingRequest.job_id);
-  await trackJob(pendingRequest.job_id, pollContext, {
-    key: requestKey,
-    request: pendingRequest
-  });
+  try {
+    await trackJob(pendingRequest.job_id, pollContext, {
+      key: requestKey,
+      request: pendingRequest
+    });
+  } catch (error) {
+    if (error?.name === 'AbortError') throw error;
+    const statusError = Error(
+      'Обработка принята сервером; задание ' + pendingRequest.job_id
+      + ' сохранено. Не удалось проверить состояние задания; '
+      + 'автоматическая повторная обработка не выполнялась.'
+    );
+    statusError.cause = error;
+    statusError.jobId = pendingRequest.job_id;
+    for (const key of ['code', 'status']) {
+      if (error?.[key] !== undefined) statusError[key] = error[key];
+    }
+    throw statusError;
+  }
 }
 async function viewSource(id, options = {}) {
   sourceViewController?.abort();
@@ -931,14 +1004,65 @@ async function viewSource(id, options = {}) {
   previous.disabled = previousFrom.length === 0;
   next.disabled = !hasNext;
 }
-async function openLibrary(lib, {guard = null} = {}) {
+async function openLibrary(lib, {guard = null, confirmedMutation = '', handoff = null} = {}) {
   if (!lib) return;
   libraryView++;
   const view = libraryView;
-  const current = () => view === libraryView && selected?.id === lib.id && (!guard || guard());
+  const identitySerial = freshIdentitySerial;
+  const identityBinding = identityCoordinates(identity);
   libraryRoute(lib.id, {replace: selected?.id === lib.id});
-  selected = lib; const root = byId('library-detail'); root.replaceChildren(node('h2', lib.name));
-  const policy = await api('/api/libraries/' + lib.id + '/policy');
+  const routeToken = captureRouteToken();
+  const libraryPath = location.pathname;
+  const viewCurrent = () => view === libraryView && selected?.id === lib.id
+    && identitySerial === freshIdentitySerial
+    && sameIdentity(identityBinding, identityCoordinates(identity))
+    && routeToken != null && isRouteCurrent(routeToken) && location.pathname === libraryPath;
+  const viewLease = Object.freeze({
+    view,
+    libraryId: String(lib.id),
+    routeToken,
+    libraryPath,
+    current: viewCurrent
+  });
+  const externalGuard = typeof guard === 'function' ? guard : null;
+  let leaseOwnsReads = externalGuard === null;
+  const current = () => viewLease.current() && (leaseOwnsReads || !externalGuard || externalGuard());
+  selected = lib;
+  if (typeof handoff === 'function') {
+    // Handoff проверяет владельца независимо от уже изменившегося route token,
+    // фиксирует терминальный маршрут и только затем передаёт чтение lease.
+    handoff(viewLease);
+    leaseOwnsReads = true;
+    if (!current()) throw new DOMException('Загрузка библиотеки отменена.', 'AbortError');
+  }
+  const root = byId('library-detail');
+  const heading = node('h2', lib.name);
+  root.replaceChildren(heading);
+  const confirmation = typeof confirmedMutation === 'string' ? confirmedMutation.trim() : '';
+  let policy;
+  try {
+    policy = await api('/api/libraries/' + lib.id + '/policy');
+  } catch (error) {
+    const status = Number(error?.status ?? error?.response?.status);
+    if (error?.name === 'AbortError' || status === 401 || status === 403) throw error;
+    if (!current()) throw new DOMException('Загрузка политики библиотеки отменена.', 'AbortError');
+    const failure = node('div', null, {class: 'library-policy-error'});
+    const retry = button('Повторить чтение', () => {
+      if (!retry.isConnected || !viewLease.current()) return;
+      return openLibrary(lib, {confirmedMutation: confirmation});
+    });
+    failure.append(
+      node('p', confirmation
+        ? confirmation + '. Не удалось обновить библиотеку после подтверждённого изменения. Причина: ' + readableError(error)
+        : 'Не удалось загрузить политику библиотеки. Причина: ' + readableError(error), {
+          role: 'alert', 'aria-atomic': 'true', 'data-library-policy-error': 'true'
+        }),
+      node('p', 'Повторная попытка только перечитывает данные и не повторяет действия изменения.'),
+      retry
+    );
+    root.replaceChildren(heading, failure);
+    return;
+  }
   if (!current()) return;
   const role = policy.effective_role;
   const curator = ['curator', 'manager'].includes(role);
@@ -1117,11 +1241,16 @@ async function openLibrary(lib, {guard = null} = {}) {
       card.append(node('p', visibleEnum(KNOWLEDGE_KIND_LABELS, item.kind, 'Вид не указан') + ' · ' + visibleEnum(PUBLICATION_LABELS, item.publication)), node('p', item.statement));
       if (item.publication === 'withdrawn') card.append(node('p', 'Знание отозвано.'));
       if (curator && ['draft', 'needs_review'].includes(item.publication)) {
-        const publish = button('Подтвердить знание', async () => { await post('/api/knowledge/' + item.id + '/publish'); await openLibrary(lib); });
+        const publish = button('Подтвердить знание', async () => {
+          await post('/api/knowledge/' + item.id + '/publish');
+          await openLibrary(lib, {confirmedMutation: 'Публикация знания подтверждена сервером'});
+        });
         const reject = button('Отклонить черновик', async event => {
           const action = event.currentTarget; action.disabled = true;
-          try { await post('/api/knowledge/' + item.id + '/reject'); await openLibrary(lib); }
-          catch (error) { message(error.message); }
+          try {
+            await post('/api/knowledge/' + item.id + '/reject');
+            await openLibrary(lib, {confirmedMutation: 'Отклонение знания подтверждено сервером'});
+          }
           finally { action.disabled = false; }
         });
         card.append(publish, reject);
@@ -1137,11 +1266,16 @@ async function openLibrary(lib, {guard = null} = {}) {
       card.append(node('details', null)); const detail = card.lastChild; detail.append(node('summary', 'Происхождение'), node('pre', JSON.stringify(rule.provenance, null, 2)));
       if (rule.publication === 'withdrawn') card.append(node('p', 'Правило отозвано.'));
       if (curator && ['draft', 'needs_review'].includes(rule.publication)) {
-        const publish = button('Опубликовать', async () => { await post('/api/rules/' + rule.id + '/publish'); await openLibrary(lib); });
+        const publish = button('Опубликовать', async () => {
+          await post('/api/rules/' + rule.id + '/publish');
+          await openLibrary(lib, {confirmedMutation: 'Публикация правила подтверждена сервером'});
+        });
         const reject = button('Отклонить черновик', async event => {
           const action = event.currentTarget; action.disabled = true;
-          try { await post('/api/rules/' + rule.id + '/reject'); await openLibrary(lib); }
-          catch (error) { message(error.message); }
+          try {
+            await post('/api/rules/' + rule.id + '/reject');
+            await openLibrary(lib, {confirmedMutation: 'Отклонение правила подтверждено сервером'});
+          }
           finally { action.disabled = false; }
         });
         card.append(publish, reject);

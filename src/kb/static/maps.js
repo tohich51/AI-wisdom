@@ -1,10 +1,55 @@
 'use strict';
 window.WisdomMap = (() => {
-  let epoch=0, controller, canvas, root, host, similarityTimer, pendingFocusIntent=null;
+  const MAX_DRAFT_OPERATIONS=100;
+  const MAX_PENDING_CREATE_OPERATIONS=20;
+  const MAX_CREATE_PAYLOAD_JSON=8192;
+  const MAX_PENDING_CREATE_METADATA_JSON=16384;
+  const pendingCreateStoragePrefix='wisdom-map.pending-semantic-create.v1:';
+  let epoch=0, controller, canvas, root, host, similarityTimer, pendingFocusIntent=null, createIdentity=null;
   const draftOperations=new Map();
+  const pendingCreateOperations=new Map();
   const uuid=/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+  const canonicalCreatePayload=value=> {
+    if(value===null || typeof value==='string' || typeof value==='boolean')return JSON.stringify(value);
+    if(typeof value==='number') {
+      if(!Number.isFinite(value))throw Error('Создаваемый запрос содержит недопустимое число.');
+      return JSON.stringify(value);
+    }
+    if(Array.isArray(value))return '['+value.map(canonicalCreatePayload).join(',')+']';
+    if(typeof value==='object')return '{'+Object.keys(value).sort().map(key=>JSON.stringify(key)+':'+canonicalCreatePayload(value[key])).join(',')+'}';
+    throw Error('Создаваемый запрос должен содержать только JSON.');
+  };
+  const createPayloadHash=async payload=> {
+    const bytes=new TextEncoder().encode(canonicalCreatePayload(payload));
+    if(bytes.byteLength>MAX_CREATE_PAYLOAD_JSON)throw Error('Создаваемый запрос слишком велик.');
+    const digest=await crypto.subtle.digest('SHA-256',bytes);
+    return Array.from(new Uint8Array(digest),byte=>byte.toString(16).padStart(2,'0')).join('');
+  };
+  const createIdentityRecord=value=> {
+    const accountId=value?.account_id, principalId=value?.principal_id;
+    if(accountId===null || accountId===undefined || principalId===null || principalId===undefined)return null;
+    return {accountId:String(accountId),principalId:String(principalId)};
+  };
+  const sameCreateIdentity=(left,right)=>Boolean(
+    left && right && left.accountId===right.accountId && left.principalId===right.principalId
+  );
+  const currentCreateIdentity=()=>createIdentityRecord(host?.identity?.());
+  const reconcileCreateIdentity=identity=> {
+    if(createIdentity && !sameCreateIdentity(createIdentity,identity)) {
+      pendingCreateOperations.clear();
+      draftOperations.clear();
+    }
+    createIdentity=identity?{...identity}:null;
+  };
   const clearSimilarityTimer=()=> { const pending=similarityTimer; similarityTimer=null; if(pending) { clearTimeout(pending.id); pending.cancel(); } };
-  const invalidate=()=> { epoch++; clearSimilarityTimer(); controller?.abort(); canvas?.destroy(); canvas=null; root?.replaceChildren(); };
+  const invalidate=(clearIdentityState=false)=> {
+    epoch++; clearSimilarityTimer(); controller?.abort(); canvas?.destroy(); canvas=null; root?.replaceChildren();
+    if(clearIdentityState) {
+      pendingCreateOperations.clear();
+      draftOperations.clear();
+      createIdentity=null;
+    }
+  };
   const captureFocusIntent=token=> {
     const active=document.activeElement;
     pendingFocusIntent={token,intent:active?.id==='map-library'?'library':active?.id==='map-mode'?'mode':'heading'};
@@ -32,7 +77,12 @@ window.WisdomMap = (() => {
     if(signal.aborted)cancel();else signal.addEventListener('abort',cancel,{once:true});
   });
   async function mount(container, helpers, chosenId, chosenMode, chosenSourceId) {
-    invalidate(); root=container; host=helpers; const generation=epoch, routeToken=host.routeToken(), n=host.node;
+    invalidate();
+    root=container; host=helpers;
+    const mountIdentity=currentCreateIdentity();
+    reconcileCreateIdentity(mountIdentity);
+    if(!mountIdentity)throw Error('Идентификация пользователя недоступна.');
+    const generation=epoch, routeToken=host.routeToken(), n=host.node;
     const graphId=window.WisdomGraphCanvas.canonicalId;
     const uniqueRowsById=(rows,keepMissing=false)=>window.WisdomGraphCanvas.uniqueRowsById(rows,keepMissing);
     const visibleGraphRows=graph=>{
@@ -49,7 +99,9 @@ window.WisdomMap = (() => {
       if(typeof value?.kind!=='string'||!value.kind.trim()||typeof value.entity_id!=='string'||!uuid.test(value.entity_id))return null;
       return JSON.stringify([value.kind,value.entity_id]);
     };
-    controller=new AbortController(); const valid=()=>host.routeIsCurrent(routeToken)&&generation===epoch&&!controller.signal.aborted;
+    controller=new AbortController();
+    const identityCurrent=()=>sameCreateIdentity(mountIdentity,currentCreateIdentity());
+    const valid=()=>host.routeIsCurrent(routeToken)&&generation===epoch&&!controller.signal.aborted&&identityCurrent();
     let sourceFilter=typeof chosenSourceId==='string'&&chosenSourceId?chosenSourceId:null;
     const libs=host.libraries(); if (!libs.length) { root.append(n('p','Создайте библиотеку и добавьте материалы.',{role:'status'})); return; }
     const libraryId=chosenId ?? host.currentLibrary()?.id ?? libs[0].id;
@@ -61,11 +113,175 @@ window.WisdomMap = (() => {
       );
       return;
     }
-    const operationId=operation=>{
-      const key=libraryId+':'+operation;
-      if(!draftOperations.has(key))draftOperations.set(key,crypto.randomUUID());
+    // These UUIDs only make dialog form persistence stable. They are never sent as server keys.
+    const draftOperationId=operation=>{
+      const key=JSON.stringify([mountIdentity.accountId,mountIdentity.principalId,libraryId,operation]);
+      if(!draftOperations.has(key)) {
+        draftOperations.set(key,crypto.randomUUID());
+        while(draftOperations.size>MAX_DRAFT_OPERATIONS)draftOperations.delete(draftOperations.keys().next().value);
+      }
       return draftOperations.get(key);
     };
+    const ambiguousCreateNotice='Результат создания не подтверждён. Автоматический повтор не выполнялся. Точный повтор этого запроса использует сохранённый ключ; изменённый запрос использует новый ключ.';
+    let createWriteStatus=null;
+    let pendingPersistenceError=null;
+    const pendingMapKey=entry=>JSON.stringify([
+      entry.identity.accountId,entry.identity.principalId,entry.operation,entry.idempotencyKey
+    ]);
+    const pendingRequestKey=entry=>JSON.stringify([
+      entry.identity.accountId,entry.identity.principalId,entry.operation,entry.libraryId,entry.payloadHash
+    ]);
+    const pendingMetadata=entry=>({
+      identity:{accountId:entry.identity.accountId,principalId:entry.identity.principalId},
+      operation:entry.operation,
+      libraryId:entry.libraryId,
+      payloadHash:entry.payloadHash,
+      idempotencyKey:entry.idempotencyKey
+    });
+    const pendingRecordValid=record=> {
+      if(!record || typeof record!=='object' || Array.isArray(record) ||
+        Object.keys(record).sort().join(',')!=='idempotencyKey,identity,libraryId,operation,payloadHash')
+        return false;
+      const identity=record.identity;
+      if(!identity || typeof identity!=='object' || Array.isArray(identity) ||
+        Object.keys(identity).sort().join(',')!=='accountId,principalId')return false;
+      return ['accountId','principalId'].every(name=>typeof identity[name]==='string' && identity[name].length<=128) &&
+        typeof record.libraryId==='string' && record.libraryId.length<=128 &&
+        ['semantic_concept_create','semantic_relation_create'].includes(record.operation) &&
+        typeof record.payloadHash==='string' && /^[0-9a-f]{64}$/.test(record.payloadHash) &&
+        typeof record.idempotencyKey==='string' && uuid.test(record.idempotencyKey);
+    };
+    const pendingStorageKeyFor=record=>pendingCreateStoragePrefix+record.operation+':'+
+      encodeURIComponent(record.identity.accountId)+':'+encodeURIComponent(record.identity.principalId)+':'+record.idempotencyKey;
+    const pendingStorageFailure=message=> {
+      const error=Error(message||'Недоступно сохранённое состояние создания. Запрос не отправлен; сначала восстановите хранилище сеанса.');
+      error.pendingCreateStorage=true;
+      return error;
+    };
+    const pendingCapacityError=()=>Error('Достигнут лимит неподтверждённых созданий. Новый запрос не отправлен; используйте один из сохранённых запросов для точного повтора.');
+    const readPendingMetadata=()=> {
+      let storage;
+      try { storage=window.sessionStorage; }
+      catch { throw pendingStorageFailure(); }
+      const entries=[];
+      try {
+        for(let index=0;index<storage.length;index+=1) {
+          const storageKey=storage.key(index);
+          if(storageKey===null || !storageKey.startsWith(pendingCreateStoragePrefix))continue;
+          const raw=storage.getItem(storageKey);
+          if(typeof raw!=='string' || raw.length>MAX_PENDING_CREATE_METADATA_JSON)
+            throw pendingStorageFailure();
+          let record;
+          try { record=JSON.parse(raw); }
+          catch { throw pendingStorageFailure(); }
+          if(!pendingRecordValid(record) || storageKey!==pendingStorageKeyFor(record))
+            throw pendingStorageFailure();
+          entries.push({storageKey,record});
+        }
+      } catch(error) {
+        if(error?.pendingCreateStorage)throw error;
+        throw pendingStorageFailure();
+      }
+      if(entries.length>MAX_PENDING_CREATE_OPERATIONS)throw pendingStorageFailure();
+      const mapKeys=new Set(),requestKeys=new Set();
+      for(const entry of entries) {
+        const mapKey=pendingMapKey(entry.record),requestKey=pendingRequestKey(entry.record);
+        if(mapKeys.has(mapKey) || requestKeys.has(requestKey))throw pendingStorageFailure();
+        mapKeys.add(mapKey);requestKeys.add(requestKey);
+      }
+      return entries;
+    };
+    const persistPendingCreate=entry=> {
+      if(pendingPersistenceError)throw pendingPersistenceError;
+      const record=pendingMetadata(entry);
+      if(!pendingRecordValid(record))throw Error('Создаваемый запрос содержит недопустимые метаданные.');
+      const entries=readPendingMetadata(),storageKey=pendingStorageKeyFor(record),requestKey=pendingRequestKey(record);
+      const existing=entries.find(value=>value.storageKey===storageKey);
+      if(existing && pendingRequestKey(existing.record)!==requestKey)
+        throw pendingStorageFailure('Сохранённый ключ уже связан с другим запросом. Запрос не отправлен.');
+      const conflicting=entries.find(value=>value.storageKey!==storageKey && pendingRequestKey(value.record)===requestKey);
+      if(conflicting)throw pendingStorageFailure('Для этого запроса уже сохранён другой ключ. Запрос не отправлен.');
+      if(!existing && entries.length>=MAX_PENDING_CREATE_OPERATIONS)throw pendingCapacityError();
+      const serialized=JSON.stringify(record);
+      if(serialized.length>MAX_PENDING_CREATE_METADATA_JSON)throw pendingStorageFailure();
+      try { window.sessionStorage.setItem(storageKey,serialized); }
+      catch { throw pendingStorageFailure(); }
+      const retained={...record,notice:entry.notice===true};
+      pendingCreateOperations.set(pendingMapKey(retained),retained);
+      return retained;
+    };
+    const forgetPendingCreate=operation=> {
+      if(!operation)return;
+      const mapKey=pendingMapKey(operation),current=pendingCreateOperations.get(mapKey);
+      if(current && pendingRequestKey(current)!==pendingRequestKey(operation))return;
+      pendingCreateOperations.delete(mapKey);
+      try { window.sessionStorage.removeItem(pendingStorageKeyFor(pendingMetadata(operation))); }
+      catch { pendingPersistenceError=pendingStorageFailure(); }
+    };
+    const restorePendingCreates=identity=> {
+      if(pendingCreateOperations.size)return;
+      for(const entry of readPendingMetadata()) {
+        const record=entry.record;
+        if(sameCreateIdentity(record.identity,identity))
+          pendingCreateOperations.set(pendingMapKey(record),{...record,notice:true});
+      }
+    };
+    const renderPendingCreateNotices=()=> {
+      if(!valid())return;
+      if(!createWriteStatus)return;
+      const pending=[...pendingCreateOperations.values()].some(operation=>
+        operation.notice && operation.libraryId===libraryId && sameCreateIdentity(operation.identity,mountIdentity)
+      );
+      createWriteStatus.hidden=!pending;
+      createWriteStatus.textContent=pending?ambiguousCreateNotice:'';
+    };
+    const pendingCreateFor=async(operation,payload)=> {
+      const identity=currentCreateIdentity();
+      reconcileCreateIdentity(identity);
+      if(!identity || !sameCreateIdentity(identity,mountIdentity))
+        throw Error('Идентификация пользователя изменилась. Обновите экран перед созданием.');
+      if(pendingPersistenceError)throw pendingPersistenceError;
+      const payloadHash=await createPayloadHash(payload);
+      const currentIdentity=currentCreateIdentity();
+      reconcileCreateIdentity(currentIdentity);
+      if(!currentIdentity || !sameCreateIdentity(currentIdentity,mountIdentity) || !valid())
+        throw Error('Экран или идентификация пользователя изменились. Создание не отправлено.');
+      const candidate={identity:{...identity},operation,libraryId:String(payload.library_id),payloadHash};
+      const existing=[...pendingCreateOperations.values()].reverse().find(entry=>
+        sameCreateIdentity(entry.identity,candidate.identity) &&
+        entry.operation===candidate.operation &&
+        entry.libraryId===candidate.libraryId &&
+        entry.payloadHash===candidate.payloadHash
+      );
+      if(existing)return persistPendingCreate(existing);
+      if(pendingCreateOperations.size>=MAX_PENDING_CREATE_OPERATIONS)throw pendingCapacityError();
+      return persistPendingCreate({...candidate,idempotencyKey:crypto.randomUUID(),notice:false});
+    };
+    const postSemanticCreate=async(operation,path,payload)=> {
+      const pending=await pendingCreateFor(operation,payload);
+      try {
+        const result=await host.post(path,{...payload,idempotency_key:pending.idempotencyKey});
+        if(!result || typeof result.id!=='string' || !uuid.test(result.id) ||
+          !Number.isInteger(result.version_no) || result.version_no<1) {
+          const error=Error('Сервер не подтвердил созданную сущность и версию. Результат операции неизвестен.');
+          error.outcomeUnknown=true;
+          throw error;
+        }
+        forgetPendingCreate(pending);
+        renderPendingCreateNotices();
+        return result;
+      } catch(error) {
+        if(error?.outcomeUnknown===true) {
+          pending.notice=ambiguousCreateNotice;
+          const retained=pendingCreateOperations.get(pendingMapKey(pending));
+          if(retained)retained.notice=ambiguousCreateNotice;
+        } else forgetPendingCreate(pending);
+        renderPendingCreateNotices();
+        throw error;
+      }
+    };
+    try { restorePendingCreates(mountIdentity); }
+    catch(error) { pendingPersistenceError=error; }
     const library=n('select',null,{id:'map-library'});
     for(const lib of libs) library.append(n('option',lib.name,{value:lib.id}));
     library.value=libraryId;
@@ -94,6 +310,10 @@ window.WisdomMap = (() => {
     const searchStatus=n('p','Поиск станет доступен после загрузки карты.',{class:'map-search-status',id:searchId+'-status',role:'status','aria-live':'polite','aria-atomic':'true'});
     let searchQuery='',searchHighlightId=null,searchComposing=false;
     searchPanel.append(n('label','Поиск по загруженной карте',{for:searchId}),searchInput,clearSearch,searchHelp,searchStatus);
+    createWriteStatus=n('p','',{class:'map-create-status',role:'alert','aria-live':'polite','aria-atomic':'true'});
+    createWriteStatus.hidden=true;
+    controls.append(createWriteStatus);
+    renderPendingCreateNotices();
     root.append(controls,searchPanel,sourceNotice,content,detailStatus,details,list); content.append(surface);
     let data, loading=true, readSerial=0, graphSerial=0, similarityPoll=0, similarityQueued=false, similarityNotice='', similarityRefreshButton=null;
     const noConceptsNotice='В библиотеке нет доступных понятий.';
@@ -518,16 +738,21 @@ window.WisdomMap = (() => {
       b('Скачать PNG',async()=> { await load(); if(!canvas)throw Error('В карте пока нет узлов.'); const blob=await canvas.png({output:'blob-promise',bg:getComputedStyle(surface).backgroundColor,full:true,scale:2});if(valid())host.downloadBlob('knowledge-graph.png',blob); }));
     const manual=b('Добавить понятие',()=> {
       if(sourceFilter)throw Error('Сначала откройте сеть всей библиотеки: ручное понятие без доказательства не входит в фильтр источника.');
-      const operation=operationId('concept');
+      const draftOperation=draftOperationId('concept');
+      const draftScope=encodeURIComponent(mountIdentity.accountId+'~'+mountIdentity.principalId);
       return host.dialog('Понятие без источника',form=> {
-      form.dataset.draftKey=uuid.test(String(libraryId||''))?'concept:'+libraryId+':'+operation:'';
+        form.dataset.draftKey=uuid.test(String(libraryId||''))&&draftOperation
+          ?'concept:'+draftScope+':'+libraryId+':'+draftOperation
+          :'';
       for(const [name,label] of [['label','Название понятия'],['body','Описание']]) {
         const id='concept-'+name,input=n(name==='body'?'textarea':'input',null,{id,name,required:true,maxlength:name==='body'?2000:500});form.append(n('label',label,{for:id}),input);
       }
       },async (fields,{isCurrent})=> {
         const selectedLibrary=library.value,selectedMode=mode.value;
         if(!isCurrent()||!valid()||selectedLibrary!==library.value||selectedMode!==mode.value)return;
-        await host.post('/api/graphs/concepts',{library_id:selectedLibrary,label:fields.get('label'),body:fields.get('body')});
+        await postSemanticCreate('semantic_concept_create','/api/graphs/concepts',{
+          library_id:selectedLibrary,label:fields.get('label'),body:fields.get('body')
+        });
         if(!isCurrent()||!valid()||selectedLibrary!==library.value||selectedMode!==mode.value)return;
         try {
           await load();
@@ -542,9 +767,12 @@ window.WisdomMap = (() => {
     controls.append(manual);
     const relationButton=b('Добавить связь',()=> {
       if(mode.value!=='semantic' || visibleGraphRows(data).nodes.length<2) throw Error('Откройте семантическую сеть с двумя понятиями.');
-      const operation=operationId('relation');
+      const draftOperation=draftOperationId('relation');
+      const draftScope=encodeURIComponent(mountIdentity.accountId+'~'+mountIdentity.principalId);
       host.dialog('Ручная связь · без доказательства',form=> {
-        form.dataset.draftKey=uuid.test(String(libraryId||''))?'relation:'+libraryId+':'+operation:'';
+        form.dataset.draftKey=uuid.test(String(libraryId||''))&&draftOperation
+          ?'relation:'+draftScope+':'+libraryId+':'+draftOperation
+          :'';
         for(const [name,label] of [['from_concept','От понятия'],['to_concept','К понятию']]) {
           const select=n('select',null,{id:name,name}); for(const node of visibleGraphRows(data).nodes)select.append(n('option',node.label,{value:node.entity_id})); form.append(n('label',label,{for:name}),select);
         }
@@ -553,7 +781,13 @@ window.WisdomMap = (() => {
       },async (fields,{isCurrent})=>{
         const selectedLibrary=library.value,selectedMode=mode.value;
         if(!isCurrent()||!valid()||selectedMode!=='semantic'||selectedLibrary!==library.value)return;
-        await host.post('/api/graphs/relations',{library_id:selectedLibrary,from_concept:fields.get('from_concept'),to_concept:fields.get('to_concept'),predicate:fields.get('predicate'),hypothesis:true});
+        await postSemanticCreate('semantic_relation_create','/api/graphs/relations',{
+          library_id:selectedLibrary,
+          from_concept:fields.get('from_concept'),
+          to_concept:fields.get('to_concept'),
+          predicate:fields.get('predicate'),
+          hypothesis:true
+        });
         if(!isCurrent()||!valid()||selectedLibrary!==library.value||selectedMode!==mode.value)return;
         try {
           await load();

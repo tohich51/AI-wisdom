@@ -101,9 +101,22 @@ def install_tools(server, call):
 
     @server.tool()
     def create_semantic_concept(
-        library_id: UUID, label: str, body: str, ctx: Context, replaces: UUID | None = None
+        library_id: UUID,
+        label: str,
+        body: str,
+        ctx: Context,
+        replaces: UUID | None = None,
+        idempotency_key: str | None = None,
     ):
-        return call(ctx, semantic.create_concept, library_id, label, body, replaces)
+        return call(
+            ctx,
+            semantic.create_concept,
+            library_id,
+            label,
+            body,
+            replaces,
+            idempotency_key,
+        )
 
     @server.tool()
     def create_semantic_relation(
@@ -114,6 +127,7 @@ def install_tools(server, call):
         ctx: Context,
         hypothesis: bool = True,
         replaces: UUID | None = None,
+        idempotency_key: str | None = None,
     ):
         return call(
             ctx,
@@ -124,6 +138,7 @@ def install_tools(server, call):
             predicate,
             hypothesis,
             replaces,
+            idempotency_key,
         )
 
     @server.tool()

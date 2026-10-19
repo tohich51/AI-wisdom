@@ -65,6 +65,7 @@ class ConceptArgs(LibraryArgs):
     label: str = Field(min_length=1, max_length=500)
     body: str = Field(min_length=1, max_length=2000)
     replaces: UUID | None = None
+    idempotency_key: str | None = Field(default=None, min_length=1, max_length=200)
 
 
 class RelationArgs(LibraryArgs):
@@ -73,6 +74,7 @@ class RelationArgs(LibraryArgs):
     predicate: Predicate
     hypothesis: bool = Field(default=True, strict=True)
     replaces: UUID | None = None
+    idempotency_key: str | None = Field(default=None, min_length=1, max_length=200)
 
 
 class ReviewArgs(Args):

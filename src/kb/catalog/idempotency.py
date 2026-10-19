@@ -22,6 +22,8 @@ from kb.access.policy import Principal
 LIBRARY_CREATE = "library_create"
 PROJECT_CREATE = "project_create"
 RULE_CREATE = "rule_create"
+SEMANTIC_CONCEPT_CREATE = "semantic_concept_create"
+SEMANTIC_RELATION_CREATE = "semantic_relation_create"
 
 
 @dataclass(frozen=True)

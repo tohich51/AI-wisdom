@@ -7,6 +7,15 @@ from psycopg.rows import dict_row
 from psycopg.types.json import Jsonb
 
 from kb.access.policy import AccessDenied, transaction_identity
+from kb.catalog.idempotency import (
+    SEMANTIC_CONCEPT_CREATE,
+    SEMANTIC_RELATION_CREATE,
+    find_create_operation,
+    hash_create_request,
+    lock_create_operation,
+    record_create_operation,
+    validate_idempotency_key,
+)
 from kb.research.grounding import (
     check_snapshot,
     validate_citation,
@@ -186,11 +195,63 @@ def semantic_network(conn, principal, library_id, limit=200):
         }
 
 
-def create_concept(conn, principal, library_id, label, body, replaces=None):
+def _assert_semantic_create_access(cur, principal, library_id):
+    access = _library(cur, principal, library_id)
+    if access["rank"] < 20:
+        raise AccessDenied("forbidden")
+
+
+def _validate_semantic_replay_sources(cur, row):
+    """Revalidate inherited evidence instead of trusting an old create response."""
+    if row["manifest"] is not None:
+        check_snapshot(cur, row["manifest"])
+        for citation in row["citations"] or []:
+            validate_citation(cur, row["manifest"], citation)
+
+
+def create_concept(conn, principal, library_id, label, body, replaces=None, idempotency_key=None):
     if not label.strip() or len(label) > 500 or not body.strip() or len(body) > 2000:
         raise ValueError("invalid_concept")
+    key = validate_idempotency_key(idempotency_key)
+    request_digest = (
+        hash_create_request(
+            SEMANTIC_CONCEPT_CREATE,
+            {
+                "library_id": str(library_id),
+                "label": label,
+                "body": body,
+                "replaces": str(replaces) if replaces is not None else None,
+            },
+        )
+        if key is not None
+        else None
+    )
     with transaction_identity(conn, principal), conn.cursor(row_factory=dict_row) as cur:
-        _library(cur, principal, library_id)
+        if key is not None:
+            assert request_digest is not None
+            lock_create_operation(cur, principal, SEMANTIC_CONCEPT_CREATE, key)
+            receipt = find_create_operation(cur, principal, SEMANTIC_CONCEPT_CREATE, key)
+            if receipt is not None:
+                _assert_semantic_create_access(cur, principal, library_id)
+                if receipt.request_hash != request_digest:
+                    raise ValueError("idempotency_conflict")
+                cur.execute(
+                    """SELECT id,publication,version_no,manifest,citations
+                       FROM kb.semantic_concept
+                       WHERE id=%s AND library_id=%s LIMIT 1""",
+                    (receipt.target_id, library_id),
+                )
+                row = cur.fetchone()
+                if row is None:
+                    raise AccessDenied("forbidden")
+                _validate_semantic_replay_sources(cur, row)
+                return {
+                    "id": row["id"],
+                    "publication": row["publication"],
+                    "version_no": row["version_no"],
+                }
+
+        _assert_semantic_create_access(cur, principal, library_id)
         ident = uuid4()
         lineage = ident
         version = 1
@@ -202,7 +263,7 @@ def create_concept(conn, principal, library_id, label, body, replaces=None):
                 raise AccessDenied("forbidden")
             lineage = old["lineage_id"]
             if old["manifest"] is not None:
-                check_snapshot(cur, old["manifest"])
+                _validate_semantic_replay_sources(cur, old)
                 origin, manifest, citations = "manual_revision", old["manifest"], old["citations"]
             cur.execute("SELECT id FROM kb.semantic_concept WHERE id=%s FOR UPDATE", (lineage,))
             cur.execute(
@@ -227,11 +288,76 @@ def create_concept(conn, principal, library_id, label, body, replaces=None):
                 Jsonb(jsonable_encoder(citations)),
             ),
         )
-        return dict(cur.fetchone())
+        created = dict(cur.fetchone())
+        if key is not None:
+            assert request_digest is not None
+            record_create_operation(
+                cur,
+                principal,
+                SEMANTIC_CONCEPT_CREATE,
+                key,
+                request_digest,
+                created["id"],
+            )
+        return created
+
+
+def _lock_semantic_endpoint(cur, concept_id):
+    """Use an RLS-neutral transaction lock shared with concept withdrawal."""
+    cur.execute(
+        "SELECT pg_advisory_xact_lock("
+        "hashtextextended(('semantic-endpoint:' || %s::uuid)::text,0))",
+        (concept_id,),
+    )
+
+
+def _assert_semantic_concept_review_access(cur, principal, concept_id):
+    """Require SELECT visibility and review capability before endpoint locking."""
+    cur.execute(
+        "SELECT library_id FROM kb.semantic_concept WHERE id=%s LIMIT 1",
+        (concept_id,),
+    )
+    row = cur.fetchone()
+    if row is None:
+        raise AccessDenied("forbidden")
+    access = _library(cur, principal, row["library_id"])
+    if access["rank"] < 30:
+        raise AccessDenied("forbidden")
+
+
+def _assert_relation_endpoints_visible(cur, library_id, from_concept, to_concept):
+    """Validate endpoints under SELECT RLS and order races with withdrawal."""
+    endpoint_sql = (
+        "SELECT id FROM kb.semantic_concept WHERE id=ANY(%s::uuid[]) "
+        "AND library_id=%s AND publication<>'withdrawn'"
+    )
+    endpoint_params = ([from_concept, to_concept], library_id)
+    cur.execute(endpoint_sql, endpoint_params)
+    visible_ids = [row["id"] for row in cur.fetchall()]
+    if len(visible_ids) != 2:
+        raise AccessDenied("forbidden")
+
+    # Do not let invisible IDs take locks; canonical order prevents deadlocks.
+    for endpoint_id in sorted(visible_ids, key=str):
+        _lock_semantic_endpoint(cur, endpoint_id)
+
+    # A withdrawal may have acquired its lock between the two visibility reads.
+    cur.execute(endpoint_sql, endpoint_params)
+    if len(cur.fetchall()) != 2:
+        raise AccessDenied("forbidden")
+    # For a new relation, relation INSERT RLS performs the final atomic check.
 
 
 def create_relation(
-    conn, principal, library_id, from_concept, to_concept, predicate, hypothesis=True, replaces=None
+    conn,
+    principal,
+    library_id,
+    from_concept,
+    to_concept,
+    predicate,
+    hypothesis=True,
+    replaces=None,
+    idempotency_key=None,
 ):
     if from_concept == to_concept or predicate not in {
         "supports",
@@ -240,15 +366,50 @@ def create_relation(
         "contradicts",
     }:
         raise ValueError("invalid_relation")
-    with transaction_identity(conn, principal), conn.cursor(row_factory=dict_row) as cur:
-        _library(cur, principal, library_id)
-        # Both endpoints must be visible in the same library before any insert.
-        cur.execute(
-            "SELECT id FROM kb.semantic_concept WHERE id=ANY(%s::uuid[]) AND library_id=%s",
-            ([from_concept, to_concept], library_id),
+    key = validate_idempotency_key(idempotency_key)
+    request_digest = (
+        hash_create_request(
+            SEMANTIC_RELATION_CREATE,
+            {
+                "library_id": str(library_id),
+                "from_concept": str(from_concept),
+                "to_concept": str(to_concept),
+                "predicate": predicate,
+                "hypothesis": hypothesis,
+                "replaces": str(replaces) if replaces is not None else None,
+            },
         )
-        if len(cur.fetchall()) != 2:
-            raise AccessDenied("forbidden")
+        if key is not None
+        else None
+    )
+    with transaction_identity(conn, principal), conn.cursor(row_factory=dict_row) as cur:
+        if key is not None:
+            assert request_digest is not None
+            lock_create_operation(cur, principal, SEMANTIC_RELATION_CREATE, key)
+            receipt = find_create_operation(cur, principal, SEMANTIC_RELATION_CREATE, key)
+            if receipt is not None:
+                _assert_semantic_create_access(cur, principal, library_id)
+                if receipt.request_hash != request_digest:
+                    raise ValueError("idempotency_conflict")
+                _assert_relation_endpoints_visible(cur, library_id, from_concept, to_concept)
+                cur.execute(
+                    """SELECT id,publication,version_no,manifest,citations
+                       FROM kb.semantic_relation
+                       WHERE id=%s AND library_id=%s LIMIT 1""",
+                    (receipt.target_id, library_id),
+                )
+                row = cur.fetchone()
+                if row is None:
+                    raise AccessDenied("forbidden")
+                _validate_semantic_replay_sources(cur, row)
+                return {
+                    "id": row["id"],
+                    "publication": row["publication"],
+                    "version_no": row["version_no"],
+                }
+
+        _assert_semantic_create_access(cur, principal, library_id)
+        _assert_relation_endpoints_visible(cur, library_id, from_concept, to_concept)
         ident = uuid4()
         lineage = ident
         version = 1
@@ -260,7 +421,7 @@ def create_relation(
                 raise AccessDenied("forbidden")
             lineage = old["lineage_id"]
             if old["manifest"] is not None:
-                check_snapshot(cur, old["manifest"])
+                _validate_semantic_replay_sources(cur, old)
                 origin, manifest, citations = "manual_revision", old["manifest"], old["citations"]
             cur.execute("SELECT id FROM kb.semantic_relation WHERE id=%s FOR UPDATE", (lineage,))
             cur.execute(
@@ -287,7 +448,18 @@ def create_relation(
                 Jsonb(jsonable_encoder(citations)),
             ),
         )
-        return dict(cur.fetchone())
+        created = dict(cur.fetchone())
+        if key is not None:
+            assert request_digest is not None
+            record_create_operation(
+                cur,
+                principal,
+                SEMANTIC_RELATION_CREATE,
+                key,
+                request_digest,
+                created["id"],
+            )
+        return created
 
 
 def review_semantic(conn, principal, entity_id, entity_kind, decision):
@@ -297,6 +469,15 @@ def review_semantic(conn, principal, entity_id, entity_kind, decision):
 
     table = sql.Identifier("kb", "semantic_" + entity_kind)
     with transaction_identity(conn, principal), conn.cursor(row_factory=dict_row) as cur:
+        # Relation creation locks endpoints before FK checks; preserve that order.
+        if entity_kind == "concept" and decision == "withdraw":
+            # Establish SELECT RLS visibility and current curator/manager authority
+            # before an invisible or unauthorized ID can contend on this lock.
+            _assert_semantic_concept_review_access(cur, principal, entity_id)
+            _lock_semantic_endpoint(cur, entity_id)
+            # A grant or SELECT policy may have changed while this backend waited.
+            _assert_semantic_concept_review_access(cur, principal, entity_id)
+        # SELECT FOR UPDATE remains the post-lock state recheck and row lock.
         cur.execute(sql.SQL("SELECT * FROM {} WHERE id=%s FOR UPDATE").format(table), (entity_id,))
         row = cur.fetchone()
         if row is None:
