@@ -401,7 +401,13 @@ class SemanticSearch:
             if not p.usable or attempted.get(lib) != p or lib in unavailable
         }
         mode = (
-            "hybrid" if semantic_rank and lexical_rank else ("lexical" if pending else "semantic")
+            "hybrid"
+            if semantic_rank and lexical_rank
+            else (
+                "semantic"
+                if semantic_rank
+                else ("lexical" if lexical_rank or pending else "semantic")
+            )
         )
         return {
             "mode": mode,

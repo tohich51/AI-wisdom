@@ -147,6 +147,20 @@ def test_semantic_hydrates_canonical_text_and_generation_is_idempotent(
     assert isinstance(reader.deadlines[0], Deadline)
     assert not reader.deadlines[0].expired
 
+    # An accessible empty library without an index does not turn actual
+    # semantic-only results into a lexical result label.
+    world.library_with(("owner", "manager"), ("colleague", "reader"))
+    mixed_readiness = search_knowledge(
+        gateway, world.reader, "unrelated paraphrase", semantic=SemanticSearch(reader)
+    )
+    assert mixed_readiness["mode"] == "semantic"
+    assert mixed_readiness["indexed_library_count"] == 1
+    assert mixed_readiness["pending_library_count"] == 1
+    assert mixed_readiness["fallback_reason"] == "index_pending_or_unavailable"
+    assert mixed_readiness["hits"] and all(
+        hit["retrieval_mode"] == "semantic" for hit in mixed_readiness["hits"]
+    )
+
 
 @pytest.mark.parametrize("operation", ["hash_null", "verified_null", "map_delete", "map_update"])
 def test_current_manifest_cannot_be_rewritten(semantic_library, provisioner, world, operation):
