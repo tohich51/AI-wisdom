@@ -1,0 +1,31 @@
+[
+  {
+    "id": "main-message",
+    "query": "How should a document emphasize one main message?",
+    "expected_terms": [
+      "\u0433\u043b\u0430\u0432\u043d",
+      "main message",
+      "\u0441\u043e\u043e\u0431\u0449\u0435\u043d"
+    ]
+  },
+  {
+    "id": "visual-cues",
+    "query": "Which visual cues draw attention to the main message?",
+    "expected_terms": [
+      "\u0432\u0438\u0437\u0443",
+      "visual",
+      "\u0446\u0432\u0435\u0442",
+      "cue"
+    ]
+  },
+  {
+    "id": "chunks-headings",
+    "query": "Why should text be organized in chunks with headings?",
+    "expected_terms": [
+      "\u0431\u043b\u043e\u043a",
+      "chunk",
+      "\u0437\u0430\u0433\u043e\u043b\u043e\u0432",
+      "heading"
+    ]
+  }
+]
