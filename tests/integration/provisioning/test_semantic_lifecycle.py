@@ -314,3 +314,53 @@ def test_retirement_rejects_a_non_lower_hex_profile(provisioner):
             ("g" * 64,),
         )
     assert invalid.value.sqlstate == "22023"
+
+
+@pytest.mark.parametrize("account_kind", ["wrong_uuid", "missing"])
+def test_original_starter_cancel_requires_matching_transaction_account(
+    semantic_library, provisioner, world, admin, account_kind
+):
+    build = registry.begin(
+        provisioner,
+        world.manager,
+        registry.capture(provisioner, world.manager, semantic_library),
+    )
+    admin.execute(
+        "DELETE FROM kb.membership WHERE organisation_id=%s AND principal_id=%s",
+        (world.account_id, world.owner),
+    )
+
+    account_value = str(uuid4()) if account_kind == "wrong_uuid" else ""
+    with provisioner.transaction():
+        provisioner.execute(
+            "SELECT set_config('app.principal', %s, true)",
+            (str(world.owner),),
+        )
+        provisioner.execute(
+            "SELECT set_config('app.account', %s, true)",
+            (account_value,),
+        )
+        assert (
+            provisioner.execute(
+                "SELECT kb.cancel_semantic_build(%s, %s)",
+                (semantic_library, build.generation),
+            ).fetchone()[0]
+            is False
+        )
+
+    assert (
+        admin.execute(
+            "SELECT state FROM kb.index_generation WHERE library_id=%s AND generation=%s",
+            (semantic_library, build.generation),
+        ).fetchone()[0]
+        == "building"
+    )
+
+    registry.fail(provisioner, world.manager, build)
+    assert (
+        admin.execute(
+            "SELECT state FROM kb.index_generation WHERE library_id=%s AND generation=%s",
+            (semantic_library, build.generation),
+        ).fetchone()[0]
+        == "retired"
+    )

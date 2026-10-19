@@ -12,10 +12,11 @@
   "checks": {
     "focused_real_pg": "47 passed 3 fixture failures, then corrected three passed; 50 distinct scenarios closed",
     "mypy": "94 modules passed",
-    "full_release_gate": "not_run",
+    "full_release_gate": "1471passed110.56s on6d4e0202; invalidated by reviewed cancellation fence fix; fresh gate required",
     "real_ov_integration": "not_run_for_C16a",
     "independent_minimax_review": "pending",
-    "independent_sol_review": "pending"
+    "independent_sol_review": "pending",
+    "focused_cancellation": "12 lifecycle scenarios passed1.91s including2 original-starter account negatives"
   },
   "original_C16_complete": false,
   "remaining": [

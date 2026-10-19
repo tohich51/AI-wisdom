@@ -11,6 +11,11 @@ BEGIN
     PERFORM pg_advisory_xact_lock(hashtextextended(p_library::text,91));
     UPDATE kb.index_generation AS g SET state='retired',finished_at=now(),updated_at=now()
     WHERE g.library_id=p_library AND g.generation=p_generation AND g.state='building'
+      AND current_setting('app.account', true) = (
+          SELECT l.organisation_id::text
+          FROM kb.library AS l
+          WHERE l.id=g.library_id
+      )
       AND (
           g.started_by=kb.current_principal()
           OR EXISTS (
@@ -21,7 +26,6 @@ BEGIN
                AND m.principal_id=kb.current_principal()
                AND m.status='active'
               WHERE l.id=g.library_id
-                AND current_setting('app.account', true)=l.organisation_id::text
                 AND kb.role_rank(
                     kb.effective_role(m.principal_id,l.id)
                 ) >= 40
