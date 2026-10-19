@@ -1,4 +1,4 @@
-"""First-library enqueue and deduplication through the real async connector."""
+"""Semantic queue discovery and deduplication through the real async connector."""
 
 from uuid import uuid4
 
@@ -30,10 +30,10 @@ def test_first_pending_library_is_queued_once_with_real_connector(world, admin) 
         ).format(sql.Identifier(login))
     )
     dsn = make_conninfo(admin.info.dsn, user=login)
-    app, enqueue = build_queue(dsn, world.manager, {})
+    app, enqueue = build_queue(dsn, {})
     with app.open():
-        enqueue()
-        enqueue()
+        enqueue(rotation=0)
+        enqueue(rotation=0)
     with psycopg.connect(dsn, autocommit=True) as conn:
         assert conn.execute(
             "SELECT rolsuper,rolbypassrls FROM pg_roles WHERE rolname=%s", (login,)

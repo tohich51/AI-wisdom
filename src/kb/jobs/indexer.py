@@ -1,8 +1,7 @@
 """Single-writer, resumable semantic projection on the existing durable queue.
 
-The indexer remains inside its configured actor/account scope. Owner-only
-library discovery for multi-user indexing remains an explicit C16 dependency;
-this module does not claim or simulate all-user indexing.
+Each queued attempt resolves the library's indexing context immediately before
+work; no configured, cached, or process-wide principal is used.
 """
 
 import os
@@ -14,7 +13,7 @@ import procrastinate
 import psycopg
 from procrastinate.exceptions import AlreadyEnqueued
 
-from kb.access.policy import Principal, transaction_identity
+from kb.access.policy import transaction_identity
 from kb.adapters.secrets import _reject_symlinks
 from kb.adapters.vector_writer import OpenVikingWriter
 from kb.retrieval import semantic_registry as registry
@@ -124,7 +123,7 @@ def configuration():
     )
 
 
-def build_queue(dsn, principal, config):
+def build_queue(dsn, config):
     app = procrastinate.App(connector=procrastinate.PsycopgConnector(conninfo=dsn))
 
     @app.task(
@@ -134,13 +133,19 @@ def build_queue(dsn, principal, config):
         retry=procrastinate.RetryStrategy(max_attempts=3, wait=20),
     )
     def index(context, library_id: str):
+        library_uuid = UUID(library_id)
+        with psycopg.connect(dsn, autocommit=True) as conn:
+            principal = registry.resolve_context(conn, library_uuid)
+        if principal is None:
+            return {"state": "skipped", "reason": "semantic_context_unavailable"}
         return reindex(
-            dsn, principal, UUID(library_id), terminal_failure=context.job.attempts >= 2, **config
+            dsn, principal, library_uuid, terminal_failure=context.job.attempts >= 2, **config
         )
 
-    def enqueue():
+    def enqueue(*, rotation: int = 0):
         with psycopg.connect(dsn, autocommit=True) as conn:
-            for library_id in registry.pending_libraries(conn, principal):
+            registry.retire_unavailable_builds(conn)
+            for library_id in registry.pending_libraries(conn, rotation=rotation):
                 try:
                     index.configure(
                         lock="semantic-installation",
@@ -152,17 +157,14 @@ def build_queue(dsn, principal, config):
     @app.periodic(cron="* * * * *", queue="semantic")
     @app.task(name="kb.poll_semantic", queue="semantic")
     def poll(timestamp: int):
-        enqueue()
+        enqueue(rotation=timestamp // 60)
 
     return app, enqueue
 
 
 def main():
     dsn = os.environ["KB_INDEXER_DATABASE_URL"]
-    principal = Principal(
-        UUID(os.environ["KB_INDEXER_PRINCIPAL_ID"]), UUID(os.environ["KB_INDEXER_ACCOUNT_ID"])
-    )
-    app, enqueue = build_queue(dsn, principal, configuration())
+    app, enqueue = build_queue(dsn, configuration())
     with app.open():
-        enqueue()
+        enqueue(rotation=int(time.time() // 60))
         app.run_worker(queues=["semantic"], concurrency=1)

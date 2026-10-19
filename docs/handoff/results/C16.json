@@ -1,0 +1,26 @@
+{
+  "task": "C16",
+  "slice": "C16a",
+  "state": "review",
+  "base": "339a2d01e042c91dfd389c51ccdef41f1f60c13e",
+  "implemented": [
+    "Per-library active-manager context, fresh for each queue attempt",
+    "Organisation/policy/role-fenced bounded rotating discovery",
+    "Replacement manager may retire interrupted build in exact organisation",
+    "Actorless cleanup retires unavailable builds using existing global/library locks"
+  ],
+  "checks": {
+    "focused_real_pg": "47 passed 3 fixture failures, then corrected three passed; 50 distinct scenarios closed",
+    "mypy": "94 modules passed",
+    "full_release_gate": "not_run",
+    "real_ov_integration": "not_run_for_C16a",
+    "independent_minimax_review": "pending",
+    "independent_sol_review": "pending"
+  },
+  "original_C16_complete": false,
+  "remaining": [
+    "Unchanged-version vector reuse across logical generations (C16b)",
+    "Exact candidate release gate, real OV boundary, reviews and deployment of C16a"
+  ],
+  "production_unchanged": "339a2d01"
+}

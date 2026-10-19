@@ -7,6 +7,7 @@ from uuid import uuid4
 import psycopg
 import pytest
 from mcp.server.mcpserver.exceptions import UnexpectedToolError
+from psycopg.conninfo import make_conninfo
 from test_research_grounding import parsed
 from test_runtime import rule
 from test_runtime import runtime_db as runtime_db
@@ -49,7 +50,10 @@ def test_local_only_policy_closes_cloud_data_and_external_index_but_keeps_local_
         assert content.get_rule(conn, world["principal"], original["id"])["id"] == original["id"]
         with pytest.raises(AccessDenied):
             semantic_registry.capture(conn, world["principal"], world["lib"])
-        assert semantic_registry.pending_libraries(conn, world["principal"]) == []
+        with psycopg.connect(
+            make_conninfo(world["admin"], user="kb_provisioner"), autocommit=True
+        ) as provisioner:
+            assert semantic_registry.pending_libraries(provisioner, rotation=0) == []
         with pytest.raises(AccessDenied):
             content.export_skill(conn, world["principal"], world["lib"], [original["id"]])
         configure(conn, world)

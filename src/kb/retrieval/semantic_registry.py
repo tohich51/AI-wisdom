@@ -58,6 +58,16 @@ class Build:
         return f"{self.resource_root}/{document.id}.md"
 
 
+def resolve_context(conn, library_id: UUID) -> Principal | None:
+    row = conn.execute(
+        "SELECT principal_id, account_id FROM kb.semantic_index_context(%s, %s, 1)",
+        (SELECTED_PROFILE.profile_hash, library_id),
+    ).fetchone()
+    if row is None:
+        return None
+    return Principal(row[0], row[1])
+
+
 def capture(conn, principal: Principal, library_id: UUID) -> Snapshot:
     with transaction_identity(conn, principal), conn.cursor(row_factory=dict_row) as cur:
         cur.execute("SELECT pg_advisory_xact_lock(hashtextextended(%s,91))", (str(library_id),))
@@ -200,21 +210,17 @@ def fail(conn, principal: Principal, build: Build) -> None:
             raise ValueError("projection_cancellation_refused")
 
 
-def pending_libraries(conn, principal: Principal) -> list[UUID]:
-    with transaction_identity(conn, principal):
-        rows = conn.execute(
-            "SELECT l.id FROM kb.library l LEFT JOIN kb.index_account a ON a.library_id=l.id "
-            "LEFT JOIN kb.index_generation g ON g.library_id=l.id AND g.state='current' "
-            "WHERE l.organisation_id=%s AND kb.library_policy_allows(l.id,'external') "
-            "AND EXISTS(SELECT 1 FROM kb.membership m "
-            "WHERE m.organisation_id=l.organisation_id AND m.principal_id=kb.current_principal() "
-            "AND m.status='active') "
-            "AND kb.role_rank(kb.effective_role(kb.current_principal(),l.id))>=40 "
-            "AND (a.profile_hash IS NOT NULL OR EXISTS(SELECT 1 FROM kb.knowledge k "
-            "WHERE k.library_id=l.id AND k.publication='published')) "
-            "AND (a.state IS DISTINCT FROM 'ready' OR a.profile_hash IS DISTINCT FROM %s "
-            "OR g.indexed_revision IS DISTINCT FROM l.generation "
-            "OR g.profile_hash IS DISTINCT FROM %s) ORDER BY l.id LIMIT 1000",
-            (principal.account_id, SELECTED_PROFILE.profile_hash, SELECTED_PROFILE.profile_hash),
-        ).fetchall()
+def retire_unavailable_builds(conn) -> int:
+    row = conn.execute(
+        "SELECT kb.retire_unavailable_semantic_builds(%s)",
+        (SELECTED_PROFILE.profile_hash,),
+    ).fetchone()
+    return row[0]
+
+
+def pending_libraries(conn, *, rotation: int = 0) -> list[UUID]:
+    rows = conn.execute(
+        "SELECT library_id FROM kb.semantic_index_context(%s, NULL, 1000, %s)",
+        (SELECTED_PROFILE.profile_hash, rotation),
+    ).fetchall()
     return [row[0] for row in rows]
