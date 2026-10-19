@@ -1,0 +1,42 @@
+{
+  "task_id": "C14",
+  "status": "implemented_review_pending",
+  "source_basis": "4e46db13be994819eb922dd188921f4a84c9133b",
+  "executor": {
+    "provider": "MiniMax OAuth subscription",
+    "model": "MiniMax-M3.1-Flash-Preview",
+    "sql_response_id": "07250e7e0d07144047fe000601f1a1e5",
+    "python_response_id": "07250ac555b2323c911c2b388ba87ff7",
+    "root_adjustments": "Imports/NULLIF/exception mapping, hooks, independently authored tests, test harness repair"
+  },
+  "implemented": [
+    "Shared Procrastinate lock for extraction/research plus durable PostgreSQL provider admission across worker processes",
+    "Existing actor3/org10 combined unfinished-job caps retained",
+    "Attempt-bound reservation, stable operation key, conditional publication, fresh rights/citation checks retained",
+    "Uncertain transport outcome or worker death retains global barrier; no TTL or automatic external replay",
+    "Minimal metadata-only history; no prompts, book text, outputs or credentials stored"
+  ],
+  "focused_evidence": "/home/kb-inspect/ai-wisdom-handoff/architecture-20261015/results/C14-20261019",
+  "checks": {
+    "mypy": "94 source files passed; unchanged production source reused",
+    "ruff": "all six changed Python/test files passed check/format",
+    "postgres": "focused-2 38 passed; focused-3 18 passed; focused-4 fresh same-job epoch regression passed. Failed iterations retained; release gate not yet run."
+  },
+  "limits": {
+    "provider_active_or_unknown": 1,
+    "actor_unfinished": 3,
+    "organisation_unfinished": 10,
+    "exactly_once_provider_execution_claimed": false
+  },
+  "recovery": {
+    "automatic_expiry": false,
+    "operator": "Only kb_provisioner can call kb.resolve_provider_call(call_key, reason). First reconcile the exact provider operation and ensure the old worker/provider call cannot still run. Resolve only after this evidence; no blind retry. Same original operation key remains non-replayable after resolution; a fresh explicit user action creates a new operation.",
+    "history": "Keep failed outputs/check logs until incorporated into accepted review; no cleanup requested or executed."
+  },
+  "not_yet_done": [
+    "Independent MiniMax review of committed SHA",
+    "Independent Sol6.1 acceptance of same SHA",
+    "Required release/build/backup/deploy/readback"
+  ],
+  "mcp_latency_target": "Not closed by C14; latest prior full first response 3759ms exceeds 1-2s."
+}

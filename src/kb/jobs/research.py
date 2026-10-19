@@ -1,5 +1,6 @@
 """One durable Research task on the existing serial ingestion worker."""
 
+import hashlib
 import os
 from uuid import UUID, uuid4
 
@@ -11,6 +12,7 @@ from psycopg.rows import dict_row
 from psycopg.types.json import Jsonb
 
 from kb.access.policy import AccessDenied, Principal, transaction_identity
+from kb.jobs.provider_admission import ProviderBusy, ProviderReviewRequired, call_provider
 from kb.research.generation import Draft
 from kb.research.grounding import check_snapshot, resolve_citation
 from kb.research.runs import checked_run
@@ -104,16 +106,27 @@ def run_research(dsn, run_id, principal, runner_url, worker_token):
             # Identity-bound DB transaction is committed before provider I/O.
             if not runner_url or not worker_token:
                 raise ValueError("model_unavailable")
-            response = httpx.post(
-                runner_url.rstrip("/") + "/research",
-                json={
-                    "task_id": str(run_id),
-                    "kind": row["kind"],
-                    "query": row["query"],
-                    "fragments": fragments,
-                },
-                headers={"X-KB-Worker-Token": worker_token},
-                timeout=1900,
+            operation_key = hashlib.sha256(
+                f"research:{run_id}:{row['request_hash']}:MiniMax-M3.1-Flash-Preview".encode()
+            ).hexdigest()
+            response = call_provider(
+                conn,
+                principal,
+                operation_key,
+                job_kind="research",
+                job_id=run_id,
+                job_attempt=attempt,
+                send=lambda: httpx.post(
+                    runner_url.rstrip("/") + "/research",
+                    json={
+                        "task_id": str(run_id),
+                        "kind": row["kind"],
+                        "query": row["query"],
+                        "fragments": fragments,
+                    },
+                    headers={"X-KB-Worker-Token": worker_token},
+                    timeout=1900,
+                ),
             )
             response.raise_for_status()
             data = response.json()
@@ -195,6 +208,25 @@ def run_research(dsn, run_id, principal, runner_url, worker_token):
                     enqueue_similarity_on_transaction(cur, principal, row["library_id"])
         except AttemptInProgress:
             raise
+        except ProviderBusy:
+            conn.rollback()
+            with transaction_identity(conn, principal):
+                reset = conn.execute(
+                    "UPDATE kb.research_run SET status='queued',started_at=NULL,"
+                    "attempt_token=NULL,error_code='model_unavailable' "
+                    "WHERE id=%s AND status='running' AND attempt_token=%s RETURNING id",
+                    (run_id, attempt),
+                ).fetchone()
+            if reset is not None:
+                raise
+        except ProviderReviewRequired as exc:
+            conn.rollback()
+            with transaction_identity(conn, principal):
+                conn.execute(
+                    "UPDATE kb.research_run SET status='failed',error_code=%s,"
+                    "completed_at=now() WHERE id=%s AND status='running' AND attempt_token=%s",
+                    (exc.code, run_id, attempt),
+                )
         except AccessDenied:
             conn.rollback()
             with transaction_identity(conn, principal):

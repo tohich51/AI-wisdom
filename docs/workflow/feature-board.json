@@ -251,10 +251,10 @@
       "depends_on": [
         "C13"
       ],
-      "implementation_status": "partial",
+      "implementation_status": "implemented_review_pending",
       "card_acceptance": "not_accepted_as_complete_card",
-      "remaining": "Concurrency1 и guards есть; полные org/actor caps и multiworker acceptance отсутствуют.",
-      "running_task": null,
+      "remaining": "Кандидат 2026-10-19: общий PostgreSQL provider admission, actor3/org10, fencing; focused проверки пройдены. Нужны отдельное MiniMax review, Sol6.1 и release gate.",
+      "running_task": "C14-20261019",
       "file_leases": []
     },
     {

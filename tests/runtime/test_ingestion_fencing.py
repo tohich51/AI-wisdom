@@ -158,6 +158,10 @@ def _finish(thread, barrier):
 def test_expired_attempt_cannot_persist_or_overwrite_completed_replacement(
     world, monkeypatch, late_unavailable
 ):
+    # Deliberately fault the admission adapter to stress the independent
+    # publication fence with overlapping synthetic responses. Real distributed
+    # admission and replay safety are covered in test_provider_admission.py.
+    monkeypatch.setattr(ingestion, "call_provider", lambda *_args, **kwargs: kwargs["send"]())
     _, job, _ = _job(world)
     barrier = _ProviderBarrier(monkeypatch, late_unavailable=late_unavailable)
     thread, errors = _start(world, job, barrier)

@@ -13,6 +13,7 @@ from psycopg.types.json import Jsonb
 
 from kb.access.policy import AccessDenied, Principal, transaction_identity
 from kb.catalog.admission import check_admission
+from kb.jobs.provider_admission import PROVIDER_QUEUE_LOCK
 from kb.research.grounding import capture_snapshot, check_snapshot, validate_citation
 
 KINDS = frozenset(
@@ -152,7 +153,7 @@ def submit_research(
 
         app = procrastinate.App(connector=procrastinate.PsycopgConnector(conninfo=""))
         task = register_research_task(app, "")
-        queue_id = task.configure(connection=conn, lock=f"research:{principal.principal_id}").defer(
+        queue_id = task.configure(connection=conn, lock=PROVIDER_QUEUE_LOCK).defer(
             run_id=str(ident),
             principal_id=str(principal.principal_id),
             account_id=str(principal.account_id),

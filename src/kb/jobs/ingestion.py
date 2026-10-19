@@ -3,6 +3,7 @@
 import hashlib
 import json
 import os
+from functools import partial
 from pathlib import Path
 from uuid import UUID, uuid4
 
@@ -16,6 +17,7 @@ from kb.access.policy import AccessDenied, Principal, transaction_identity
 from kb.adapters.originals import LocalBlobStore, _resolve_in_root
 from kb.document_parser import NeedsOCR, ParseRejected, parse_document
 from kb.jobs.model_runner import GenerateResponse
+from kb.jobs.provider_admission import PROVIDER_QUEUE_LOCK, ProviderReviewRequired, call_provider
 
 MODEL = "MiniMax-M3.1-Flash-Preview"
 _LEASE_SECONDS = 480
@@ -148,7 +150,9 @@ def submit_processing(conn, principal, source_id, idempotency_key, *, extract=Fa
                 raise AccessDenied("forbidden")
             return {"job_id": existing["id"], "duplicate_of_existing": True}
         _app, task = build_queue("")
-        queued = task.configure(connection=conn, lock=f"source:{source_id}").defer(
+        queued = task.configure(
+            connection=conn, lock=PROVIDER_QUEUE_LOCK if extract else f"source:{source_id}"
+        ).defer(
             job_id=str(created["id"]),
             principal_id=str(principal.principal_id),
             account_id=str(principal.account_id),
@@ -406,18 +410,30 @@ def run_job(dsn, job_id, principal, blob_root, runner_url=None, worker_token=Non
                 if not runner_url or not worker_token:
                     raise ParseRejected("model_unconfigured")
                 calls += 1
+                operation_key = hashlib.sha256(
+                    f"ingest:{job_id}:{number}:{digest}:{MODEL}".encode()
+                ).hexdigest()
                 with httpx.Client(timeout=350) as client:
-                    response = client.post(
-                        runner_url.rstrip("/") + "/generate",
-                        headers={"X-KB-Worker-Token": worker_token},
-                        json={
-                            "task_id": str(job_id),
-                            "text": payload,
-                            "fragment_ids": [item["id"] for item in chunk],
-                        },
+                    response = call_provider(
+                        conn,
+                        principal,
+                        operation_key,
+                        job_kind="ingest",
+                        job_id=job_id,
+                        job_attempt=attempt,
+                        send=partial(
+                            client.post,
+                            runner_url.rstrip("/") + "/generate",
+                            headers={"X-KB-Worker-Token": worker_token},
+                            json={
+                                "task_id": str(job_id),
+                                "text": payload,
+                                "fragment_ids": [item["id"] for item in chunk],
+                            },
+                        ),
                     )
                     if response.status_code != 200:
-                        raise ParseRejected("model_unavailable")
+                        raise ParseRejected("invalid_model_output")
                     draft = GenerateResponse.model_validate(response.json())
                 permitted = {UUID(item["id"]) for item in chunk}
                 if (
@@ -497,7 +513,9 @@ def run_job(dsn, job_id, principal, blob_root, runner_url=None, worker_token=Non
             except AccessDenied:
                 _finish_revoked(conn, job_id, principal, attempt)
                 return
-            if isinstance(exc, ParseRejected) and code != "model_unavailable":
+            if isinstance(exc, ProviderReviewRequired) or (
+                isinstance(exc, ParseRejected) and code != "model_unavailable"
+            ):
                 return
             raise RuntimeError("ingestion_not_complete") from None
 
