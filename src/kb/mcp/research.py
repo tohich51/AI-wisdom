@@ -8,6 +8,7 @@ from mcp.server.mcpserver import Context
 from mcp.types import CallToolResult, TextContent, ToolAnnotations
 
 from kb.catalog import graphs
+from kb.mcp.timing import measure
 from kb.research import notes, rule_handoff, runs, semantic, similarity
 from kb.research.generation import Kind, Predicate
 
@@ -81,19 +82,9 @@ def install_tools(server, call):
     )
     def get_semantic_network(library_id: UUID, ctx: Context, limit: int = 200):
         data = call(ctx, semantic.semantic_network, library_id, limit)
-        return CallToolResult(
-            content=[
-                TextContent(
-                    type="text",
-                    text=json.dumps(
-                        data,
-                        ensure_ascii=False,
-                        separators=(",", ":"),
-                        allow_nan=False,
-                    ),
-                )
-            ]
-        )
+        with measure("graph_json_dump"):
+            text = json.dumps(data, ensure_ascii=False, separators=(",", ":"), allow_nan=False)
+        return CallToolResult(content=[TextContent(type="text", text=text)])
 
     @server.tool()
     def refresh_concept_similarity(library_id: UUID, ctx: Context):

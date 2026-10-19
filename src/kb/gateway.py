@@ -20,6 +20,7 @@ from kb.adapters.vector_reader import OpenVikingReader
 from kb.http.auth_config import AuthSettings
 from kb.http.router import mount_api
 from kb.mcp.server import build_mcp
+from kb.mcp.timing import MCPTimingMiddleware
 from kb.retrieval.embedding_profile import SELECTED_PROFILE
 from kb.retrieval.semantic_search import SemanticSearch
 from kb.runtime_auth import install_auth
@@ -121,6 +122,7 @@ def create_app() -> FastAPI:
     app = FastAPI(lifespan=lifespan)
     install_auth(app, connections, http_client, settings)
     app.add_middleware(TrustedHostMiddleware, allowed_hosts=allowed_hosts)
+    app.add_middleware(MCPTimingMiddleware)
 
     # /api/v1 is canonical; /api stays as a byte-compatible alias over the
     # same router object, so an operation is declared and dispatched once.

@@ -1,6 +1,7 @@
 """Official MCP transport; catalog calls share authenticated PostgreSQL identity."""
 
 import os
+from contextlib import ExitStack
 from typing import Literal
 from uuid import UUID
 
@@ -52,6 +53,7 @@ from kb.contracts.mcp_tools import (
     SubmitSourceArgs,
 )
 from kb.jobs.ingestion import submit_processing
+from kb.mcp.timing import measure
 
 
 def assert_mcp_contract_registered() -> None:
@@ -80,7 +82,8 @@ def build_mcp(app, hosts):
     class Verifier:
         async def verify_token(self, token):
             try:
-                identity = await anyio.to_thread.run_sync(app.state.resolve_token, token)
+                with measure("transport_auth"):
+                    identity = await anyio.to_thread.run_sync(app.state.resolve_token, token)
                 return AccessToken(
                     token=token,
                     client_id=identity.client_id or os.environ["KB_MCP_CLIENT_ID"],
@@ -126,12 +129,18 @@ def build_mcp(app, hosts):
         if not header.lower().startswith("bearer "):
             raise ValueError("authentication_required")
         # Re-check current membership on every tool call, even an existing session.
-        identity = app.state.resolve_token(header[7:])
+        with measure("call_auth"):
+            identity = app.state.resolve_token(header[7:])
         try:
             require_scope(identity, HANDLER_SCOPES.get(handler.__name__))
             principal = bearer_principal(identity)
-            with app.state.db_connection() as conn:
-                return jsonable_encoder(handler(conn, principal, *args, **kwargs))
+            with ExitStack() as stack:
+                with measure("db_acquire"):
+                    conn = stack.enter_context(app.state.db_connection())
+                with measure("handler"):
+                    data = handler(conn, principal, *args, **kwargs)
+                with measure("jsonable_encode"):
+                    return jsonable_encoder(data)
         except Exception:
             raise ValueError("request_refused") from None
 
@@ -149,7 +158,8 @@ def build_mcp(app, hosts):
         header = request.headers.get("authorization", "")
         if not header.lower().startswith("bearer "):
             raise ValueError("authentication_required")
-        identity = app.state.resolve_token(header[7:])
+        with measure("call_auth"):
+            identity = app.state.resolve_token(header[7:])
         try:
             require_scope(identity, HANDLER_SCOPES.get(handler.__name__))
             principal = bearer_principal(identity)
