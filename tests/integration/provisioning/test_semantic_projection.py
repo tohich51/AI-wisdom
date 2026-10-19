@@ -131,7 +131,7 @@ def test_semantic_hydrates_canonical_text_and_generation_is_idempotent(
     semantic_library, provisioner, world, gateway
 ):
     build = current(provisioner, world, semantic_library)
-    same = registry.begin(provisioner, world.manager, build.snapshot, force=True)
+    same = registry.begin(provisioner, world.manager, build.snapshot)
     assert same.already_current and same.generation == build.generation
     reader = ReaderDouble(build)
     result = search_knowledge(

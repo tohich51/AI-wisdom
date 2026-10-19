@@ -160,6 +160,7 @@ def test_task_resolves_a_fresh_replacement_on_every_attempt(world, tmp_path, mon
         library_id,
         *,
         terminal_failure=True,
+        rebuild=False,
         **observed_config,
     ):
         observations.append(
@@ -169,6 +170,7 @@ def test_task_resolves_a_fresh_replacement_on_every_attempt(world, tmp_path, mon
                 "account_id": principal.account_id,
                 "library_id": library_id,
                 "terminal_failure": terminal_failure,
+                "rebuild": rebuild,
                 "config": observed_config,
             }
         )

@@ -4,6 +4,8 @@ Each queued attempt resolves the library's indexing context immediately before
 work; no configured, cached, or process-wide principal is used.
 """
 
+import argparse
+import json
 import os
 import time
 from pathlib import Path
@@ -41,6 +43,7 @@ def reindex(
     url,
     keys_root,
     terminal_failure=True,
+    rebuild=False,
 ):
     build = None
     writer = None
@@ -68,7 +71,7 @@ def reindex(
                     (SELECTED_PROFILE.profile_hash, library_id, SELECTED_PROFILE.profile_hash),
                 )
             snapshot = registry.capture(conn, principal, library_id)
-            build = registry.begin(conn, principal, snapshot)
+            build = registry.begin(conn, principal, snapshot, force=rebuild)
             if build.already_current:
                 return {"state": "current", "documents": len(snapshot.documents), "unchanged": True}
             path = keys_root / "index" / account.index_identity / "key"
@@ -77,7 +80,10 @@ def reindex(
                 raise RuntimeError("index_key_permissions")
             writer = OpenVikingWriter(url, path.read_text().strip())
             writer.prepare(build.resource_root)
-            previous_root, previous_hashes = registry.previous_documents(conn, principal, build)
+            if rebuild:
+                previous_root, previous_hashes = None, {}
+            else:
+                previous_root, previous_hashes = registry.previous_documents(conn, principal, build)
             completed = registry.completed_documents(conn, principal, build)
             for document in snapshot.documents:
                 if document.id in completed and completed[document.id] != document.statement_hash:
@@ -164,19 +170,36 @@ def build_queue(dsn, config):
         pass_context=True,
         retry=procrastinate.RetryStrategy(max_attempts=3, wait=20),
     )
-    def index(context, library_id: str):
+    def index(context, library_id: str, rebuild: bool = False):
         library_uuid = UUID(library_id)
         with psycopg.connect(dsn, autocommit=True) as conn:
             principal = registry.resolve_context(conn, library_uuid)
         if principal is None:
             return {"state": "skipped", "reason": "semantic_context_unavailable"}
         return reindex(
-            dsn, principal, library_uuid, terminal_failure=context.job.attempts >= 2, **config
+            dsn,
+            principal,
+            library_uuid,
+            rebuild=rebuild,
+            terminal_failure=context.job.attempts >= 2,
+            **config,
         )
 
-    def enqueue(*, rotation: int = 0):
+    def enqueue(*, rotation: int = 0, rebuild_library: UUID | None = None):
         with psycopg.connect(dsn, autocommit=True) as conn:
             registry.retire_unavailable_builds(conn)
+            if rebuild_library is not None:
+                principal = registry.resolve_context(conn, rebuild_library)
+                if principal is None:
+                    raise RuntimeError("semantic_context_unavailable")
+                registry.capture(conn, principal, rebuild_library)
+                try:
+                    return index.configure(
+                        lock="semantic-installation",
+                        queueing_lock=f"semantic:{rebuild_library}",
+                    ).defer(library_id=str(rebuild_library), rebuild=True)
+                except AlreadyEnqueued:
+                    raise RuntimeError("semantic_rebuild_busy_not_queued") from None
             for library_id in registry.pending_libraries(conn, rotation=rotation):
                 try:
                     index.configure(
@@ -185,6 +208,7 @@ def build_queue(dsn, config):
                     ).defer(library_id=str(library_id))
                 except AlreadyEnqueued:
                     pass
+        return None
 
     @app.periodic(cron="* * * * *", queue="semantic")
     @app.task(name="kb.poll_semantic", queue="semantic")
@@ -195,8 +219,24 @@ def build_queue(dsn, config):
 
 
 def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--rebuild-library", type=UUID)
+    args = parser.parse_args()
+
     dsn = os.environ["KB_INDEXER_DATABASE_URL"]
     app, enqueue = build_queue(dsn, configuration())
     with app.open():
+        if args.rebuild_library is not None:
+            queue_job_id = enqueue(rebuild_library=args.rebuild_library)
+            print(
+                json.dumps(
+                    {
+                        "state": "queued",
+                        "library_id": str(args.rebuild_library),
+                        "queue_job_id": queue_job_id,
+                    }
+                )
+            )
+            return
         enqueue(rotation=int(time.time() // 60))
         app.run_worker(queues=["semantic"], concurrency=1)

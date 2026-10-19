@@ -1,0 +1,15 @@
+-- PostgreSQL partial unique indexes enforce uniqueness only for rows matching
+-- their predicates: https://www.postgresql.org/docs/current/indexes-partial.html
+--
+-- Retain the existing stronger lifecycle invariants unchanged:
+--   * index_generation_one_slot_installation_wide permits at most one
+--     building generation installation-wide.
+--   * index_generation_one_current_per_library permits at most one current
+--     generation per library.
+--
+-- The incompatible index below also prohibited a forced rebuild from staging
+-- a same-content building generation while its prior current was retained.
+-- No replacement is needed: the retained indexes bound concurrent lifecycle
+-- states while allowing the atomic retire-and-activate rebuild. The migration
+-- runner applies this drop in the same transaction as its migration ledger.
+DROP INDEX kb.index_generation_one_live_per_content_hash;

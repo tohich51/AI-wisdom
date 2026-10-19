@@ -118,7 +118,7 @@ def begin(conn, principal: Principal, snapshot: Snapshot, *, force=False) -> Bui
             (snapshot.library_id, snapshot.content_hash, SELECTED_PROFILE.profile_hash),
         )
         existing = cur.fetchone()
-        if existing:
+        if existing and (existing["state"] == "building" or not force):
             return Build(snapshot, existing["generation"], existing["state"] == "current")
         cur.execute(
             "UPDATE kb.index_generation SET state='retired',updated_at=now(),finished_at=now() "
