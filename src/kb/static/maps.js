@@ -96,7 +96,11 @@ window.WisdomMap = (() => {
     const edgeStatusText=edge=>{
       const publicationText=publication[edge.publication]||(typeof edge.publication==='string'&&edge.publication?edge.publication:'не указана');
       const hypothesisText=edge.hypothesis?'да':edge.hypothesis===false?'нет':'не указана';
-      const basisText=typeof edge.basis==='string'&&edge.basis.trim()?edge.basis.trim():'не указано';
+      let basisText='не указано';
+      if(typeof edge.basis==='string'&&edge.basis.trim()){
+        const basis=edge.basis.trim();
+        basisText=basis==='manual_without_evidence'?'создана вручную без источников':basis==='inferred_from_sources'?'выведена из источников':basis==='manual_revision_with_inherited_sources'?'ручная правка, источники унаследованы от предыдущей версии':basis;
+      }
       return ['Публикация: '+publicationText,'Гипотеза: '+hypothesisText,'Пояснение связи: '+basisText].join(' · ');
     };
     const filterGraphToSource=(graph,graphMode=mode.value,activeSource=sourceFilter)=>{
