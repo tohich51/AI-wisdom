@@ -40,6 +40,28 @@
           "new": "        result.setdefault(\"recursive\", recursive)\n        if processing_mode == 'vectors_only':\n            return result\n        context_type = context_type_for_uri(to_uri)"
         }
       ]
+    },
+    "config/account_vector.py": {
+      "sha256": "6f8e0cfbb4476cf1ee4511d208e545f917f2bda8bcc53c5bab281aace23985bb",
+      "replacements": [
+        {
+          "old": "from typing import Dict, List, Literal, Optional",
+          "new": "from typing import Any, Dict, List, Literal, Optional"
+        },
+        {
+          "old": "    version: Optional[str] = RuntimeField(default=None, dynamic=False)\n\n    # Provider bindings may rotate without changing the declared vector space.",
+          "new": "    version: Optional[str] = RuntimeField(default=None, dynamic=False)\n    provider_routing: dict[str, Any] | None = RuntimeField(default=None)\n\n    # Provider bindings may rotate without changing the declared vector space."
+        }
+      ]
+    },
+    "config/vector.py": {
+      "sha256": "be09d739f3d5015662bdaa63e15ed74ca77b1be6d56486732df518610883a302",
+      "replacements": [
+        {
+          "old": "        if PROVIDER_BINDING.intersection(supplied):\n            # Drop both the provider binding and provider-specific fields that\n            # would otherwise carry Cluster routing/model identity into the\n            # Account request. Cluster-maintained runtime switches remain.\n            dropped = PROVIDER_BINDING | PROVIDER_SPECIFIC_ISOLATED\n            base[mode] = {\n                key: value\n                for key, value in (base.get(mode) or {}).items()\n                if key not in dropped\n            }\n            for index, credential in enumerate(supplied.get(\"credentials\") or []):",
+          "new": "        if PROVIDER_BINDING.intersection(supplied):\n            provider_routing = supplied.pop(\"provider_routing\", None)\n            # Drop both the provider binding and provider-specific fields that\n            # would otherwise carry Cluster routing/model identity into the\n            # Account request. Cluster-maintained runtime switches remain.\n            dropped = PROVIDER_BINDING | PROVIDER_SPECIFIC_ISOLATED\n            base[mode] = {\n                key: value\n                for key, value in (base.get(mode) or {}).items()\n                if key not in dropped\n            }\n            if provider_routing is not None:\n                base[mode][\"extra_body\"] = {\"provider\": provider_routing}\n            for index, credential in enumerate(supplied.get(\"credentials\") or []):"
+        }
+      ]
     }
   }
 }

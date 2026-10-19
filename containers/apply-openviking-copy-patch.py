@@ -7,7 +7,12 @@ import sys
 from pathlib import Path
 
 manifest = json.loads(Path(sys.argv[1]).read_text())
-expected = {"server/routers/filesystem.py", "service/fs_service.py"}
+expected = {
+    "server/routers/filesystem.py",
+    "service/fs_service.py",
+    "config/account_vector.py",
+    "config/vector.py",
+}
 if (
     manifest["schema_version"] != 1
     or manifest["package"] != "openviking"
@@ -35,4 +40,4 @@ for name in sorted(expected):
     staged.append((path, changed.encode("utf-8")))
 for path, content in staged:
     path.write_bytes(content)
-print("Applied two pinned OpenViking source patches")
+print(f"Applied {len(expected)} pinned OpenViking source patches")
