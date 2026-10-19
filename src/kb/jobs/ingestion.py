@@ -162,7 +162,7 @@ def submit_processing(conn, principal, source_id, idempotency_key, *, extract=Fa
 
 
 def _known_section(row):
-    """Keep actual section labels local; only chapter is persisted today."""
+    """Preserve actual persisted chapter, spine and heading boundaries."""
     return {
         key: value
         for key in ("chapter", "spine", "heading")
@@ -361,8 +361,9 @@ def run_job(dsn, job_id, principal, blob_root, runner_url=None, worker_token=Non
                 for part in parsed:
                     conn.execute(
                         """INSERT INTO kb.fragment(source_id,ordinal,text,locator_kind,
-                      file_page,printed_label,chapter,paragraph,snapshot_url,snapshot_at,table_index,cell_row,cell_column)
-                      VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+                      file_page,printed_label,chapter,paragraph,snapshot_url,snapshot_at,table_index,cell_row,cell_column,
+                      parser_name,parser_version,spine,heading)
+                      VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
                       ON CONFLICT(source_id,ordinal) DO NOTHING""",
                         (
                             source["id"],
@@ -378,10 +379,14 @@ def run_job(dsn, job_id, principal, blob_root, runner_url=None, worker_token=Non
                             part.get("table_index"),
                             part.get("cell_row"),
                             part.get("cell_column"),
+                            part.get("parser_name"),
+                            part.get("parser_version"),
+                            part.get("spine"),
+                            part.get("heading"),
                         ),
                     )
                 fragments = conn.execute(
-                    """SELECT id,text,chapter,locator_kind,file_page,printed_label,
+                    """SELECT id,text,chapter,spine,heading,locator_kind,file_page,printed_label,
                       paragraph,table_index,cell_row,cell_column
                       FROM kb.fragment WHERE source_id=%s ORDER BY ordinal""",
                     (source["id"],),

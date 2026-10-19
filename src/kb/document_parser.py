@@ -1,5 +1,7 @@
 """Bounded, inert document parsing with original locations and no OCR or network."""
 
+import importlib.metadata
+import platform
 from pathlib import Path
 from typing import Any, cast
 from zipfile import ZipFile
@@ -11,6 +13,29 @@ from docx.text.paragraph import Paragraph
 from ebooklib import epub
 from pypdf import PdfReader
 from pypdf.generic import DictionaryObject
+
+_DOCX_HEADING_NAMES = {
+    "Heading 1",
+    "Heading 2",
+    "Heading 3",
+    "Heading 4",
+    "Heading 5",
+    "Heading 6",
+    "Heading 7",
+    "Heading 8",
+    "Heading 9",
+}
+
+
+def _docx_is_heading(paragraph: Paragraph) -> bool:
+    style = paragraph.style
+    for _ in range(32):
+        if style is None:
+            return False
+        if style.name in _DOCX_HEADING_NAMES:
+            return True
+        style = getattr(style, "base_style", None)
+    return False
 
 
 class ParseRejected(ValueError):
@@ -35,10 +60,12 @@ def _html(text):
 def parse_document(path: Path, media_type: str):
     if path.stat().st_size > 100 * 1024 * 1024:
         raise ParseRejected("file_too_large")
+    parser_name = parser_version = ""
+    current_heading = None
     rows: list[dict[str, Any]] = []
     total = 0
 
-    def add(text, kind="none", **locator):
+    def add(text, kind="none", *, spine=None, heading=None, **locator):
         nonlocal total
         total += len(text)
         if total > 2_000_000:
@@ -58,6 +85,10 @@ def parse_document(path: Path, media_type: str):
                     "snapshot_url": None,
                     "snapshot_at": None,
                     **locator,
+                    "parser_name": parser_name,
+                    "parser_version": parser_version,
+                    "spine": spine,
+                    "heading": heading,
                 }
             )
 
@@ -65,6 +96,8 @@ def parse_document(path: Path, media_type: str):
         with path.open("rb") as stream:
             magic = stream.read(8)
         if magic.startswith(b"%PDF"):
+            parser_name = "pypdf"
+            parser_version = importlib.metadata.version("pypdf")
             pdf = PdfReader(path)
             if pdf.is_encrypted:
                 raise ParseRejected("encrypted_document")
@@ -95,12 +128,23 @@ def parse_document(path: Path, media_type: str):
                         raise ParseRejected("invalid_archive")
                 names = set(archive.namelist())
             if "word/document.xml" in names:
+                parser_name = "python-docx"
+                parser_version = importlib.metadata.version("python-docx")
                 document = Document(str(path))
                 pindex, tindex = 0, 0
                 for node in document.element.body.iterchildren():
                     if node.tag.endswith("}p"):
                         pindex += 1
-                        add(Paragraph(node, document).text, "docx_paragraph", paragraph=pindex)
+                        docx_paragraph = Paragraph(node, document)
+                        text = docx_paragraph.text
+                        if text.strip() and _docx_is_heading(docx_paragraph):
+                            current_heading = text[:1000]
+                        add(
+                            text,
+                            "docx_paragraph",
+                            paragraph=pindex,
+                            heading=current_heading,
+                        )
                     elif node.tag.endswith("}tbl"):
                         tindex += 1
                         for rindex, row in enumerate(Table(node, document).rows, start=1):
@@ -111,15 +155,24 @@ def parse_document(path: Path, media_type: str):
                                     table_index=tindex,
                                     cell_row=rindex,
                                     cell_column=cindex,
+                                    heading=current_heading,
                                 )
             elif "META-INF/container.xml" in names:
+                parser_name = "ebooklib"
+                parser_version = importlib.metadata.version("ebooklib")
                 book = epub.read_epub(str(path), options={"ignore_ncx": True})
                 for ident, _ in book.spine:
                     item = book.get_item_with_id(ident)
                     if item:
                         text, chapter = _html(item.get_content())
                         for number, paragraph in enumerate(text.split("\n"), start=1):
-                            add(paragraph, "epub_paragraph", chapter=chapter, paragraph=number)
+                            add(
+                                paragraph,
+                                "epub_paragraph",
+                                chapter=chapter,
+                                paragraph=number,
+                                spine=str(ident),
+                            )
             else:
                 raise ParseRejected("unsupported_type")
         else:
@@ -132,7 +185,12 @@ def parse_document(path: Path, media_type: str):
             )
             chapter = None
             if html:
+                parser_name = "beautifulsoup4"
+                parser_version = importlib.metadata.version("beautifulsoup4")
                 text, chapter = _html(text)
+            else:
+                parser_name = "python"
+                parser_version = platform.python_version()
             for number, paragraph in enumerate(text.split("\n"), start=1):
                 add(
                     paragraph,

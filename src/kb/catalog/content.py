@@ -346,7 +346,8 @@ def read_source(
             """
             SELECT id, source_id, ordinal, locator_kind, file_page, printed_label,
                    chapter, paragraph, snapshot_url, snapshot_at,
-                   table_index,cell_row,cell_column,text
+                   table_index,cell_row,cell_column,text,
+                   parser_name,parser_version,spine,heading
             FROM kb.fragment
             WHERE source_id = %s
               AND ordinal >= %s

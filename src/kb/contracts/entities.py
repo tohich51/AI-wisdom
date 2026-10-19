@@ -62,6 +62,7 @@ class Locator(Contract):
     printed_label: str | None = None
     chapter: str | None = None
     spine: str | None = None
+    heading: str | None = Field(default=None, max_length=1000)
     paragraph: int | None = Field(default=None, ge=1)
     table: int | None = Field(default=None, ge=1)
     cell: tuple[int, int] | None = None
@@ -142,6 +143,8 @@ class Fragment(Contract):
     ordinal: int = Field(ge=0)
     locator: Locator
     text: str
+    parser_name: str | None = Field(default=None, min_length=1)
+    parser_version: str | None = Field(default=None, min_length=1)
 
 
 class SourceVersion(Contract):
