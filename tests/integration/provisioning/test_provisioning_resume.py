@@ -115,7 +115,7 @@ def test_a_run_interrupted_at_the_acl_resumes_and_does_not_reissue_keys(
     request = _request(gateway_dsn, world, library)
 
     failing = RecordingIndexAdmin(fail_at="apply_acl")
-    with pytest.raises(ProvisioningError, match="injected failure"):
+    with pytest.raises(ProvisioningError, match="step 'acl' failed"):
         provisioning.run_provisioning(
             provisioner, world.manager, request.id, failing, RecordingSecretSink()
         )
@@ -166,7 +166,7 @@ def test_a_failure_after_the_keys_does_not_mint_more_on_the_retry(
     assert len(credential_refs(provisioner, world.manager, library)) == 2
 
     retry = RecordingIndexAdmin()
-    sink_b = RecordingSecretSink()
+    sink_b = RecordingSecretSink(stored=sink_a.stored)
     outcome = provisioning.run_provisioning(provisioner, world.manager, request.id, retry, sink_b)
     assert outcome.resumed is True
     assert retry.keys_issued == [], retry.keys_issued
@@ -194,9 +194,8 @@ def test_a_crash_between_storing_a_key_and_journalling_it_does_not_rotate_the_ke
     request = _request(gateway_dsn, world, library)
 
     first = RecordingIndexAdmin()
-    provisioning.run_provisioning(
-        provisioner, world.manager, request.id, first, RecordingSecretSink()
-    )
+    first_sink = RecordingSecretSink()
+    provisioning.run_provisioning(provisioner, world.manager, request.id, first, first_sink)
     assert len(first.keys_issued) == 2
 
     # the state a process death between the store and the journal would leave
@@ -210,20 +209,26 @@ def test_a_crash_between_storing_a_key_and_journalling_it_does_not_rotate_the_ke
     )
 
     retry = RecordingIndexAdmin()
-    sink = RecordingSecretSink()
+    sink = RecordingSecretSink(stored=first_sink.stored)
     outcome = provisioning.run_provisioning(provisioner, world.manager, request.id, retry, sink)
     assert retry.keys_issued == [], "a resumed step rotated a key that already existed"
     assert sink.written == []
     assert outcome.resumed is True
     # 'secrets' re-ran (it was the step whose journal entry was lost) and it
     # issued nothing; 'verified' was already journalled, so it was skipped.
-    assert [s.step for s in outcome.steps if s.state == "done"] == ["secrets"]
+    assert [s.step for s in outcome.steps if s.state == "done"] == ["secrets", "verified"]
     assert [s.step for s in outcome.steps if s.state == "skipped"] == [
         "account",
         "identities",
         "acl",
-        "verified",
     ]
+
+    assert (
+        world.conn.execute(
+            "SELECT state FROM kb.provisioning_request WHERE id=%s", (request.id,)
+        ).fetchone()[0]
+        == "succeeded"
+    )
 
 
 def test_no_key_reaches_the_database_the_journal_or_the_log(
@@ -280,12 +285,15 @@ def test_a_second_run_of_a_finished_request_does_nothing(provisioner, gateway_ds
     request = _request(gateway_dsn, world, library)
 
     first = RecordingIndexAdmin()
-    provisioning.run_provisioning(
-        provisioner, world.manager, request.id, first, RecordingSecretSink()
-    )
+    first_sink = RecordingSecretSink()
+    provisioning.run_provisioning(provisioner, world.manager, request.id, first, first_sink)
     second = RecordingIndexAdmin()
     outcome = provisioning.run_provisioning(
-        provisioner, world.manager, request.id, second, RecordingSecretSink()
+        provisioner,
+        world.manager,
+        request.id,
+        second,
+        RecordingSecretSink(stored=first_sink.stored),
     )
     assert second.calls == [], second.calls
     assert outcome.resumed is True

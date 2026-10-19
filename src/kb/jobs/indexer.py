@@ -1,4 +1,9 @@
-"""Single-writer, resumable semantic projection on the existing durable queue."""
+"""Single-writer, resumable semantic projection on the existing durable queue.
+
+The indexer remains inside its configured actor/account scope. Owner-only
+library discovery for multi-user indexing remains an explicit C16 dependency;
+this module does not claim or simulate all-user indexing.
+"""
 
 import os
 import time
@@ -10,12 +15,11 @@ import psycopg
 from procrastinate.exceptions import AlreadyEnqueued
 
 from kb.access.policy import Principal, transaction_identity
-from kb.adapters.secrets import FileSecretSink, _reject_symlinks
+from kb.adapters.secrets import _reject_symlinks
 from kb.adapters.vector_writer import OpenVikingWriter
 from kb.retrieval import semantic_registry as registry
 from kb.retrieval.embedding_profile import SELECTED_PROFILE
-from kb.retrieval.openviking_admin import OpenVikingAdmin
-from kb.retrieval.provisioning import load_account, request_provisioning, run_provisioning
+from kb.retrieval.provisioning import load_account, request_provisioning
 
 
 def _checkpoint(conn, principal, build, document):
@@ -36,18 +40,15 @@ def reindex(
     library_id,
     *,
     url,
-    root_key_file,
     keys_root,
-    bootstrap_dir,
     terminal_failure=True,
 ):
     build = None
-    admin = writer = None
+    writer = None
     with psycopg.connect(dsn, autocommit=True) as conn:
         if not conn.execute("SELECT pg_try_advisory_lock(112187,1)").fetchone()[0]:
             raise RuntimeError("index_writer_busy")
         try:
-            # Validate manager/account scope BEFORE contacting the privileged backend.
             registry.capture(conn, principal, library_id)
             account = load_account(conn, principal, library_id)
             if account and (
@@ -55,18 +56,9 @@ def reindex(
                 or account.embedding_profile != SELECTED_PROFILE.name
             ):
                 raise RuntimeError("projection_profile_mismatch")
-            if not account or account.state != "ready":
-                request = request_provisioning(conn, principal, library_id)
-                admin = OpenVikingAdmin(url, root_key_file, bootstrap_dir)
-                run_provisioning(
-                    conn,
-                    principal,
-                    request.id,
-                    admin,
-                    FileSecretSink(keys_root),
-                    dimension=SELECTED_PROFILE.dimension,
-                    embedding_profile=SELECTED_PROFILE.name,
-                )
+            if account is None or account.state != "ready":
+                request_provisioning(conn, principal, library_id)
+                return {"state": "awaiting_provisioning"}
             with transaction_identity(conn, principal):
                 conn.execute(
                     "SELECT pg_advisory_xact_lock(hashtextextended(%s,91))", (str(library_id),)
@@ -80,7 +72,6 @@ def reindex(
             build = registry.begin(conn, principal, snapshot)
             if build.already_current:
                 return {"state": "current", "documents": len(snapshot.documents), "unchanged": True}
-            account = load_account(conn, principal, library_id)
             path = keys_root / "index" / account.index_identity / "key"
             _reject_symlinks(path)
             if path.stat().st_mode & 0o077:
@@ -123,17 +114,13 @@ def reindex(
         finally:
             if writer is not None:
                 writer.close()
-            if admin is not None:
-                admin.close()
             conn.execute("SELECT pg_advisory_unlock(112187,1)")
 
 
 def configuration():
     return dict(
         url=os.environ["KB_OPENVIKING_URL"],
-        root_key_file=Path(os.environ["KB_OPENVIKING_ROOT_KEY_FILE"]),
         keys_root=Path(os.environ["KB_INDEX_KEYS_ROOT"]),
-        bootstrap_dir=Path(os.environ["KB_BOOTSTRAP_KEYS_ROOT"]),
     )
 
 

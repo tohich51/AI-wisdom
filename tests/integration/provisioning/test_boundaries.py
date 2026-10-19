@@ -31,6 +31,7 @@ from uuid import uuid4
 
 import psycopg
 import pytest
+from psycopg.conninfo import make_conninfo
 from pydantic import ValidationError
 
 from kb.retrieval.provisioning import (
@@ -470,6 +471,24 @@ def _run_cli(args: list[str], dsn: str, **env_extra: str) -> subprocess.Complete
     )
 
 
+@pytest.fixture
+def cli_provisioner_dsn(provisioner_dsn):
+    # Standalone CLI is pinned to the actual deployment role, not a test login alias.
+    return make_conninfo(provisioner_dsn, user="kb_provisioner")
+
+
+@pytest.fixture
+def cli_authorized_world(world, admin):
+    world.account_id = world.organisation()
+    actor = world.manager
+    admin.execute(
+        "INSERT INTO kb.membership(organisation_id,principal_id,issuer,subject,status) "
+        "VALUES(%s,%s,'https://synthetic.invalid',%s,'active')",
+        (actor.account_id, actor.principal_id, str(actor.principal_id)),
+    )
+    return world
+
+
 def test_the_cli_refuses_to_run_as_the_migration_owner(c15_dsn, schema):
     """The one-shot must not be the DDL owner.
 
@@ -480,57 +499,61 @@ def test_the_cli_refuses_to_run_as_the_migration_owner(c15_dsn, schema):
     """
     result = _run_cli(["list-requests"], c15_dsn)
     assert result.returncode == 4, result.stderr
-    assert "refusing to run the one-shot" in result.stderr, result.stderr
+    assert "REFUSED" in result.stderr, result.stderr
 
 
-def test_the_cli_lists_open_requests_against_a_real_database(provisioner_dsn, world):
+def test_the_cli_lists_open_requests_against_a_real_database(cli_provisioner_dsn, world):
     """The part of the one-shot that genuinely runs here, and it exits 0."""
     library, _people = world.library_with(("owner", "manager"))
     from kb.retrieval.provisioning import request_provisioning
 
-    with psycopg.connect(provisioner_dsn, autocommit=True) as conn:
+    with psycopg.connect(cli_provisioner_dsn, autocommit=True) as conn:
         request = request_provisioning(conn, world.manager, library)
-    result = _run_cli(["list-requests"], provisioner_dsn)
+    result = _run_cli(["list-requests"], cli_provisioner_dsn)
     assert result.returncode == 0, result.stderr
     assert str(request.id) in result.stdout
     assert str(library) in result.stdout
 
 
-def test_the_cli_exits_nonzero_when_openviking_is_absent(provisioner_dsn, world):
+def test_the_cli_exits_nonzero_when_openviking_is_absent(cli_provisioner_dsn, cli_authorized_world):
     """The receipt for a provisioning run that did not happen.
 
     Exit 3, a message that names the missing dependency, and no account row
     afterwards. A green line here would be the exact failure this card is
     graded on.
     """
+    world = cli_authorized_world
     library, _people = world.library_with(("owner", "manager"))
     from kb.retrieval.provisioning import request_provisioning
 
-    with psycopg.connect(provisioner_dsn, autocommit=True) as conn:
+    with psycopg.connect(cli_provisioner_dsn, autocommit=True) as conn:
         request = request_provisioning(conn, world.manager, library)
-    result = _run_cli(["run", str(request.id)], provisioner_dsn)
+    result = _run_cli(["run", str(request.id)], cli_provisioner_dsn)
     assert result.returncode == 3, (result.returncode, result.stdout, result.stderr)
     assert "CANNOT PROVISION" in result.stderr, result.stderr
     assert "success" not in result.stdout.lower()
     assert world.account_row(library) is None
 
 
-def test_the_cli_exits_nonzero_even_with_the_endpoint_configured(provisioner_dsn, world):
-    """A flag is not an implementation.
+def test_the_cli_exits_nonzero_even_with_the_endpoint_configured(
+    cli_provisioner_dsn, cli_authorized_world
+):
+    """An endpoint alone is not privileged runtime configuration.
 
     Setting ``KB_OPENVIKING_ADMIN_URL`` must not turn a missing client into a
-    green run. The tree ships the boundary, not a client, and says so.
+    green run. Private root-key and storage paths are still required before the client can open.
     """
+    world = cli_authorized_world
     library, _people = world.library_with(("owner", "manager"))
     from kb.retrieval.provisioning import request_provisioning
 
-    with psycopg.connect(provisioner_dsn, autocommit=True) as conn:
+    with psycopg.connect(cli_provisioner_dsn, autocommit=True) as conn:
         request = request_provisioning(conn, world.manager, library)
     result = _run_cli(
         ["run", str(request.id)],
-        provisioner_dsn,
+        cli_provisioner_dsn,
         KB_OPENVIKING_ADMIN_URL="http://127.0.0.1:19300",
         KB_SECRET_STORE_DIR="/run/kb-secrets",  # noqa: S106 - a path, not a credential
     )
     assert result.returncode == 3, (result.returncode, result.stdout, result.stderr)
-    assert "ships no OpenViking admin client" in result.stderr, result.stderr
+    assert "CANNOT PROVISION" in result.stderr, result.stderr

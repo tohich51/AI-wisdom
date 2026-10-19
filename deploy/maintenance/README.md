@@ -1,91 +1,30 @@
-# C15 — provisioning deployment kit (one-shot, rootless)
+# C15: отдельный административный запуск OpenViking
 
-This directory is the **delivery artifact** for the provisioning operation: the
-Quadlet unit that runs it, the volume its keys land in, and an environment
-template. It is not a deployment that has been started. There is no Podman and
-no systemd in the C15 workspace (`docs/handoff/runtime-capabilities.json`), so
-the unit below has never been run, and `docs/handoff/results/C15.json` records
-it as `not_run` rather than as a passing check.
+Существующие OpenVikingAdmin и FileSecretSink создают аккаунт библиотеки, две служебные идентичности и закрытый корень. PostgreSQL хранит только соответствия и ссылки на ключи. Привилегированный код выполняется отдельным контейнером по запросам из PostgreSQL; постоянный индексатор располагает только ключами записи.
 
-## What this is
+## Команды
 
-`kb-provision-index` is a **one-shot administrative task**. The application
-*requests* provisioning (`kb.provisioning_request`); this unit carries it out
-with the OpenViking root key. It is not a service, it is not restarted, and it
-does not consume the worker queue.
+- `kb provision-index list-requests` — прочитать очередь, без OpenViking.
+- `kb provision-index run` — обработать ограниченную порцию допустимых запросов.
+- `kb provision-index run UUID` — возобновить конкретный запрос.
+- `kb provision-index show UUID` — прочитать соответствие библиотеки через проверенный контекст запроса.
 
-```
-gateway (kb_app)      --INSERT-->  kb.provisioning_request
-                                             |
-                                             |  read by the one-shot only
-                                             v
-one-shot (kb_provisioner, root key)  --POST--> OpenViking admin API
-                        |
-                        +--INSERT--> kb.index_account, kb.index_credential_ref
-                        +--write---> kb-secrets/ volume (references only in PG)
-```
+CLI принимает только роль kb_provisioner без SUPERUSER и BYPASSRLS. Пользователь и организация берутся из kb.provisioning_context; повторно проверяются членство и право управления. Произвольный идентификатор организации не принимается. Учётные данные не передаются в аргументах команды и не печатаются.
 
-The gateway never receives the root key, never holds the index identity, and
-has no `INSERT` privilege on `kb.index_account` at all. That is enforced three
-times over — by privileges, by an RLS policy that admits only the one-shot
-role, and by a policy clause that requires the transport principal to manage
-the library. The key is not the authority; the grant is.
+## Развёртывание
 
-## Files
+Подставить точный принятый SHA в контейнерные файлы; mutable latest не используется. `kb-provision-index.container` устанавливается как `~/.config/containers/systemd/pkb-provision-index.container`. Таймер устанавливается отдельно в `~/.config/systemd/user/pkb-provision-index.timer`. Это обычный systemd timer, не дополнительная очередь. Имя службы таймера должно совпадать с установленным Quadlet.
 
-| File | Purpose |
-|---|---|
-| `kb-provision-index.container` | Quadlet unit. `Type=oneshot`, rootless, no published ports, no container socket. |
-| `kb-provision-index.volume` | The closed secret store the issued keys are written into. |
-| `kb-provision-index.env.example` | Environment template. Every value is a `__PLACEHOLDER__`; the filled file is untracked. |
-| `verify-no-container-socket.sh` | Black-box check against a deployed host: nothing outside the allowed set answers, and no socket is reachable from the app. |
+После установки: `systemctl --user daemon-reload`, затем `systemctl --user enable --now pkb-provision-index.timer`. Генерируемую Quadlet-службу отдельно не enable. Type=oneshot/RemainAfterExit=no позволяет повторные запуски; один и тот же advisory lock (112187,1) сериализует административные операции и запись индекса. Занятый lock и ошибка дают nonzero; повтор выполняет таймер. Запуск ограничен временем, памятью и размером порции.
 
-## Invariants the unit file encodes (and the test checks)
+Прежняя неисполненная инструкция требовала ручного запуска для каждой библиотеки. Текущий таймер выполняет отдельные административные запуски автоматически, сохраняя изоляцию ключей. Сам привилегированный контейнер не является постоянной службой.
 
-These are asserted against the file in
-`tests/integration/provisioning/test_boundaries.py::test_the_quadlet_unit_mounts_no_container_socket`,
-so the artifact and the claim cannot drift apart:
+Заполненный provisioner.env хранится только на сервере с правами 0600; директории ключей — 0700, файлы — 0600. Корневой ключ и bootstrap доступны только административному контейнеру. Индексатор использует pkb-indexer.container с подключённым read-only подкаталогом index. Gateway имеет только read-ключи; parser и worker генерации ключей OpenViking не получают. Сокеты контейнерных движков в приложения не подключаются.
 
-* **No container socket.** No `/run/podman/podman.sock`, no
-  `/run/docker.sock`, no `DOCKER_HOST`. The application does not start
-  containers; it talks HTTP to the index server, which is the only thing it
-  needs.
-* **No published ports.** The unit publishes nothing. A15 is satisfied by the
-  reverse proxy knowing about exactly two loopback ports, and this unit is not
-  one of them.
-* **Not a boot step.** No `[Install]` `WantedBy` — provisioning is an
-  explicit `systemctl --user start kb-provision-index.service`, never
-  something that happens because the host rebooted.
-* **Read-only root, no capabilities, no new privileges.** The only writable
-  path is the secret-store volume.
+## Возобновление и границы
 
-## Running it (on the target host)
+Сохранившийся закрытый файл ключа позволяет восстановить ссылку PostgreSQL без повторной выдачи. Реально отсутствующий файл можно восстановить; ошибка прав, ссылка или неоднозначная ошибка ввода-вывода не разрешает ротацию. Точный внешний эффект до сохранения файла не считается exactly-once.
 
-```bash
-cp deploy/maintenance/kb-provision-index.env.example /etc/kb/kb-provision-index.env
-# fill the placeholders; the DSN is the kb_provisioner role, NOT postgres
-chmod 0400 /etc/kb/kb-provision-index.env && chown root:root /etc/kb/kb-provision-index.env
-install -m 0644 deploy/maintenance/kb-provision-index.* ~/.config/containers/systemd/
-systemctl --user daemon-reload
-systemctl --user start kb-provision-index.service
-```
+Имеющееся обнаружение библиотек индексатором ограничено настроенным пользователем. Приёмка C15 не означает готовность индексации всех десяти пользователей; маршрутизация их заданий остаётся отдельной работой C16.
 
-The environment file is where the root key lives. It is `0400 root:root`
-because the alternative — a key on a command line — is visible to every
-process on the host in `ps`.
-
-## What is NOT verified
-
-* **The unit has never been started.** No Podman, no systemd (E01). Its
-  syntax and its restrictions are checked by reading the file; its runtime
-  behaviour is `not_run`.
-* **There is no OpenViking admin client.** `kb.retrieval.provisioning` defines
-  the boundary (`IndexAdminPort`) and refuses; `provisioning_cli` exits 3 with
-  that reason. Writing a client for an API that cannot be called would be
-  inventing a protocol, so the honest state of the remote half is
-  `not_run` behind E03.
-* **The key mount inside the container** depends on the target host's Podman
-  version (`Secret=` support differs across 4.x/5.x). The unit uses an
-  `EnvironmentFile`, which is the boring mechanism that works everywhere; if
-  the deployment prefers Podman secrets, that is a one-line change to review
-  with whoever owns `deploy/`.
+Файлы здесь — артефакты поставки. Реальное применение, отсутствие ключей у постоянных служб, испытание возобновления на настоящем OpenViking и итоговый SHA подтверждаются отдельным runtime receipt. SQL doubles и чтение unit-файла не заменяют такую проверку. Таймер включается только при принятом выпуске; этот каталог сам ничего не развёртывает.

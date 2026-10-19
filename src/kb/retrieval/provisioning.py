@@ -1,40 +1,11 @@
-"""C15 — provisioning the retrieval/index tier, one account per library.
+"""Per-library retrieval accounts, restricted ACL and resumable provisioning.
 
-The shape of the product decision this module encodes:
-
-* **One OpenViking account per library**, plus **two explicit service
-  identities** per account — one that may read and one that may index. The
-  gateway is given neither the account-creating key nor a shared identity.
-* **A restricted root and explicit grants.** The ACL is generated here from
-  the library id, and it is validated again by the database
-  (``kb.index_account_acl_is_restricted``), because a second opinion written in
-  two languages is worth more than one.
-* **The mapping lives in PostgreSQL.** ``library_id -> account`` is a table,
-  not a convention, and it is read from the database for every search. A
-  client never names an account, a URI or a namespace.
-* **Partial provisioning resumes without leaking keys.** Which steps finished
-  is in ``kb.provisioning_run``; a key is issued once and handed straight to
-  the secret store, and only its *reference* is ever written to a database.
-
-Three things this module refuses to be, because each of them is a way this
-card's own acceptance criteria get quietly broken:
-
-1. It does not talk to a container runtime. There is no ``subprocess`` import
-   and no socket path anywhere in the package: the one-shot is a process that
-   holds a root key, and a process that can start containers is a process that
-   can be turned into the host.
-2. It does not contain a working OpenViking client. The boundary is
-   :class:`IndexAdminPort`, and the only implementation shipped here is
-   :class:`UnconfiguredIndexAdmin`, which refuses. A hand-written fake that
-   answered calls would turn "unverified" into a claim nobody could audit.
-3. It does not put key material in PostgreSQL, in a log, in a job payload or
-   in an exception message. Keys move from the admin port to the secret store
-   and are dropped.
-
-The OpenViking admin port is a *boundary*, not an abstraction layer for its
-own sake: the real client belongs to whichever card owns the running server,
-and until then the honest state of the card is "the policy is verified, the
-remote effects are not".
+The isolated administrative CLI uses OpenVikingAdmin and FileSecretSink.
+Applications request work in PostgreSQL and never receive a root key.
+Only metadata and deterministic credential references are recorded here;
+key material is handed directly from the adapter to its private sink.
+The unconfigured ports below remain explicit fail-closed boundaries for
+callers without a configured runtime, not the production adapters.
 """
 
 from __future__ import annotations
@@ -277,11 +248,14 @@ class IndexAdminPort(Protocol):
 class SecretSink(Protocol):
     """Where key material goes: a sealed volume or a secret store.
 
-    The one-shot calls this once per identity and then forgets the value. The
-    database records only the :class:`SecretRef` the sink returns.
+    Every reconciliation asks whether an identity already has a recoverable
+    credential. Recovery returns only its deterministic reference or ``None``
+    when the file is definitely absent; it never returns key material.
     """
 
     def write(self, identity: str, secret: str) -> SecretRef: ...
+
+    def recover(self, identity: str) -> SecretRef | None: ...
 
 
 class UnconfiguredIndexAdmin:
@@ -297,11 +271,7 @@ class UnconfiguredIndexAdmin:
     provisioning run that did not happen.
     """
 
-    reason = (
-        "no OpenViking admin endpoint is configured; this environment has no "
-        "OpenViking server and no embedding provider, so the remote half of "
-        "provisioning cannot be exercised (docs/handoff/results/C15.json)"
-    )
+    reason = "no OpenViking admin endpoint is configured for this caller"
 
     def create_account(self, spec: AccountSpec) -> RemoteAccount:
         raise ProvisioningUnavailable(self.reason)
@@ -323,6 +293,9 @@ class UnconfiguredSecretSink:
     """Refuses too, for the same reason and with the same discipline."""
 
     def write(self, identity: str, secret: str) -> SecretRef:
+        raise ProvisioningUnavailable(UnconfiguredIndexAdmin.reason)
+
+    def recover(self, identity: str) -> SecretRef | None:
         raise ProvisioningUnavailable(UnconfiguredIndexAdmin.reason)
 
 
@@ -603,15 +576,26 @@ def _store_credential_ref(
         )
 
 
-def _has_credential_ref(
+def _credential_ref(
     conn: psycopg.Connection, principal: Principal, library_id: UUID, identity: str
-) -> bool:
-    with transaction_identity(conn, principal), conn.cursor() as cur:
-        cur.execute(
-            "SELECT 1 FROM kb.index_credential_ref WHERE library_id = %s AND identity = %s",
-            (library_id, identity),
-        )
-        return cur.fetchone() is not None
+) -> SecretRef | None:
+    expected_path = secret_ref_for(identity).path
+    return next(
+        (ref for ref in credential_refs(conn, principal, library_id) if ref.path == expected_path),
+        None,
+    )
+
+
+def _recover_secret_ref(sink: SecretSink, identity: str) -> SecretRef | None:
+    try:
+        recovered = sink.recover(identity)
+    except Exception as exc:
+        error = type(exc).__name__.lower()
+        raise ProvisioningRefused(f"secret recovery failed ({error})") from None
+
+    if recovered is not None and recovered != secret_ref_for(identity):
+        raise ProvisioningRefused("secret recovery returned an unexpected reference")
+    return recovered
 
 
 def run_provisioning(
@@ -634,16 +618,17 @@ def run_provisioning(
 
     The two hard rules are visible in the code below:
 
-    * **A key is issued once.** The ``secrets`` step checks for an existing
-      reference first. A resumed run that had already written the key does not
-      ask the admin port for a second one, so a failure between "issued" and
-      "recorded" cannot turn into a stream of new credentials.
+    * **An intact credential is never blindly rotated.** Every run reconciles
+      both identities. A recoverable file restores a missing database
+      reference without issuance; a definitely absent file may receive a new
+      key. Ambiguous I/O aborts instead. A crash before atomic file persistence
+      can therefore cause regeneration on the next run, which is the actual
+      crash-boundary guarantee.
     * **A key is never written anywhere but the sink.** It is a local
-      variable for the length of one call. It is not logged, not journalled,
-      not returned, and not put in an exception message — the run journal's
-      ``detail`` is rejected by the database if it contains anything that is
-      not one of our own reference shapes.
+      variable for the length of the existing admin-to-sink handoff. It is not
+      logged, journalled, returned, or included in an exception message.
     """
+    repair = False
     with transaction_identity(conn, principal), conn.cursor() as cur:
         cur.execute(
             """
@@ -657,6 +642,9 @@ def run_provisioning(
         if request_row is None:
             raise ProvisioningRefused("no such provisioning request")
         _, library_id, state, attempt = request_row
+        spec = build_account_spec(
+            library_id, dimension=dimension, embedding_profile=embedding_profile
+        )
 
         if state == "succeeded":
             account = load_account(conn, principal, library_id)
@@ -664,13 +652,24 @@ def run_provisioning(
                 account is None
             ):  # pragma: no cover - the request outlives the account only in a broken install
                 raise ProvisioningRefused("request is marked done but no account exists")
-            return ProvisioningOutcome(
-                request_id=request_id,
-                account_ref=account.account_ref,
-                steps=[],
-                resumed=True,
-                secret_refs=credential_refs(conn, principal, library_id),
-            )
+
+            succeeded_refs: list[SecretRef] = []
+            for identity in (spec.read_identity, spec.index_identity):
+                recovered_ref = _recover_secret_ref(sink, identity)
+                stored_ref = _credential_ref(conn, principal, library_id, identity)
+                if recovered_ref is None or stored_ref != recovered_ref:
+                    repair = True
+                    break
+                succeeded_refs.append(recovered_ref)
+
+            if not repair:
+                return ProvisioningOutcome(
+                    request_id=request_id,
+                    account_ref=account.account_ref,
+                    steps=[],
+                    resumed=True,
+                    secret_refs=sorted(succeeded_refs, key=lambda ref: ref.path),
+                )
 
         cur.execute(
             """
@@ -686,7 +685,6 @@ def run_provisioning(
         )
         current_attempt = attempt + 1
 
-    spec = build_account_spec(library_id, dimension=dimension, embedding_profile=embedding_profile)
     done = _completed_steps(conn, principal, request_id)
     outcomes: list[StepOutcome] = []
     refs: list[SecretRef] = []
@@ -697,28 +695,25 @@ def run_provisioning(
         action: Callable[[], dict[str, object] | None],
         detail: dict[str, object],
     ) -> None:
-        if step in done:
+        must_run = step in ("secrets", "verified")
+        if step in done and not must_run:
             outcomes.append(StepOutcome(step=step, state="skipped", detail={"resumed": True}))
             return
         try:
             extra = action() or {}
         except Exception as exc:
-            # The exception TYPE is journalled and the exception itself is
-            # re-raised untouched: an admin port that put a key in its error
-            # message would leak it into the run journal through here.
+            error = type(exc).__name__.lower()
             _record_step(
                 conn,
                 principal,
                 request_id,
                 step,
                 "failed",
-                {"error": type(exc).__name__.lower()},
+                {"error": error},
                 current_attempt,
             )
-            outcomes.append(
-                StepOutcome(step=step, state="failed", detail={"error": type(exc).__name__.lower()})
-            )
-            raise
+            outcomes.append(StepOutcome(step=step, state="failed", detail={"error": error}))
+            raise ProvisioningError(f"provisioning step {step!r} failed ({error})") from None
         _record_step(
             conn, principal, request_id, step, "done", {**detail, **extra}, current_attempt
         )
@@ -752,15 +747,24 @@ def run_provisioning(
     def _step_secrets() -> dict[str, object]:
         issued = 0
         for identity in (spec.read_identity, spec.index_identity):
-            if _has_credential_ref(conn, principal, library_id, identity):
-                refs.append(secret_ref_for(identity))
+            expected_ref = secret_ref_for(identity)
+            recovered_ref = _recover_secret_ref(sink, identity)
+            stored_ref = _credential_ref(conn, principal, library_id, identity)
+
+            if recovered_ref is not None:
+                if stored_ref is None:
+                    _store_credential_ref(conn, principal, library_id, identity, recovered_ref)
+                refs.append(recovered_ref)
                 continue
+
+            # None is reserved for a file proven absent. Any uncertainty was
+            # raised by recovery before this issuance path can be entered.
             key = admin.issue_service_key(spec, identity)
-            # key.secret goes straight into the sink and is never named in the
-            # journal, the log or the return value.
-            ref = sink.write(identity, key.secret)
-            _store_credential_ref(conn, principal, library_id, identity, ref)
-            refs.append(ref)
+            written_ref = sink.write(identity, key.secret)
+            if written_ref != expected_ref:
+                raise ProvisioningRefused("secret sink returned an unexpected reference")
+            _store_credential_ref(conn, principal, library_id, identity, written_ref)
+            refs.append(written_ref)
             issued += 1
         return {"issued": issued, "skipped": 2 - issued}
 

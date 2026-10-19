@@ -97,9 +97,21 @@ class RecordingSecretSink:
     """
 
     written: list[tuple[str, str]] = field(default_factory=list)
+    stored: dict[str, str] = field(default_factory=dict)
 
     def write(self, identity: str, secret: str) -> SecretRef:
+        if not isinstance(secret, str) or not secret.strip():
+            raise ValueError("secret must be non-empty")
         self.written.append((identity, secret))
+        self.stored[identity] = secret
+        return SecretRef(path=f"kb-secrets/{identity}/key")
+
+    def recover(self, identity: str) -> SecretRef | None:
+        secret = self.stored.get(identity)
+        if secret is None:
+            return None
+        if not secret.strip():
+            raise ValueError("stored secret is empty")
         return SecretRef(path=f"kb-secrets/{identity}/key")
 
     def secrets(self) -> list[str]:

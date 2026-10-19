@@ -1,0 +1,11 @@
+[Unit]
+Description=AI-wisdom pending library provisioning
+
+[Timer]
+OnActiveSec=15s
+OnUnitInactiveSec=30s
+AccuracySec=5s
+Unit=pkb-provision-index.service
+
+[Install]
+WantedBy=timers.target
