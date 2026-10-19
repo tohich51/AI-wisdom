@@ -123,15 +123,14 @@
         option(host, linkLibrary, text(item.name) || 'Библиотека без названия', item.id);
       }
       linkLibrary.required = true;
+      host.attachLibraryChooser(linkLibrary, {accept:item => item.id !== library.id && item.kind !== 'project'});
       const linkRequired = addField(host, linkForm, 'Сделать обязательной', 'is_required', 'checkbox');
       linkRequired.checked = true;
       const linkSubmit = element(host, 'button', 'Связать с проектом', {type: 'submit'});
       linkForm.append(linkSubmit);
       if (!linkLibraries.length) {
-        linkCard.append(element(host, 'p', 'Нет доступных библиотек для связи.', {class: 'completion-empty'}));
-        linkLibrary.dataset.projectDisabled = 'true';
-        linkRequired.dataset.projectDisabled = 'true';
-        linkSubmit.dataset.projectDisabled = 'true';
+        linkCard.append(element(host, 'p', 'На загруженной странице нет библиотек для связи. Используйте выбор из всех библиотек.', {class: 'completion-empty'}));
+
       }
       window.WisdomForms.submit(linkForm, async () => {
         if (!isCurrent()) return;
@@ -162,6 +161,7 @@
       option(host, sourceLibrary, 'Выберите библиотеку');
       for (const item of pinLibraries) option(host, sourceLibrary, text(item.name) || 'Библиотека без названия', item.id);
       sourceLibrary.required = true;
+      host.attachLibraryChooser(sourceLibrary);
       const ruleSelect = addField(host, pinForm, 'Опубликованная версия', 'rule_version', 'select');
       option(host, ruleSelect, 'Сначала выберите библиотеку');
       ruleSelect.required = true; ruleSelect.dataset.projectRuleControl = 'true';

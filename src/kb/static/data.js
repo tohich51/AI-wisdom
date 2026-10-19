@@ -129,7 +129,14 @@
       );
     }
     if (!response.ok) {
-      if (response.status === 401 || response.status === 403) {
+      // A rejected metadata/type write leaves its own editable form intact.
+      // Reads and 401 still use the existing access-loss path.
+      const localForbidden = response.status === 403 && options.preserveFormOnForbidden === true && (
+        (method === 'PATCH' && /^\/api\/sources\/[^/]+\/metadata$/.test(pathname(path))) ||
+        (method === 'POST' && pathname(path) === '/api/library-types')
+      );
+      if (localForbidden && startGeneration === generation) invalidate('form forbidden');
+      if (response.status === 401 || (response.status === 403 && !localForbidden)) {
         // Отказ чтения, устаревшего к моменту ответа, не должен рушить экран,
         // который его заменил: повторная инвалидация стёрла бы свежий кэш
         // следующего экрана, а сообщение о доступе показалось бы не там.
@@ -148,7 +155,9 @@
       if (mutation && (response.status === 408 || response.status === 425 || response.status >= 500))
         throw requestError(ambiguousMessage, 'AmbiguousRequestError');
       const data = await response.json().catch(() => ({}));
-      throw Error(typeof data.detail === 'string' ? data.detail : 'Запрос отклонён. Проверьте введённые данные и состояние ресурса.');
+      const error = Error(typeof data.detail === 'string' ? data.detail : 'Запрос отклонён. Проверьте введённые данные и состояние ресурса.');
+      error.status = response.status;
+      throw error;
     }
     if (response.status === 204) return null;
     try {

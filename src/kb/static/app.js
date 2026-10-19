@@ -127,6 +127,7 @@ const LIBRARY_KIND_LABELS = new Map([
   ['playbook','Руководство'],
   ['experience','Опыт']
 ]);
+const CORE_LIBRARY_KIND_LABELS = new Map(LIBRARY_KIND_LABELS);
 const ROLE_LABELS = new Map([
   ['reader','Читатель'],
   ['contributor','Автор'],
@@ -517,32 +518,98 @@ const libraryRoute = (id, {replace = false} = {}) => {
   if (location.pathname + location.search === target) return;
   router.navigate(target, {replace});
 };
+// One server page plus explicitly selected/direct-route libraries, never a full inventory.
+function libraryReadGuard() {
+  const serial = freshIdentitySerial, generation = window.WisdomData.generation();
+  const binding = identityCoordinates(identity), route = captureRouteToken();
+  return () => serial === freshIdentitySerial && generation === window.WisdomData.generation()
+    && sameIdentity(binding, identityCoordinates(identity)) && isRouteCurrent(route);
+}
+function rememberLibrary(lib) {
+  if (lib?.id && !libraries.some(item => item.id === lib.id)) libraries.push(lib);
+  return lib;
+}
+async function readLibrary(id, options = {}) {
+  const current = libraryReadGuard();
+  const lib = await api('/api/libraries/' + encodeURIComponent(id), options);
+  if (!current()) throw new DOMException('Чтение библиотеки устарело.', 'AbortError');
+  return rememberLibrary(lib);
+}
 async function loadLibraries() {
-  const readSerial = ++libraryReadSerial;
-  const authSerial = freshIdentitySerial;
-  const dataGeneration = window.WisdomData.generation();
-  const readBinding = identityCoordinates(identity);
-  const page = await api('/api/libraries');
-  if (readSerial !== libraryReadSerial || authSerial !== freshIdentitySerial
-      || dataGeneration !== window.WisdomData.generation()
-      || !sameIdentity(readBinding, identityCoordinates(identity))) {
-    throw new DOMException('Чтение списка библиотек устарело.', 'AbortError');
-  }
-  libraries = page.libraries;
-  const list = byId('library-list'); list.replaceChildren(node('h2', 'Мои библиотеки'));
-  if (!libraries.length) list.append(node('p', 'База чистая. Создайте библиотеку и загрузите материал.'));
-  const items = pager({
+  const readSerial = ++libraryReadSerial, current = libraryReadGuard();
+  let readError = null;
+  const root = byId('library-list');
+  root.replaceChildren(node('h2', 'Мои библиотеки'));
+  const items = window.WisdomList.createServer(featureHost, {
     label: 'Страницы библиотек', stateKey: 'libraries', library: null,
-    renderItem: lib => button(lib.name + ' · ' + visibleEnum(LIBRARY_KIND_LABELS, lib.kind, 'Тип не указан'), () => openLibrary(lib)),
+    fetchPage: async ({limit, offset, signal}) => {
+      let page;
+      try { page = await api('/api/libraries?limit=' + limit + '&offset=' + offset, {signal}); }
+      catch (error) { readError = error; throw error; }
+      if (!current() || readSerial !== libraryReadSerial || signal.aborted)
+        throw new DOMException('Чтение списка библиотек устарело.', 'AbortError');
+      libraries = page.libraries.slice();
+      if (selected) rememberLibrary(selected);
+      return page;
+    },
+    renderItem: lib => button(lib.name + ' · ' + visibleEnum(LIBRARY_KIND_LABELS, lib.type_key || lib.kind, 'Тип не указан'), () => openLibrary(lib)),
     empty: 'База чистая. Создайте библиотеку и загрузите материал.'
   });
-  if (!libraries.length) return;
-  items.set(libraries);
-  list.append(items.element, items.navigation, items.status);
+  root.append(items.element, items.navigation, items.status);
+  await items.load();
+  if (readError) throw readError;
+  if (!current() || readSerial !== libraryReadSerial)
+    throw new DOMException('Чтение списка библиотек устарело.', 'AbortError');
+  const route = router.current();
+  const requested = ['libraries', 'context'].includes(route?.name) ? route.params[0]
+    : route?.query?.get('library');
+  if (requested && !libraries.some(lib => lib.id === requested)) await readLibrary(requested);
 }
-// Каждый вход в раздел перечитывает список, как и раньше: сетевой запрос
-// делает только слой данных (кэш и объединение одинаковых чтений).
 const ensureLibraries = () => loadLibraries();
+function attachLibraryChooser(select, {accept = () => true, pool = null} = {}) {
+  const help = node('p', 'В списке — загруженная страница и выбранные библиотеки.', {class:'muted'});
+  const choose = button('Выбрать из всех библиотек', () => {
+    const route = captureRouteToken(), current = libraryReadGuard();
+    const titleId = 'library-chooser-' + uuid();
+    const dialog = node('dialog', null, {'data-wisdom-private':'true', 'aria-labelledby':titleId, 'data-od-id':'library-chooser'});
+    const valid = () => current() && dialog.isConnected && select.isConnected;
+    const controller = new AbortController();
+    const list = window.WisdomList.createServer(featureHost, {
+      label:'Страницы выбора библиотеки', library:null,
+      fetchPage: async ({limit, offset, signal}) => {
+        const abort = () => controller.abort();
+        signal.addEventListener('abort', abort, {once:true});
+        try {
+          const page = await api('/api/libraries?limit=' + limit + '&offset=' + offset, {signal:controller.signal});
+          if (!valid()) throw new DOMException('Выбор отменён.', 'AbortError');
+          return page;
+        } finally { signal.removeEventListener('abort', abort); }
+      },
+      renderItem: lib => {
+        const control = button(lib.name + ' · ' + visibleEnum(LIBRARY_KIND_LABELS, lib.type_key || lib.kind), () => {
+          if (!valid()) return;
+          rememberLibrary(lib);
+          if (pool && !pool.some(item => item.id === lib.id)) pool.push(lib);
+          if (!Array.from(select.options).some(option => option.value === lib.id)) select.append(node('option', lib.name, {value:lib.id}));
+          select.value = lib.id;
+          dialog.close();
+          select.dispatchEvent(new Event('change', {bubbles:true}));
+        });
+        control.disabled = !accept(lib);
+        return control;
+      },
+      empty:'Доступных библиотек нет.'
+    });
+    dialog.append(node('h2', 'Выберите библиотеку', {id:titleId}), node('p', 'Недоступные для этого действия типы выбрать нельзя.'), list.element, list.navigation, list.status, button('Отмена', () => dialog.close()));
+    dialog.addEventListener('close', () => { controller.abort(); dialog.remove(); restoreFocus(choose, route); });
+    registerPrivateDialogInvalidator(dialog, () => controller.abort());
+    document.body.append(dialog); dialog.showModal();
+    void list.load();
+  });
+  choose.setAttribute('data-od-id', 'choose-' + (select.id || uuid()));
+  select.insertAdjacentElement('afterend', help);
+  help.append(document.createTextNode(' '), choose);
+}
 const sourceProcessRequests = new Map();
 const captureJobPollContext = () => {
   const binding = identityCoordinates(identity);
@@ -746,6 +813,82 @@ async function processSource(id, extract, request = null, onJobConfirmed = null)
     throw statusError;
   }
 }
+function editSourceMetadata(source, options = {}) {
+  const binding = identityCoordinates(identity), serial = freshIdentitySerial;
+  const sameOwner = () => serial === freshIdentitySerial && sameIdentity(binding, identityCoordinates(identity));
+  dialogForm('Сведения об источнике', form => {
+    form.setAttribute('data-od-id', 'source-metadata-form');
+    const author = field(form, 'Автор', 'author', source.author);
+    author.maxLength = 500; author.setAttribute('data-od-id', 'source-author');
+    const edition = field(form, 'Издание', 'edition', source.edition);
+    edition.maxLength = 500; edition.setAttribute('data-od-id', 'source-edition');
+    const publication = field(form, 'Ссылка или сведения о публикации', 'publication_ref', source.publication_ref, 'textarea');
+    publication.maxLength = 2000; publication.setAttribute('data-od-id', 'source-publication-ref');
+    form.append(node('p', 'Пустое поле удалит прежнее значение.', {class:'muted'}));
+  }, async (data, {isCurrent, signal}) => {
+    if (!isCurrent() || !sameOwner()) return;
+    const payload = Object.fromEntries(['author','edition','publication_ref'].map(key => [key, data.get(key) || null]));
+    await api('/api/sources/' + encodeURIComponent(source.id) + '/metadata', {
+      method:'PATCH', body:JSON.stringify(payload), signal, preserveFormOnForbidden:true
+    });
+    if (!isCurrent() || !sameOwner()) return;
+    // The data helper invalidates source/list caches on confirmed writes.
+    message('Сведения сохранены.');
+    try { await viewSource(source.id, {...options, isCurrent:() => sameOwner() && (typeof options.isCurrent !== 'function' || options.isCurrent())}); }
+    catch (error) {
+      if (sameOwner()) message('Сведения сохранены, но источник не перечитан: ' + readableError(error));
+    }
+  });
+}
+async function loadLibraryTypes(preferred) {
+  const current = libraryReadGuard();
+  const types = await api('/api/library-types', {noCache:true});
+  if (!current()) throw new DOMException('Список типов устарел.', 'AbortError');
+  const select = byId('library-kind'), value = preferred || select.value;
+  // Keep core choices, drop retired custom options, render registry values as text.
+  LIBRARY_KIND_LABELS.clear();
+  for (const [key, title] of CORE_LIBRARY_KIND_LABELS) LIBRARY_KIND_LABELS.set(key, title);
+  for (const type of types) LIBRARY_KIND_LABELS.set(type.key, type.title);
+  const registered = new Map(types.map(type => [type.key, type]));
+  select.replaceChildren(...Array.from(LIBRARY_KIND_LABELS, ([key, title]) =>
+    node('option', title, {value:key, 'data-base-kind':registered.get(key)?.base_kind || (CORE_LIBRARY_KIND_LABELS.has(key) ? key : '')})));
+  if (preferred && !types.some(type => type.key === preferred)) throw new Error('Сервер не вернул созданный тип в списке.');
+  if (Array.from(select.options).some(option => option.value === value)) select.value = value;
+}
+function createLibraryType() {
+  const binding = identityCoordinates(identity), serial = freshIdentitySerial;
+  let registeredKey = null;
+  dialogForm('Новый тип библиотеки', form => {
+    form.setAttribute('data-od-id', 'library-type-form');
+    const key = field(form, 'Ключ типа', 'key');
+    key.setAttribute('data-od-id', 'library-type-key');
+    key.required = true; key.minLength = 2; key.maxLength = 64; key.pattern = '[a-z][a-z0-9_]{1,63}';
+    form.append(node('p', 'От 2 до 64 символов: строчные латинские буквы, цифры и _. Первый символ — буква.', {class:'muted'}));
+    const title = field(form, 'Название типа', 'title'); title.setAttribute('data-od-id', 'library-type-title'); title.required = true; title.maxLength = 120;
+  }, async (data, {isCurrent, signal}) => {
+    const current = () => isCurrent() && serial === freshIdentitySerial && sameIdentity(binding, identityCoordinates(identity));
+    if (!current()) return;
+    const key = String(data.get('key')), title = String(data.get('title'));
+    if (!/^[a-z][a-z0-9_]{1,63}$/.test(key) || !title.trim() || title.length > 120)
+      throw new Error('Проверьте ключ и название типа.');
+    if (!registeredKey) {
+      try {
+        await api('/api/library-types', {method:'POST', body:JSON.stringify({key, title}), signal, preserveFormOnForbidden:true});
+      } catch (error) {
+        if (error.status === 409) throw new Error('Этот ключ уже занят. Введите другой ключ; название сохранено.');
+        throw error;
+      }
+      registeredKey = key;
+      const form = document.querySelector('[data-od-id="library-type-form"]');
+      if (current() && form) for (const name of ['key', 'title']) form.elements.namedItem(name).readOnly = true;
+    }
+    if (!current()) return;
+    try { await loadLibraryTypes(registeredKey); }
+    catch (error) { throw new Error('Тип создан, но список не обновлён. Повторите сохранение для чтения списка. ' + readableError(error)); }
+    if (current()) message('Тип добавлен и выбран для новой библиотеки.');
+  });
+}
+byId('create-library-type').addEventListener('click', safe(createLibraryType));
 async function viewSource(id, options = {}) {
   sourceViewController?.abort();
   const controller = new AbortController();
@@ -797,11 +940,16 @@ async function viewSource(id, options = {}) {
   let initial, displayPage, displayFrom = 0, previousStarts = [], targetPart = null;
   let pagesScanned = 0, fragmentsScanned = 0, searchStop = 'none';
   try {
-    initial = await requestSource('/api/sources/' + encodeURIComponent(id) + '?from_fragment=0&limit=' + SOURCE_PAGE_SIZE);
+    initial = await requestSource('/api/sources/' + encodeURIComponent(id) + (targetFragmentId ? '?fragment_id=' + encodeURIComponent(targetFragmentId) : '?from_fragment=0') + '&limit=' + SOURCE_PAGE_SIZE);
     if (!isCurrent()) return;
     pagesScanned = 1;
     fragmentsScanned = initial.fragments.length;
-    if (hasTarget) {
+    if (targetFragmentId) {
+      displayPage = initial;
+      displayFrom = Number.isInteger(initial.fragments[0]?.ordinal) ? initial.fragments[0].ordinal : 0;
+      targetPart = initial.fragments.find(matchesTarget) || null;
+      searchStop = targetPart ? 'found' : 'mismatch';
+    } else if (hasTarget) {
       let page = initial, pageFrom = 0, priorStarts = [], previousOrdinal = null;
       for (let pageNumber = 1; pageNumber <= SOURCE_AUTO_SEARCH_PAGES && isCurrent(); pageNumber++) {
         const match = page.fragments.find(matchesTarget) || null;
@@ -839,7 +987,10 @@ async function viewSource(id, options = {}) {
   const headingId = 'source-view-title-' + uuid();
   const d = node('dialog',null,{'data-wisdom-private':'true','data-wisdom-source-view':'true','aria-labelledby':headingId});
   d.append(node('h2', initial.source.title, {id:headingId}));
-  d.append(node('p', 'Автор: ' + (initial.source.author ?? 'не указан') + ' · Издание: ' + (initial.source.edition ?? 'не указано')));
+  d.append(node('p', 'Автор: ' + (initial.source.author ?? 'не указан') + ' · Издание: ' + (initial.source.edition ?? 'не указано')), node('p', 'Публикация: ' + (initial.source.publication_ref ?? 'не указана')));
+  const editMetadata = button('Изменить сведения', () => { d.close(); editSourceMetadata(initial.source, options); });
+  editMetadata.setAttribute('data-od-id', 'edit-source-metadata');
+  d.append(editMetadata);
   d.append(node('a', 'Скачать оригинал', {href: '/api/sources/' + id + '/original', download: initial.source.title}));
   const content = node('div'), pagerLine = node('p'), targetLine = node('p');
   const locationOf = part => [
@@ -909,7 +1060,7 @@ async function viewSource(id, options = {}) {
       }
     }
   });
-  async function renderPage(from) {
+  async function renderPage(from, restart = false) {
     if (pending) return;
     pending = true;
     previous.disabled = true; next.disabled = true;
@@ -919,7 +1070,8 @@ async function viewSource(id, options = {}) {
       const page = await requestSource('/api/sources/' + encodeURIComponent(id) + '?from_fragment=' + encodeURIComponent(from) + '&limit=' + SOURCE_PAGE_SIZE);
       if (!isCurrent() || !d.isConnected) return;
       if (!page.fragments.length) { pagerLine.textContent = 'Предыдущая часть фрагментов не найдена.'; return; }
-      previousFrom.pop(); currentFrom = from;
+      if (restart) previousFrom = []; else previousFrom.pop();
+      currentFrom = page.fragments[0]?.ordinal ?? from;
       const lastOrdinal = page.fragments.at(-1)?.ordinal;
       currentLastOrdinal = Number.isInteger(lastOrdinal) ? lastOrdinal : null;
       hasNext = page.fragments.length === SOURCE_PAGE_SIZE;
@@ -963,7 +1115,11 @@ async function viewSource(id, options = {}) {
       fragment.append(node('p', locationOf(part) || 'Место в тексте не указано.'), pre);
       content.append(fragment);
     }
-    pagerLine.textContent = fragments.length ? 'Показано фрагментов: ' + fragments.length + (hasNext ? ' · возможно, есть продолжение' : '') : 'Фрагментов в источнике пока нет.';
+    pagerLine.textContent = fragments.length ? 'Фрагменты ' + String(fragments[0]?.ordinal ?? '?') + '–' + String(fragments.at(-1)?.ordinal ?? '?') + ' · показано: ' + fragments.length + (hasNext ? ' · возможно, есть продолжение' : '') : 'Фрагментов в источнике пока нет.';
+  }
+  if (displayFrom > 0) {
+    const start = button('К началу источника', () => renderPage(0, true));
+    start.setAttribute('data-od-id', 'source-start'); d.append(start);
   }
   d.append(previous, next, pagerLine, targetLine, content);
   if (typeof options.onReturn === 'function') {
@@ -998,7 +1154,6 @@ async function viewSource(id, options = {}) {
   if (!isCurrent()) { d.close(); return; }
   renderFragments(displayPage.fragments);
   if (targetFocus) {
-    targetFocus.scrollIntoView({block:'center'});
     targetFocus.focus({preventScroll:true});
   }
   previous.disabled = previousFrom.length === 0;
@@ -1068,7 +1223,7 @@ async function openLibrary(lib, {guard = null, confirmedMutation = '', handoff =
   const curator = ['curator', 'manager'].includes(role);
   const contributor = curator || role === 'contributor';
   const extractionAllowed = Boolean(policy.generation_allowed && policy.external_processing_allowed);
-  root.append(node('p', 'Тип: ' + visibleEnum(LIBRARY_KIND_LABELS, lib.kind, 'Тип не указан') + ' · Доступ: ' + visibleEnum(ROLE_LABELS, role)));
+  root.append(node('p', 'Тип: ' + visibleEnum(LIBRARY_KIND_LABELS, lib.type_key || lib.kind, 'Тип не указан') + ' · Доступ: ' + visibleEnum(ROLE_LABELS, role)));
   const extractionPolicyNoteId = 'library-extraction-policy-' + uuid();
   if (contributor && !extractionAllowed) {
     root.append(node('p', 'Извлечение знаний и правил отключено политикой библиотеки. Параметры внешней обработки и генерации находятся в разделе «Доступ».', {
@@ -1413,6 +1568,11 @@ byId('create-library').addEventListener('submit', safe(async event => {
     return;
   }
   data.organisation_id = identity.account_id;
+  const chosen = Array.from(byId('library-kind').options).find(option => option.value === data.kind);
+  const baseKind = chosen?.dataset.baseKind || (CORE_LIBRARY_KIND_LABELS.has(data.kind) ? data.kind : null);
+  if (!baseKind || !CORE_LIBRARY_KIND_LABELS.has(baseKind)) throw new Error('Обновите список типов перед созданием библиотеки.');
+  if (data.kind !== baseKind) data.type_key = data.kind;
+  data.kind = baseKind;
   const project = data.kind === 'project'; if (project) delete data.kind;
   let result;
   const scope = project ? 'create-project' : 'create-library';
@@ -1539,7 +1699,7 @@ window.WisdomForms.submit(searchForm, async event => {
   }
 });
 byId('logout').addEventListener('click', safe(async () => { await post('/auth/logout'); location.reload(); }));
-const featureHost={node,button,api,post,notify:message,confirm:confirmDialog,libraries:()=>libraries,currentLibrary:()=>selected,identity:()=>identity,jobStatusLabel,
+const featureHost={node,button,api,post,attachLibraryChooser,notify:message,confirm:confirmDialog,libraries:()=>libraries,currentLibrary:()=>selected,identity:()=>identity,jobStatusLabel,
   routeToken:captureRouteToken,routeIsCurrent:isRouteCurrent,
   refreshLibrary:()=>selected?openLibrary(selected):Promise.resolve(),
   openSource:viewSource,
@@ -1733,7 +1893,9 @@ const refreshIdentity = async () => {
     const allowedRoles = new Set(['reader', 'contributor', 'curator', 'manager']);
     const validateFreshLibrary = async (libraryId, ensure) => {
       const normalizedId = String(libraryId || '');
-      const library = libraries.find(item => String(item?.id || '') === normalizedId);
+      const library = UUID_PATTERN.test(normalizedId)
+        ? await readLibrary(normalizedId, {noCache:true, cache:'no-store'}) : null;
+      ensure();
       if (!UUID_PATTERN.test(normalizedId) || !library) {
         throw new Error('Библиотека не найдена в свежем списке доступных. Восстановление не предлагается.');
       }
@@ -1876,9 +2038,11 @@ router.register('libraries', {
   mount: async (container, context) => {
     await ready(); if (!context.isCurrent()) return;
     await ensureLibraries(); if (!context.isCurrent()) return;
+    try { await loadLibraryTypes(); } catch (error) { if (context.isCurrent()) window.WisdomForms.formError(byId('create-library'), 'Не удалось обновить типы: ' + readableError(error)); }
+    if (!context.isCurrent()) return;
     const id = context.params[0];
     if (id) {
-      const lib = libraries.find(item => item.id === id);
+      const lib = libraries.find(item => item.id === id) || await readLibrary(id);
       if (lib) { await openLibrary(lib, {guard: context.isCurrent}); return; }
       message('Библиотека не найдена или доступ к ней закрыт.');
       byId('library-detail').replaceChildren(node('h2', 'Библиотека не найдена'), node('p', 'Вернитесь к списку и выберите доступную библиотеку.'));
@@ -1895,7 +2059,7 @@ router.register('context', {
     await ensureLibraries(); if (!context.isCurrent()) return;
     const workspace = byId('context-workspace'); workspace.replaceChildren();
     const id = context.params[0];
-    const project = libraries.find(item => item.id === id);
+    const project = libraries.find(item => item.id === id) || await readLibrary(id);
     if (!project) {
       message('Проект не найден или доступ к нему закрыт.');
       workspace.append(node('h2', 'Проект не найден'), node('p', 'Вернитесь к списку и выберите доступный проект.'));

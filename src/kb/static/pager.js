@@ -6,7 +6,7 @@
  *
  *   createServer — одна фиксированная серверная страница limit/offset.
  *     Навигация Previous/Next не переигрывает и не кеширует промежуточные
- *     страницы. Точный total неизвестен и не показывается.
+ *     страницы. Для LibraryPage используется серверный total; массивы остаются без total.
  *
  *   create — список, который уже пришёл целиком (задания, участники, группы,
  *     узлы карты, опубликованный опыт): страницы нарезаются из массива.
@@ -234,6 +234,7 @@
     const initialOffset = offsetFor(readPosition(cacheKey));
     let offset = initialOffset === null ? 0 : initialOffset;
     let shown = 0;
+    let total = null;
     let done = false;
     let busy = false;
     let epoch = 0;
@@ -317,7 +318,12 @@
           }
           if (!list.isConnected) break;
 
-          const rows = Array.isArray(response) ? response : [];
+          const envelope = !Array.isArray(response) && Array.isArray(response?.libraries);
+          if (envelope && (!Number.isSafeInteger(response.total) || response.total < 0
+              || response.limit !== size || response.offset !== requestOffset))
+            throw new Error('Сервер вернул некорректную страницу библиотек.');
+          const rows = Array.isArray(response) ? response : envelope ? response.libraries : [];
+          total = envelope ? response.total : null;
           if (!rows.length && requestOffset !== 0 && shown === 0 && restorationFallbackAvailable) {
             pageIndex = 0;
             requestOffset = 0;
@@ -347,7 +353,7 @@
           list.replaceChildren(fragment);
           offset = requestOffset;
           shown = rows.length;
-          done = rows.length < size;
+          done = total === null ? rows.length < size : offset + shown >= total;
           writePosition(cacheKey, pageIndex);
           restorationFallbackAvailable = false;
           committed = true;
@@ -382,13 +388,14 @@
 
       paintStatus(shown
         ? 'Показано ' + (offset + 1) + '–' + (offset + shown)
-          + (reachedEnd
+          + (total !== null ? ' из ' + total : '')
+          + (total !== null ? (done ? ' · конец списка' : '') : reachedEnd
             ? ' · конец списка'
             : done
               ? ' · страница короче размера'
               : ' · следующая страница ещё не проверена')
         : '');
-      if (scrollAfter) list.scrollIntoView({block: 'nearest'});
+      if (scrollAfter) { list.tabIndex = -1; list.focus({preventScroll: true}); }
     }
 
     async function load() {

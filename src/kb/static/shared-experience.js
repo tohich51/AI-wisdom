@@ -37,6 +37,7 @@
     const libraryField = host.node('div', null, {class: 'completion-field'});
     libraryField.append(host.node('label', 'Общая библиотека проекта', {for: librarySelect.id}), librarySelect);
     controls.append(libraryField);
+    host.attachLibraryChooser(librarySelect, {accept:lib => ['project','experience'].includes(lib.kind), pool:eligibleLibraries});
 
     const useSelect = host.node('select', null, {id: 'shared-experience-use-' + mountId, 'aria-label': 'Собственное применение'});
     const outcomeSelect = host.node('select', null, {id: 'shared-experience-outcome-' + mountId, 'aria-label': 'Точный результат применения'});
@@ -234,8 +235,8 @@
     for (const [select, handler] of [[librarySelect, () => { ++policyRequest; invalidateReview(); void loadFeed(); }], [useSelect, () => { ++policyRequest; refreshOutcomes(); }], [outcomeSelect, () => { ++policyRequest; invalidateReview(); }]]) select.addEventListener('change', handler);
     refreshUses();
     if (!eligibleLibraries.length) {
-      status.textContent = 'Готово: доступных проектных библиотек нет.';
-      feed.append(host.node('p', 'Общий опыт доступен только в библиотеках, переданных приложением.', {class: 'muted'}));
+      status.textContent = 'На загруженной странице нет проектных библиотек. Используйте выбор из всех библиотек.';
+      feed.append(host.node('p', 'Для общего опыта выберите библиотеку типа «Проект» или «Опыт».', {class: 'muted'}));
     }
     return area;
   }

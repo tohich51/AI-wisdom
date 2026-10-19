@@ -110,6 +110,7 @@ window.WisdomResearch = (() => {
     const rememberedSelection = mountIdentity ? readSourceSelection(mountIdentity, libId) : [];
     selector.addEventListener('change', () => { pending = null; mount(root,host,selector.value).catch(e=>host.notify(e.message)); });
     root.append(n('label','Библиотека',{for:'research-library'}),selector);
+    host.attachLibraryChooser(selector);
     const layout=n('div',null,{class:'research-layout'}), sources=n('aside',null,{class:'card'});
     const work=n('div',null,{class:'research-work'}), studio=n('aside',null,{class:'card'});
     const resultStatus=n('p','Загружаю доступные источники…',{class:'research-result-status',role:'status','aria-atomic':'true'});

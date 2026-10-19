@@ -266,6 +266,7 @@
         const removeMember = selectField(removeForm, 'Участник для удаления из группы', 'principal_id', activeMembers, 'principal_id', member => [member.display_name, member.email].filter(Boolean).join(' · ') || member.principal_id);
         removeMember.required = true;
         const explainLibrary = libraries.length ? selectField(removeForm, 'Проверить оставшийся доступ к библиотеке (необязательно)', 'library_id', libraries, 'id', item => item.name || item.id) : null;
+        if (explainLibrary) host.attachLibraryChooser(explainLibrary, {pool:libraries});
         const remove = el('button', 'Убрать из группы', {type: 'submit'}); removeForm.append(remove);
         removeForm.append(el('p', 'Показываются активные участники организации. API не предоставляет отдельный список состава группы; отсутствие участника будет показано как отказ API.', {class: 'muted'}));
         let removePending = false;
@@ -345,6 +346,7 @@
         if (libraries.length) {
           const grantForm = el('form', null, {class: 'completion-form'});
           const librarySelect = selectField(grantForm, 'Библиотека для группы', 'library_id', libraries, 'id', item => item.name || item.id);
+          host.attachLibraryChooser(librarySelect, {pool:libraries});
           librarySelect.required = true;
           const role = roleField(grantForm); const save = el('button', 'Назначить роль группе', {type: 'submit'}); grantForm.append(save);
           window.WisdomForms.submit(grantForm, async event => {
@@ -380,6 +382,11 @@
       });
       groupBox.append(groupForm);
       const directBox = card('Прямые разрешения и объяснение доступа');
+      const directChoice = el('select', null, {id:'access-library-choice'});
+      addOptions(directChoice, libraries, 'id', item => item.name || item.id);
+      directBox.append(el('label', 'Добавить библиотеку к просмотру доступа', {for:directChoice.id}), directChoice);
+      host.attachLibraryChooser(directChoice, {pool:libraries});
+      directChoice.addEventListener('change', () => { if (current()) void mountAccess(root, host); });
       for (const library of libraries) {
         const libraryCard = card(library.name || library.id);
         let policyGeneration=null;
@@ -441,6 +448,7 @@
         const explain = el('form', null, {class: 'completion-form'});
         const member = selectField(explain, 'Проверить участника', 'principal_id', members, 'principal_id', item => [item.display_name, item.email, memberStatusLabel(item.status)].filter(Boolean).join(' · ') || item.principal_id);
         const library = selectField(explain, 'Библиотека', 'library_id', libraries, 'id', item => item.name || item.id);
+        host.attachLibraryChooser(library, {pool:libraries});
         member.required = true; library.required = true;
         const lookup = el('button', 'Показать пути доступа', {type: 'submit'}), result = el('div', null, {class: 'completion-access-result'});
         explain.append(lookup, result);

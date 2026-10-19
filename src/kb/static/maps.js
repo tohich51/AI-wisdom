@@ -297,6 +297,7 @@ window.WisdomMap = (() => {
     similarityControl.hidden=mode.value!=='semantic';
     similarityControl.append(n('label','Показывать близость понятий',{for:'map-similarity'}),showSimilarity,similarityStatus);
     controls.append(n('label','Библиотека',{for:'map-library'}),library,n('label','Вид карты',{for:'map-mode'}),mode,similarityControl);
+    host.attachLibraryChooser(library);
     const surface=n('div',null,{class:'map-surface',tabindex:0,'aria-label':'Граф знаний. Все узлы и связи доступны в списке ниже.'});
     const sourceNotice=n('div');
     const sourceStatus=n('p',null,{role:'status','aria-live':'polite','aria-atomic':'true'});
