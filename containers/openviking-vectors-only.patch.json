@@ -1,0 +1,41 @@
+{
+  "schema_version": 1,
+  "package": "openviking",
+  "base_image": "ghcr.io/volcengine/openviking@sha256:2c104187d17d9b5c837d578990ae574807ad8ab78ba84191ddafabfde207af38",
+  "sources": {
+    "server/routers/filesystem.py": {
+      "sha256": "8e08a304f9ee9abecaed7d9162dd32bffdccabf23fe0b1c62e737312813324b9",
+      "replacements": [
+        {
+          "old": "    from_uri: str\n    to_uri: str\n    recursive: bool = False",
+          "new": "    from_uri: str\n    to_uri: str\n    recursive: bool = False\n    processing_mode: Optional[Literal['vectors_only']] = None"
+        },
+        {
+          "old": "        result = await service.fs.cp(\n            from_uri,\n            to_uri,\n            recursive=request.recursive,\n            ctx=_ctx,\n        )",
+          "new": "        result = await service.fs.cp(\n            from_uri,\n            to_uri,\n            recursive=request.recursive,\n            processing_mode=request.processing_mode,\n            ctx=_ctx,\n        )"
+        }
+      ]
+    },
+    "service/fs_service.py": {
+      "sha256": "0ff95fb1391e3fe1b851eb068ea030ef56327be341e3424f3cb8421d3fbf6282",
+      "replacements": [
+        {
+          "old": "    async def cp(\n        self,\n        from_uri: str,\n        to_uri: str,\n        recursive: bool,\n        ctx: RequestContext,\n    ) -> Dict[str, Any]:",
+          "new": "    async def cp(\n        self,\n        from_uri: str,\n        to_uri: str,\n        recursive: bool,\n        ctx: RequestContext,\n        *,\n        processing_mode: Optional[Literal['vectors_only']] = None,\n    ) -> Dict[str, Any]:"
+        },
+        {
+          "old": "        return await self._finish_transfer_after_caller_cancel(\n            self._cp_and_refresh(from_uri, to_uri, recursive=recursive, ctx=ctx),\n            operation=\"copy\",\n        )",
+          "new": "        return await self._finish_transfer_after_caller_cancel(\n            self._cp_and_refresh(\n                from_uri,\n                to_uri,\n                recursive=recursive,\n                processing_mode=processing_mode,\n                ctx=ctx,\n            ),\n            operation=\"copy\",\n        )"
+        },
+        {
+          "old": "    async def _cp_and_refresh(\n        self,\n        from_uri: str,\n        to_uri: str,\n        *,\n        recursive: bool,\n        ctx: RequestContext,\n    ) -> Dict[str, Any]:",
+          "new": "    async def _cp_and_refresh(\n        self,\n        from_uri: str,\n        to_uri: str,\n        *,\n        recursive: bool,\n        ctx: RequestContext,\n        processing_mode: Optional[Literal['vectors_only']] = None,\n    ) -> Dict[str, Any]:"
+        },
+        {
+          "old": "        result.setdefault(\"recursive\", recursive)\n        context_type = context_type_for_uri(to_uri)",
+          "new": "        result.setdefault(\"recursive\", recursive)\n        if processing_mode == 'vectors_only':\n            return result\n        context_type = context_type_for_uri(to_uri)"
+        }
+      ]
+    }
+  }
+}

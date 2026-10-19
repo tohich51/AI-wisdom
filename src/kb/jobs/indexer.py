@@ -15,7 +15,7 @@ from procrastinate.exceptions import AlreadyEnqueued
 
 from kb.access.policy import transaction_identity
 from kb.adapters.secrets import _reject_symlinks
-from kb.adapters.vector_writer import OpenVikingWriter
+from kb.adapters.vector_writer import IndexCopyPending, OpenVikingWriter
 from kb.retrieval import semantic_registry as registry
 from kb.retrieval.embedding_profile import SELECTED_PROFILE
 from kb.retrieval.provisioning import load_account, request_provisioning
@@ -77,8 +77,27 @@ def reindex(
                 raise RuntimeError("index_key_permissions")
             writer = OpenVikingWriter(url, path.read_text().strip())
             writer.prepare(build.resource_root)
+            previous_root, previous_hashes = registry.previous_documents(conn, principal, build)
             completed = registry.completed_documents(conn, principal, build)
-            pending = [d for d in snapshot.documents if completed.get(d.id) != d.statement_hash]
+            for document in snapshot.documents:
+                if document.id in completed and completed[document.id] != document.statement_hash:
+                    raise RuntimeError("index_completed_hash_mismatch")
+                if (
+                    document.id in previous_hashes
+                    and previous_hashes[document.id] != document.statement_hash
+                ):
+                    raise RuntimeError("index_source_hash_mismatch")
+
+            inherited_pending = [
+                document
+                for document in snapshot.documents
+                if document.id in previous_hashes and document.id not in completed
+            ]
+            new_pending = [
+                document
+                for document in snapshot.documents
+                if document.id not in previous_hashes and document.id not in completed
+            ]
 
             def readmit():
                 if (
@@ -87,9 +106,19 @@ def reindex(
                 ):
                     raise RuntimeError("projection_revision_changed")
 
-            for offset in range(0, len(pending), 16):
+            if previous_root is not None:
+                for document in inherited_pending:
+                    readmit()
+                    writer.copy_document(
+                        build.resource_root,
+                        previous_root,
+                        (document.id, document.statement),
+                    )
+                    _checkpoint(conn, principal, build, document)
+
+            for offset in range(0, len(new_pending), 16):
                 readmit()
-                batch = pending[offset : offset + 16]
+                batch = new_pending[offset : offset + 16]
                 writer.write_batch(build.resource_root, [(d.id, d.statement) for d in batch])
                 for document in batch:
                     _checkpoint(conn, principal, build, document)
@@ -104,6 +133,9 @@ def reindex(
                 )
             registry.activate(conn, principal, build)
             return {"state": "current", "documents": len(snapshot.documents), "unchanged": False}
+        except IndexCopyPending:
+            # Preserve this admitted build and its checkpoints for retry.
+            raise
         except Exception:
             # Keep checkpoints during bounded retries; free the installation's
             # build slot on terminal failure so other libraries can progress.

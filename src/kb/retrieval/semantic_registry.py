@@ -162,6 +162,47 @@ def completed_documents(conn, principal: Principal, build: Build) -> dict[UUID, 
     return dict(rows)
 
 
+def previous_documents(
+    conn, principal: Principal, build: Build
+) -> tuple[str | None, dict[UUID, str]]:
+    with transaction_identity(conn, principal), conn.cursor(row_factory=dict_row) as cur:
+        cur.execute(
+            "SELECT pg_advisory_xact_lock(hashtextextended(%s,91))",
+            (str(build.snapshot.library_id),),
+        )
+        cur.execute(
+            "SELECT generation,resource_root FROM kb.index_generation "
+            "WHERE library_id=%s AND profile_hash=%s AND state='current' "
+            "AND verified_at IS NOT NULL AND generation<>%s "
+            "AND EXISTS(SELECT 1 FROM kb.library l JOIN kb.membership m "
+            "ON m.organisation_id=l.organisation_id "
+            "WHERE l.id=kb.index_generation.library_id AND l.organisation_id=%s "
+            "AND m.principal_id=kb.current_principal() AND m.status='active') "
+            "ORDER BY generation DESC LIMIT 1",
+            (
+                build.snapshot.library_id,
+                SELECTED_PROFILE.profile_hash,
+                build.generation,
+                principal.account_id,
+            ),
+        )
+        source = cur.fetchone()
+        if source is None:
+            return None, {}
+        source_root = (
+            f"viking://resources/index/p-{SELECTED_PROFILE.profile_hash}/g-{source['generation']}"
+        )
+        if source["resource_root"] != source_root:
+            raise ValueError("projection_source_root_mismatch")
+        cur.execute(
+            "SELECT knowledge_id,statement_hash FROM kb.index_document "
+            "WHERE library_id=%s AND generation=%s",
+            (build.snapshot.library_id, source["generation"]),
+        )
+        hashes = {row["knowledge_id"]: row["statement_hash"] for row in cur.fetchall()}
+    return source_root, hashes
+
+
 def checkpoint(conn, principal: Principal, build: Build, document: Document) -> None:
     with transaction_identity(conn, principal):
         conn.execute(
