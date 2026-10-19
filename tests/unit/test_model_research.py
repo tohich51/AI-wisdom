@@ -153,6 +153,7 @@ def test_runtime_stream_requires_independent_complete_protocol(
 
     class Process:
         returncode = 0
+        stdout = stderr = None
 
         def communicate(self, timeout):
             return json.dumps({"content": '{"knowledge":[],"rules":[]}'}).encode(), (
@@ -160,6 +161,9 @@ def test_runtime_stream_requires_independent_complete_protocol(
             ).encode()
 
     monkeypatch.setattr(model_runner.subprocess, "Popen", lambda *args, **kwargs: Process())
+    monkeypatch.setattr(
+        model_runner, "_capture_bounded", lambda process, timeout: process.communicate(timeout)
+    )
     if valid:
         raw = model_runner._run_cli("Synthetic text", [uuid4()], "/synthetic/launcher", stream=True)
         assert model_runner._text_from_provider_output(raw) == '{"knowledge":[],"rules":[]}'

@@ -4,10 +4,12 @@ import hmac
 import json
 import math
 import os
+import selectors
 import signal
 import subprocess
 import tempfile
 import threading
+import time
 from pathlib import Path
 from typing import Annotated, Literal
 from uuid import UUID
@@ -155,6 +157,68 @@ def _write_private_json(path: Path, value: object) -> None:
             os.close(descriptor)
 
 
+def _capture_bounded(
+    process, timeout_s, *, stdout_limit=8 * 1024 * 1024, stderr_limit=1024 * 1024
+) -> tuple[bytes, bytes]:
+    if stdout_limit < 0 or stderr_limit < 0:
+        raise ValueError("output limits must be non-negative")
+
+    deadline = time.monotonic() + timeout_s
+    stdout_data = bytearray()
+    stderr_data = bytearray()
+
+    with selectors.DefaultSelector() as selector:
+        streams = {
+            process.stdout.fileno(): (process.stdout, stdout_data, stdout_limit),
+            process.stderr.fileno(): (process.stderr, stderr_data, stderr_limit),
+        }
+        for fd in streams:
+            selector.register(fd, selectors.EVENT_READ)
+
+        while streams:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise _RunnerFailure("model_unavailable")
+
+            for key, _ in selector.select(remaining):
+                fd = key.fd
+                stream, data, limit = streams[fd]
+                remaining_cap = limit - len(data)
+                chunk = os.read(fd, min(65536, remaining_cap + 1))
+                if chunk:
+                    if len(chunk) > remaining_cap:
+                        raise _RunnerFailure("output_too_large")
+                    data.extend(chunk)
+                else:
+                    selector.unregister(fd)
+                    stream.close()
+                    del streams[fd]
+
+        try:
+            process.wait(timeout=max(0.0, deadline - time.monotonic()))
+        except subprocess.TimeoutExpired:
+            raise _RunnerFailure("model_unavailable") from None
+
+    return bytes(stdout_data), bytes(stderr_data)
+
+
+def _stop_cli(process):
+    try:
+        os.killpg(process.pid, signal.SIGTERM)
+    except ProcessLookupError:
+        pass
+    try:
+        process.wait(timeout=5)
+    except subprocess.TimeoutExpired:
+        pass
+    # The leader may already be reaped while a descendant still owns a pipe.
+    try:
+        os.killpg(process.pid, signal.SIGKILL)
+    except ProcessLookupError:
+        pass
+    process.wait(timeout=5)
+
+
 def _run_cli(
     text: str,
     fragment_ids: list[UUID],
@@ -222,15 +286,14 @@ def _run_cli(
                     start_new_session=True,
                 )
                 try:
-                    stdout, stderr = process.communicate(timeout=timeout_s + 30)
-                except subprocess.TimeoutExpired:
-                    os.killpg(process.pid, signal.SIGTERM)
-                    try:
-                        process.communicate(timeout=5)
-                    except subprocess.TimeoutExpired:
-                        os.killpg(process.pid, signal.SIGKILL)
-                        process.communicate()
-                    raise _RunnerFailure("model_unavailable") from None
+                    stdout, stderr = _capture_bounded(process, timeout_s + 30)
+                except BaseException:
+                    _stop_cli(process)
+                    raise
+                finally:
+                    for pipe in (process.stdout, process.stderr):
+                        if pipe is not None:
+                            pipe.close()
                 completed = subprocess.CompletedProcess(args, process.returncode, stdout, stderr)
             finally:
                 try:
