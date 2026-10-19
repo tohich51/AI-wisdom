@@ -38,7 +38,7 @@ function fixture() {
     addEventListener(type,fn,opts){(this.listeners[type]||=[]).push({fn,once:opts?.once});}
     dispatchEvent(event){event.target ||= this;event.currentTarget=this;for(const entry of [...(this.listeners[event.type]||[])]){entry.fn(event);if(entry.once)this.listeners[event.type]=this.listeners[event.type].filter(x=>x!==entry);}return true;}
     click(){if(!this.disabled)this.dispatchEvent(new Event('click'));}
-    focus(){document.activeElement=this;}
+    focus(options){this.focusOptions=options;document.activeElement=this;}
     showModal(){this.open=true;this.focus();}
     close(){this.open=false;this.dispatchEvent(new Event('close'));}
     reset(){for(const e of this.elements)e.value='';}
@@ -82,6 +82,24 @@ async function test(name,fn){await fn();passed++;console.log('PASS '+name);}
   f.button(f.document.body,'Следующая страница').click();await settle();
   assert.deepEqual(f.requests.map(r=>r.url),['/api/libraries?limit=50&offset=0','/api/libraries?limit=50&offset=50']);
   assert.match(f.document.getElementById('library-list').textContent,/51–73 из 73/);assert.equal(f.run('selected.id'),'library-70');assert(f.button(f.document.body,'Следующая страница').disabled);
+ });
+ await test('Mounted pager accepts a fresh page after cache invalidation',async()=>{
+  const f=fixture();f.setHandler(url=>response(page(Number(new URL(url,'https://fixture.invalid').searchParams.get('offset')))));
+  await f.run('loadLibraries()');f.context.WisdomData.invalidate('saved metadata');
+  f.button(f.document.body,'Следующая страница').click();await settle();
+  assert.match(f.document.getElementById('library-list').textContent,/1–50 из 73/);
+  f.button(f.document.body,'Следующая страница').click();await settle();
+  assert.match(f.document.getElementById('library-list').textContent,/51–73 из 73/);
+ });
+ await test('Library route loads custom titles before first page, retired type keeps base title',async()=>{
+  const f=fixture(),custom={...lib(0),type_key:'custom_notes'};
+  f.setHandler(url=>response(url==='/api/library-types'?[{key:'custom_notes',title:'Особые заметки',base_kind:'reference'}]:{libraries:[custom],total:1,limit:50,offset:0}));
+  f.run("const ready=async()=>{};function cancelSourceView(){};router.register=(name,handlers)=>{window.libraryHandlers=handlers;};");
+  const app=source('app.js');f.run(app.slice(app.indexOf("router.register('libraries'"),app.indexOf("router.register('context'")));
+  await f.context.libraryHandlers.mount(null,{isCurrent:()=>true,params:[]});
+  assert.deepEqual(f.requests.map(r=>r.url),['/api/library-types','/api/libraries?limit=50&offset=0']);
+  assert.match(f.document.getElementById('library-list').textContent,/Особые заметки/);
+  assert.equal(f.run("libraryKindLabel({kind:'reference',type_key:'retired_custom'})"),f.run("CORE_LIBRARY_KIND_LABELS.get('reference')"));
  });
  await test('Existing array-based server lists retain offset paging',async()=>{
   const f=fixture();f.context.offsets=[];
@@ -160,7 +178,7 @@ async function test(name,fn){await fn();passed++;console.log('PASS '+name);}
  await test('Exact citation starts at ordinal 650; next=850; explicit source start',async()=>{
   const f=fixture();f.setHandler(url=>response({source:sourceRecord,fragments:url.includes('fragment_id')?Array.from({length:200},(_,i)=>fragment(650+i,i===0?fragmentId:undefined)):[fragment(Number(new URL(url,'https://fixture.invalid').searchParams.get('from_fragment')))]}));
   await f.run('viewSource("source-example",'+JSON.stringify({fragmentId,quote:'точная цитата',locator:{paragraph:8}})+')');
-  assert.deepEqual(f.requests.map(r=>r.url),['/api/sources/source-example?fragment_id='+fragmentId+'&limit=200']);assert.match(f.dialog().textContent,/Цитата найдена/);assert.match(f.dialog().textContent,/Фрагменты 650–849/);
+  assert.deepEqual(f.requests.map(r=>r.url),['/api/sources/source-example?fragment_id='+fragmentId+'&limit=200']);assert.match(f.dialog().textContent,/Цитата найдена/);assert.match(f.dialog().textContent,/Фрагменты 650–849/);assert.notEqual(f.document.activeElement.focusOptions?.preventScroll,true);
   f.button(f.dialog(),'Следующая часть').click();await settle();assert.match(f.requests[1].url,/from_fragment=850&limit=200/);
   f.button(f.dialog(),'К началу источника').click();await settle();assert.match(f.requests[2].url,/from_fragment=0&limit=200/);
  });

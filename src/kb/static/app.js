@@ -168,6 +168,10 @@ const visibleEnum = (labels, value, missing = 'не указан') => {
   const text = String(value ?? '');
   return labels.get(text) || (!text.trim() ? missing : 'Неизвестное значение (' + text + ')');
 };
+const libraryKindLabel = (lib, missing = 'не указан') => {
+  const title = LIBRARY_KIND_LABELS.get(String(lib?.type_key || ''));
+  return title || visibleEnum(CORE_LIBRARY_KIND_LABELS, lib?.kind, missing);
+};
 const jobStatusLabel = value => visibleEnum(JOB_STATUS_LABELS, value);
 const SOURCE_PAGE_SIZE = 200;
 const SOURCE_AUTO_SEARCH_PAGES = 3;
@@ -536,23 +540,27 @@ async function readLibrary(id, options = {}) {
   return rememberLibrary(lib);
 }
 async function loadLibraries() {
-  const readSerial = ++libraryReadSerial, current = libraryReadGuard();
+  const readSerial = ++libraryReadSerial, serial = freshIdentitySerial;
+  const binding = identityCoordinates(identity), mountRoute = captureRouteToken();
+  const current = () => serial === freshIdentitySerial && readSerial === libraryReadSerial
+    && sameIdentity(binding, identityCoordinates(identity)) && isRouteCurrent(mountRoute);
   let readError = null;
   const root = byId('library-list');
   root.replaceChildren(node('h2', 'Мои библиотеки'));
   const items = window.WisdomList.createServer(featureHost, {
     label: 'Страницы библиотек', stateKey: 'libraries', library: null,
     fetchPage: async ({limit, offset, signal}) => {
+      const pageCurrent = libraryReadGuard();
       let page;
       try { page = await api('/api/libraries?limit=' + limit + '&offset=' + offset, {signal}); }
       catch (error) { readError = error; throw error; }
-      if (!current() || readSerial !== libraryReadSerial || signal.aborted)
+      if (!current() || !pageCurrent() || readSerial !== libraryReadSerial || signal.aborted)
         throw new DOMException('Чтение списка библиотек устарело.', 'AbortError');
       libraries = page.libraries.slice();
       if (selected) rememberLibrary(selected);
       return page;
     },
-    renderItem: lib => button(lib.name + ' · ' + visibleEnum(LIBRARY_KIND_LABELS, lib.type_key || lib.kind, 'Тип не указан'), () => openLibrary(lib)),
+    renderItem: lib => button(lib.name + ' · ' + libraryKindLabel(lib, 'Тип не указан'), () => openLibrary(lib)),
     empty: 'База чистая. Создайте библиотеку и загрузите материал.'
   });
   root.append(items.element, items.navigation, items.status);
@@ -586,7 +594,7 @@ function attachLibraryChooser(select, {accept = () => true, pool = null} = {}) {
         } finally { signal.removeEventListener('abort', abort); }
       },
       renderItem: lib => {
-        const control = button(lib.name + ' · ' + visibleEnum(LIBRARY_KIND_LABELS, lib.type_key || lib.kind), () => {
+        const control = button(lib.name + ' · ' + libraryKindLabel(lib), () => {
           if (!valid()) return;
           rememberLibrary(lib);
           if (pool && !pool.some(item => item.id === lib.id)) pool.push(lib);
@@ -842,12 +850,12 @@ function editSourceMetadata(source, options = {}) {
 }
 async function loadLibraryTypes(preferred) {
   const current = libraryReadGuard();
+  // Keep core choices as fallback labels when the registry request fails.
+  LIBRARY_KIND_LABELS.clear();
+  for (const [key, title] of CORE_LIBRARY_KIND_LABELS) LIBRARY_KIND_LABELS.set(key, title);
   const types = await api('/api/library-types', {noCache:true});
   if (!current()) throw new DOMException('Список типов устарел.', 'AbortError');
   const select = byId('library-kind'), value = preferred || select.value;
-  // Keep core choices, drop retired custom options, render registry values as text.
-  LIBRARY_KIND_LABELS.clear();
-  for (const [key, title] of CORE_LIBRARY_KIND_LABELS) LIBRARY_KIND_LABELS.set(key, title);
   for (const type of types) LIBRARY_KIND_LABELS.set(type.key, type.title);
   const registered = new Map(types.map(type => [type.key, type]));
   select.replaceChildren(...Array.from(LIBRARY_KIND_LABELS, ([key, title]) =>
@@ -1154,7 +1162,7 @@ async function viewSource(id, options = {}) {
   if (!isCurrent()) { d.close(); return; }
   renderFragments(displayPage.fragments);
   if (targetFocus) {
-    targetFocus.focus({preventScroll:true});
+    targetFocus.focus();
   }
   previous.disabled = previousFrom.length === 0;
   next.disabled = !hasNext;
@@ -1223,7 +1231,7 @@ async function openLibrary(lib, {guard = null, confirmedMutation = '', handoff =
   const curator = ['curator', 'manager'].includes(role);
   const contributor = curator || role === 'contributor';
   const extractionAllowed = Boolean(policy.generation_allowed && policy.external_processing_allowed);
-  root.append(node('p', 'Тип: ' + visibleEnum(LIBRARY_KIND_LABELS, lib.type_key || lib.kind, 'Тип не указан') + ' · Доступ: ' + visibleEnum(ROLE_LABELS, role)));
+  root.append(node('p', 'Тип: ' + libraryKindLabel(lib, 'Тип не указан') + ' · Доступ: ' + visibleEnum(ROLE_LABELS, role)));
   const extractionPolicyNoteId = 'library-extraction-policy-' + uuid();
   if (contributor && !extractionAllowed) {
     root.append(node('p', 'Извлечение знаний и правил отключено политикой библиотеки. Параметры внешней обработки и генерации находятся в разделе «Доступ».', {
@@ -2037,9 +2045,9 @@ router.register('libraries', {
   leave: cancelSourceView,
   mount: async (container, context) => {
     await ready(); if (!context.isCurrent()) return;
-    await ensureLibraries(); if (!context.isCurrent()) return;
     try { await loadLibraryTypes(); } catch (error) { if (context.isCurrent()) window.WisdomForms.formError(byId('create-library'), 'Не удалось обновить типы: ' + readableError(error)); }
     if (!context.isCurrent()) return;
+    await ensureLibraries(); if (!context.isCurrent()) return;
     const id = context.params[0];
     if (id) {
       const lib = libraries.find(item => item.id === id) || await readLibrary(id);

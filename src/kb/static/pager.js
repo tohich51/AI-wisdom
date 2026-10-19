@@ -399,8 +399,9 @@
     }
 
     async function load() {
-      if (busy || done) return;
+      if (busy) return;
       syncScope();
+      if (done) return;
       const currentPage = offset / size;
       const targetPage = shown ? currentPage + 1 : currentPage;
       return loadPage(targetPage, false);
@@ -408,14 +409,14 @@
 
     previous.addEventListener('click', () => {
       if (busy) return;
-      syncScope();
+      if (syncScope()) { void loadPage(0, true); return; }
       if (!shown || offset === 0) return;
       void loadPage(offset / size - 1, true);
     });
 
     next.addEventListener('click', () => {
       if (busy) return;
-      syncScope();
+      if (syncScope()) { void loadPage(0, true); return; }
       if (!shown || done) return;
       void loadPage(offset / size + 1, true);
     });
