@@ -2,7 +2,7 @@
 
 import os
 from contextlib import ExitStack
-from typing import Literal
+from typing import Annotated, Literal
 from uuid import UUID
 
 import anyio
@@ -14,8 +14,8 @@ from mcp.server.auth.routes import create_protected_resource_routes
 from mcp.server.auth.settings import AuthSettings
 from mcp.server.mcpserver import Context
 from mcp.server.transport_security import TransportSecuritySettings
-from mcp_types import CallToolResult, TextContent
-from pydantic import AnyHttpUrl, ValidationError
+from mcp_types import CallToolResult, TextContent, ToolAnnotations
+from pydantic import AnyHttpUrl, Field, ValidationError
 from starlette.routing import Route
 
 from kb.access.bearer_policy import HANDLER_SCOPES, bearer_principal, require_scope
@@ -263,20 +263,42 @@ def build_mcp(app, hosts):
         )
         return call(ctx, workspace.edit_knowledge, args.knowledge_id, body)
 
-    @server.tool()
+    @server.tool(
+        annotations=ToolAnnotations.model_validate(
+            {
+                "readOnlyHint": True,
+                "destructiveHint": False,
+                "idempotentHint": True,
+                "openWorldHint": False,
+            }
+        )
+    )
     def list_libraries(
         ctx: Context,
         include_kinds: list[Literal["reference", "brand", "project", "playbook", "experience"]]
         | None = None,
+        limit: Annotated[int, Field(ge=1, le=200)] = 50,
+        offset: Annotated[int, Field(ge=0)] = 0,
     ):
-        args = ListLibrariesArgs(include_kinds=include_kinds)
+        args = ListLibrariesArgs(include_kinds=include_kinds, limit=limit, offset=offset)
         return call(
             ctx,
             libraries.list_libraries,
             kinds=[LibraryKind(k) for k in args.include_kinds] if args.include_kinds else None,
+            limit=args.limit,
+            offset=args.offset,
         )
 
-    @server.tool()
+    @server.tool(
+        annotations=ToolAnnotations.model_validate(
+            {
+                "readOnlyHint": True,
+                "destructiveHint": False,
+                "idempotentHint": True,
+                "openWorldHint": True,
+            }
+        )
+    )
     def search_knowledge(
         query: str,
         ctx: Context,
@@ -307,12 +329,30 @@ def build_mcp(app, hosts):
             connections=app.state.db_connection,
         )
 
-    @server.tool()
+    @server.tool(
+        annotations=ToolAnnotations.model_validate(
+            {
+                "readOnlyHint": True,
+                "destructiveHint": False,
+                "idempotentHint": True,
+                "openWorldHint": False,
+            }
+        )
+    )
     def read_source(source_id: UUID, ctx: Context, from_fragment: int = 0, limit: int = 20):
         args = ReadSourceArgs(source_id=source_id, from_fragment=from_fragment, limit=limit)
         return call(ctx, content.read_source, args.source_id, args.from_fragment, args.limit)
 
-    @server.tool()
+    @server.tool(
+        annotations=ToolAnnotations.model_validate(
+            {
+                "readOnlyHint": True,
+                "destructiveHint": False,
+                "idempotentHint": True,
+                "openWorldHint": False,
+            }
+        )
+    )
     def get_rule(rule_id: UUID, ctx: Context, version_no: int | None = None):
         args = GetRuleArgs(rule_id=rule_id, version_no=version_no)
         return {"rule": call(ctx, content.get_rule, args.rule_id, args.version_no)}
@@ -323,7 +363,16 @@ def build_mcp(app, hosts):
         args = PublishKnowledgeArgs(knowledge_id=knowledge_id)
         return call(ctx, writes.publish, args.knowledge_id, knowledge=True)
 
-    @server.tool()
+    @server.tool(
+        annotations=ToolAnnotations.model_validate(
+            {
+                "readOnlyHint": True,
+                "destructiveHint": False,
+                "idempotentHint": True,
+                "openWorldHint": False,
+            }
+        )
+    )
     def get_project_context(
         project_library_id: UUID, ctx: Context, include_linked_library_ids: list[UUID] | None = None
     ):
@@ -342,7 +391,16 @@ def build_mcp(app, hosts):
             raise ValueError("request_refused")
         return jsonable_encoder(context.to_mcp_result())
 
-    @server.tool()
+    @server.tool(
+        annotations=ToolAnnotations.model_validate(
+            {
+                "readOnlyHint": False,
+                "destructiveHint": False,
+                "idempotentHint": False,
+                "openWorldHint": False,
+            }
+        )
+    )
     def start_use(
         rule_id: UUID,
         version_no: int,
@@ -352,6 +410,10 @@ def build_mcp(app, hosts):
         where_applied: str | None = None,
         idempotency_key: str | None = None,
     ):
+        """Record a use event.
+
+        Supply a stable idempotency_key when retrying the same logical operation.
+        """
         args = StartUseArgs(
             rule_id=rule_id,
             version_no=version_no,
@@ -371,7 +433,16 @@ def build_mcp(app, hosts):
         )
         return {"use_id": result["id"], "state": result["state"]}
 
-    @server.tool()
+    @server.tool(
+        annotations=ToolAnnotations.model_validate(
+            {
+                "readOnlyHint": False,
+                "destructiveHint": False,
+                "idempotentHint": False,
+                "openWorldHint": False,
+            }
+        )
+    )
     def record_outcome(
         use_id: UUID,
         ctx: Context,
@@ -385,6 +456,10 @@ def build_mcp(app, hosts):
         assessor_kind: Literal["human", "agent", "measurement", "unknown"] = "unknown",
         assessment_evidence: str | None = None,
     ):
+        """Record an outcome event.
+
+        Supply a stable idempotency_key when retrying the same logical operation.
+        """
         args = RecordOutcomeArgs(
             use_id=use_id,
             observed_result=observed_result,
@@ -413,7 +488,16 @@ def build_mcp(app, hosts):
             assessment_evidence=args.assessment_evidence,
         )
 
-    @server.tool()
+    @server.tool(
+        annotations=ToolAnnotations.model_validate(
+            {
+                "readOnlyHint": False,
+                "destructiveHint": False,
+                "idempotentHint": True,
+                "openWorldHint": True,
+            }
+        )
+    )
     def submit_source(
         library_id: UUID,
         title: str,
@@ -453,11 +537,29 @@ def build_mcp(app, hosts):
             raise ValueError("upload_original_in_browser_or_supply_url")
         return call(ctx, submit_processing, source_id, idempotency_key, extract=args.extract)
 
-    @server.tool()
+    @server.tool(
+        annotations=ToolAnnotations.model_validate(
+            {
+                "readOnlyHint": True,
+                "destructiveHint": False,
+                "idempotentHint": True,
+                "openWorldHint": False,
+            }
+        )
+    )
     def job_status(job_id: UUID, ctx: Context):
         return call(ctx, writes.job_status, JobStatusArgs(job_id=job_id).job_id)
 
-    @server.tool()
+    @server.tool(
+        annotations=ToolAnnotations.model_validate(
+            {
+                "readOnlyHint": False,
+                "destructiveHint": False,
+                "idempotentHint": False,
+                "openWorldHint": False,
+            }
+        )
+    )
     def export_skill(
         library_id: UUID,
         rule_ids: list[UUID],
