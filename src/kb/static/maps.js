@@ -82,7 +82,11 @@ window.WisdomMap = (() => {
     similarityControl.append(n('label','Показывать близость понятий',{for:'map-similarity'}),showSimilarity,similarityStatus);
     controls.append(n('label','Библиотека',{for:'map-library'}),library,n('label','Вид карты',{for:'map-mode'}),mode,similarityControl);
     const surface=n('div',null,{class:'map-surface',tabindex:0,'aria-label':'Граф знаний. Все узлы и связи доступны в списке ниже.'});
-    const sourceNotice=n('div',null,{'aria-live':'polite'});
+    const sourceNotice=n('div');
+    const sourceStatus=n('p',null,{role:'status','aria-live':'polite','aria-atomic':'true'});
+    let sourceNoticeButton=null,sourceNoticeHelp=null;
+    sourceStatus.hidden=true;
+    sourceNotice.append(sourceStatus);
     const searchPanel=n('div',null,{class:'map-search card'}), searchId='map-search-'+crypto.randomUUID();
     const searchInput=n('input',null,{id:searchId,type:'search',autocomplete:'off',enterkeyhint:'search',spellcheck:'false',disabled:true,placeholder:'Название или описание','aria-describedby':searchId+'-help '+searchId+'-status'});
     const clearSearch=n('button','Очистить поиск',{type:'button'});
@@ -176,13 +180,18 @@ window.WisdomMap = (() => {
       return block;
     };
     const renderSourceNotice=()=>{
-      sourceNotice.replaceChildren();
+      sourceStatus.textContent='';
+      if(sourceNoticeButton){sourceNoticeButton.remove();sourceNoticeButton=null;}
+      if(sourceNoticeHelp){sourceNoticeHelp.remove();sourceNoticeHelp=null;}
+      sourceStatus.hidden=!sourceFilter;
       if(!sourceFilter)return;
       const count=Array.isArray(data?.nodes)?visibleGraphRows(data).nodes.length:null;
       const base='Выбранный источник';
       const scope=loading?'Загружаю связанные понятия…':count===null?'Связанные понятия не загружены; предыдущий граф очищен.':count?'Показано связанных понятий: '+count+'.':'В доступной выдаче связанных понятий пока нет.';
-      sourceNotice.append(n('p',base+' · '+scope),b('Показать все понятия',()=>host.navigateMapSource(library.value,null,mode.value)));
-      sourceNotice.append(n('p','Ручное создание понятия скрыто: понятие без доказательства не сохранилось бы в этом режиме источника. Сначала откройте сеть всей библиотеки.',{class:'muted'}));
+      sourceStatus.textContent=base+' · '+scope;
+      sourceNoticeButton=b('Показать все понятия',()=>host.navigateMapSource(library.value,null,mode.value));
+      sourceNoticeHelp=n('p','Ручное создание понятия скрыто: понятие без доказательства не сохранилось бы в этом режиме источника. Сначала откройте сеть всей библиотеки.',{class:'muted'});
+      sourceNotice.append(sourceNoticeButton,sourceNoticeHelp);
     };
     async function renderDetail(node) {
       const selectedIdentity=entityIdentity(node),selectedMode=mode.value,selectedLibrary=library.value,selection=++readSerial;
