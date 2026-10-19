@@ -138,8 +138,8 @@ async def execute(args, report, persist_upload):
                 cases=report["dataset"],
                 upload_key=args.run_id + "-upload",
                 persist_upload=persist_upload,
+                phases_out=report["phases"],
             )
-            report["phases"] = summaries(phases)
             rows = [row for phase in phases for row in phase["requests"]]
             report["status"] = (
                 "passed"
@@ -150,6 +150,8 @@ async def execute(args, report, persist_upload):
 
 
 def main():
+    if not __debug__:
+        raise RuntimeError("optimized execution unsupported")
     parser = argparse.ArgumentParser(description=__doc__)
     for name in (
         "config",
@@ -171,7 +173,13 @@ def main():
     assert not output.exists() and not intent.exists(), "Reconcile the existing exact run"
     os.umask(0o077)
     logging.disable(logging.CRITICAL)
-    cases = json.loads(Path(args.dataset).read_text())
+    dataset_bytes = Path(args.dataset).read_bytes()
+    if (
+        hashlib.sha256(dataset_bytes).hexdigest()
+        != "c5f124cca7d36ba0f49da73607a21514dec833251e21cf48cbb87ed1dab9429f"
+    ):
+        raise ValueError("unapproved benchmark dataset")
+    cases = json.loads(dataset_bytes)
     assert len(cases) == 3 and all(c["query"] and c["expected_terms"] for c in cases)
     started = datetime.datetime.now(datetime.UTC).isoformat()
     state = {
@@ -196,7 +204,8 @@ def main():
         state["upload"] = payload
         save_intent()
 
-    save_intent()
+    with intent.open("x") as initial:
+        initial.write(json.dumps(state, indent=2) + "\n")
     report = {
         "run_id": args.run_id,
         "status": "failed",
@@ -210,6 +219,7 @@ def main():
         "relevance_definition": (
             "fixed expected-source and keyword heuristic; not human relevance grading"
         ),
+        "phases": [],
         "resource_metrics_not_in_client": True,
         "hour_load_run": False,
         "generation_requested": False,
@@ -220,6 +230,7 @@ def main():
     except Exception as error:
         report.update(status="failed", error_code=type(error).__name__)
     finally:
+        report["phases"] = summaries(report["phases"])
         report.update(
             finished_at=datetime.datetime.now(datetime.UTC).isoformat(), upload=state["upload"]
         )
@@ -239,20 +250,35 @@ def main():
 
 
 async def collect_phases(
-    http, sessions, *, library_id, source_id, cases, upload_key, persist_upload
+    http, sessions, *, library_id, source_id, cases, upload_key, persist_upload, phases_out=None
 ):
+    phases = phases_out if phases_out is not None else []
+    current_phase = None
+
     def stamp():
         return datetime.datetime.now(datetime.UTC).isoformat()
 
     def elapsed_ms(started):
         return round((time.monotonic() - started) * 1000, 3)
 
+    def record(row):
+        current_phase["requests"].append(row)
+        return row
+
     async def run_search(session, case):
         started = time.monotonic()
         try:
-            return await measured_search(session, case, library_id, source_id)
+            row = dict(await measured_search(session, case, library_id, source_id))
+            row.setdefault("ok", True)
+            row.setdefault("ms", elapsed_ms(started))
+            return record(row)
+        except asyncio.CancelledError:
+            record({"ok": False, "ms": elapsed_ms(started), "error_code": "cancelled"})
+            raise
         except Exception as exc:
-            return {"ok": False, "ms": elapsed_ms(started), "error_code": type(exc).__name__}
+            return record(
+                {"ok": False, "ms": elapsed_ms(started), "error_code": type(exc).__name__}
+            )
 
     async def upload():
         started = time.monotonic()
@@ -273,13 +299,15 @@ async def collect_phases(
                 data={"title": "C34 synthetic upload", "idempotency_key": upload_key},
             )
             status = response.status_code
-            if status not in (200, 201):
-                return {
-                    "ok": False,
-                    "ms": elapsed_ms(started),
-                    "http_status": status,
-                    "error_code": f"http_{status}",
-                }
+            if not 200 <= status < 300:
+                return record(
+                    {
+                        "ok": False,
+                        "ms": elapsed_ms(started),
+                        "http_status": status,
+                        "error_code": f"http_{status}",
+                    }
+                )
             result = response.json()
             payload = {
                 "http_status": status,
@@ -287,38 +315,22 @@ async def collect_phases(
                 "status": result["status"],
             }
             persist_upload(payload)
-            return {"ok": True, "ms": elapsed_ms(started), **payload}
+            return record({"ok": True, "ms": elapsed_ms(started), **payload})
+        except asyncio.CancelledError:
+            record({"ok": False, "ms": elapsed_ms(started), "error_code": "cancelled"})
+            raise
         except Exception as exc:
             row = {"ok": False, "ms": elapsed_ms(started), "error_code": type(exc).__name__}
             if status is not None:
                 row["http_status"] = status
-            return row
+            return record(row)
 
     async def sequential(session):
-        requests = []
         for case in cases:
-            requests.append(await run_search(session, case))
-        return requests
-
-    async def run_phase(name, operation, *, concurrent=False):
-        started_at = stamp()
-        started = time.monotonic()
-        try:
-            if concurrent:
-                requests = await asyncio.wait_for(operation, timeout=90)
-            else:
-                requests = await operation
-        except Exception as exc:
-            requests = [{"ok": False, "ms": elapsed_ms(started), "error_code": type(exc).__name__}]
-        return {
-            "name": name,
-            "started_at": started_at,
-            "finished_at": stamp(),
-            "requests": requests,
-        }
+            await run_search(session, case)
 
     async def three_clients_plus_upload():
-        return await asyncio.gather(
+        await asyncio.gather(
             run_search(sessions[0], cases[0]),
             run_search(sessions[1], cases[1]),
             run_search(sessions[2], cases[2]),
@@ -326,14 +338,36 @@ async def collect_phases(
         )
 
     async def burst10():
-        return await asyncio.gather(*(run_search(sessions[i % 3], cases[i % 3]) for i in range(10)))
+        await asyncio.gather(*(run_search(sessions[i % 3], cases[i % 3]) for i in range(10)))
 
-    return [
-        await run_phase("cold_fresh_session", sequential(sessions[0])),
-        await run_phase("warm_same_sessions", sequential(sessions[0])),
-        await run_phase("three_clients_plus_upload", three_clients_plus_upload(), concurrent=True),
-        await run_phase("burst10", burst10(), concurrent=True),
-    ]
+    async def run_phase(name, operation, planned):
+        nonlocal current_phase
+        phase = {
+            "name": name,
+            "started_at": stamp(),
+            "finished_at": None,
+            "planned_requests": planned,
+            "requests": [],
+        }
+        phases.append(phase)
+        current_phase = phase
+        try:
+            await asyncio.wait_for(operation(), timeout=90)
+        except TimeoutError:
+            phase["error_code"] = "phase_timeout"
+        except asyncio.CancelledError:
+            phase["error_code"] = "cancelled"
+            raise
+        except Exception as exc:
+            phase["error_code"] = type(exc).__name__
+        finally:
+            phase["finished_at"] = stamp()
+
+    await run_phase("cold_fresh_session", lambda: sequential(sessions[0]), 3)
+    await run_phase("warm_same_sessions", lambda: sequential(sessions[0]), 3)
+    await run_phase("three_clients_plus_upload", three_clients_plus_upload, 4)
+    await run_phase("burst10", burst10, 10)
+    return phases
 
 
 if __name__ == "__main__":
