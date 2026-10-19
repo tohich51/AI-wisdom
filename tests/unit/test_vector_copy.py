@@ -5,6 +5,7 @@ from uuid import UUID
 
 import httpx
 import pytest
+from openviking_sdk.errors import UnavailableError
 
 from kb.adapters import vector_writer
 from kb.retrieval.embedding_profile import SELECTED_PROFILE
@@ -56,6 +57,8 @@ class FakeSDKClient:
     def read(self, uri):
         self.read_uris.append(uri)
         self.events.append("read")
+        if isinstance(self.read_text, BaseException):
+            raise self.read_text
         return self.read_text
 
     def close(self):
@@ -66,7 +69,7 @@ def assert_copy_attempt(harness):
     assert len(harness.requests) == 1
     request = harness.requests[0]
     assert request.method == "POST"
-    assert str(request.url) == URL + "/api/v1/fs/cp"
+    assert str(request.url) == URL + "/api/v1/fs/cp-vectors-only"
     assert json.loads(request.content) == {
         "from_uri": SOURCE_URI,
         "to_uri": TARGET_URI,
@@ -154,8 +157,9 @@ def test_copy_rejects_invalid_identity_before_http(monkeypatch, target_root, sou
     assert harness.sdk.write_calls == 0
 
 
-def test_copy_permission_denial_is_definite(monkeypatch):
-    writer, harness = make_writer(monkeypatch, httpx.Response(403, json={"detail": "denied"}))
+@pytest.mark.parametrize("status", [403, 404])
+def test_copy_permission_or_unsupported_route_is_definite(monkeypatch, status):
+    writer, harness = make_writer(monkeypatch, httpx.Response(status, json={"detail": "denied"}))
     with pytest.raises(RuntimeError) as caught:
         writer.copy_document(TARGET_ROOT, SOURCE_ROOT, PAIR)
     assert not isinstance(caught.value, vector_writer.IndexCopyPending)
@@ -206,3 +210,46 @@ def test_copy_acknowledged_exact_read_mismatch_is_definite(monkeypatch):
     assert harness.events == ["http", "read"]
     assert harness.sdk.read_uris == [TARGET_URI]
     assert harness.sdk.write_calls == 0
+
+
+@pytest.mark.parametrize(
+    "field,value",
+    [
+        ("deleted", None),
+        ("deleted", 1),
+        ("restored", None),
+        ("restored", 1),
+        ("batches", None),
+        ("batches", 0),
+    ],
+)
+def test_copy_incomplete_native_counters_remain_pending(monkeypatch, field, value):
+    vectors = {**ACK["result"]["vectors"]}
+    if value is None:
+        vectors.pop(field)
+    else:
+        vectors[field] = value
+    ack = {**ACK, "result": {**ACK["result"], "vectors": vectors}}
+    writer, harness = make_writer(monkeypatch, httpx.Response(200, json=ack))
+    try:
+        with pytest.raises(vector_writer.IndexCopyPending):
+            writer.copy_document(TARGET_ROOT, SOURCE_ROOT, PAIR)
+        assert_pending(harness)
+    finally:
+        writer.close()
+
+
+@pytest.mark.parametrize(
+    "error",
+    [httpx.ReadTimeout("synthetic read timeout"), UnavailableError("synthetic unavailable")],
+)
+def test_copy_post_ack_transport_read_preserves_retry(monkeypatch, error):
+    writer, harness = make_writer(monkeypatch, httpx.Response(200, json=ACK), read_text=error)
+    try:
+        with pytest.raises(vector_writer.IndexCopyPending):
+            writer.copy_document(TARGET_ROOT, SOURCE_ROOT, PAIR)
+        assert_copy_attempt(harness)
+        assert harness.sdk.read_uris == [TARGET_URI]
+        assert harness.sdk.write_calls == 0
+    finally:
+        writer.close()

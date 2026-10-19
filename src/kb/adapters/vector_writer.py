@@ -6,7 +6,14 @@ from uuid import UUID
 
 import httpx
 from openviking_sdk import SyncHTTPClient
-from openviking_sdk.errors import AlreadyExistsError, ConflictError
+from openviking_sdk.errors import (
+    AlreadyExistsError,
+    ConflictError,
+    DeadlineExceededError,
+    InternalError,
+    ResourceExhaustedError,
+    UnavailableError,
+)
 
 from kb.retrieval.embedding_profile import SELECTED_PROFILE
 
@@ -39,7 +46,7 @@ class OpenVikingWriter:
         self.client = SyncHTTPClient(url=url, api_key=key, timeout=600)
         self.client.initialize()
         self._errors = self._error_count(self.client.wait_processed(timeout=600))
-        self._copy_endpoint = f"{str(url).rstrip('/')}/api/v1/fs/cp"
+        self._copy_endpoint = f"{str(url).rstrip('/')}/api/v1/fs/cp-vectors-only"
         self._http = httpx.Client(
             headers={"X-API-Key": key},
             timeout=600,
@@ -150,16 +157,27 @@ class OpenVikingWriter:
         vectors = result.get("vectors")
         if not isinstance(vectors, dict):
             raise IndexCopyPending()
-        scanned, written = vectors.get("scanned"), vectors.get("written")
-        if (
-            type(scanned) is not int
-            or type(written) is not int
-            or scanned < 1
-            or written != scanned
-        ):
+        counts = tuple(
+            vectors.get(name) for name in ("scanned", "written", "deleted", "restored", "batches")
+        )
+        if any(type(value) is not int for value in counts):
+            raise IndexCopyPending()
+        scanned, written, deleted, restored, batches = counts
+        if scanned < 1 or written != scanned or deleted != 0 or restored != 0 or batches < 1:
             raise IndexCopyPending()
 
-        if self.client.read(target_uri) != text:
+        try:
+            actual = self.client.read(target_uri)
+        except (
+            httpx.RequestError,
+            DeadlineExceededError,
+            InternalError,
+            ResourceExhaustedError,
+            UnavailableError,
+            ValueError,
+        ):
+            raise IndexCopyPending() from None
+        if actual != text:
             raise RuntimeError("index_document_verification_failed")
         return target_uri
 

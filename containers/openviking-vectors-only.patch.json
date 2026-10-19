@@ -13,6 +13,10 @@
         {
           "old": "        result = await service.fs.cp(\n            from_uri,\n            to_uri,\n            recursive=request.recursive,\n            ctx=_ctx,\n        )",
           "new": "        result = await service.fs.cp(\n            from_uri,\n            to_uri,\n            recursive=request.recursive,\n            processing_mode=request.processing_mode,\n            ctx=_ctx,\n        )"
+        },
+        {
+          "old": "\n\n@router.post(\"/cp\")\nasync def cp(",
+          "new": "\n\n@router.post(\"/cp-vectors-only\")\nasync def cp_vectors_only(\n    request: CpRequest,\n    _ctx: RequestContext = Depends(get_request_context),\n):\n    \"\"\"Copy stored vectors; older servers reject this route before mutation.\"\"\"\n    return await cp(\n        request.model_copy(update={\"processing_mode\": \"vectors_only\"}), _ctx=_ctx\n    )\n\n\n@router.post(\"/cp\")\nasync def cp("
         }
       ]
     },
