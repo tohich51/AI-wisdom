@@ -42,7 +42,7 @@ from kb.catalog.idempotency import (
     validate_idempotency_key,
 )
 from kb.catalog.libraries import AudienceScope, CreateLibrary
-from kb.contracts.entities import Library, Locator, Provenance, Rule
+from kb.contracts.entities import Library, LibraryTypeKey, Locator, Provenance, Rule
 from kb.contracts.enums import LibraryKind, PublicationStatus
 from kb.contracts.mcp_tools import GetProjectContextResult
 
@@ -59,6 +59,7 @@ class _Model(BaseModel):
 class CreateProject(_Model):
     organisation_id: UUID
     name: str = Field(min_length=1, max_length=200)
+    type_key: LibraryTypeKey | None = None
     audience_scope: AudienceScope = "private"
     # NULL stays NULL. A project with no description has none.
     description: str | None = Field(default=None, max_length=4000)
@@ -223,6 +224,7 @@ def _as_library(row: tuple) -> Library:
         audience_scope=row[3],
         created_at=row[4],
         generation=row[5],
+        type_key=row[6],
     )
 
 
@@ -280,7 +282,12 @@ def create_project(
     request_digest = (
         hash_create_request(
             PROJECT_CREATE,
-            spec.model_dump(mode="json", exclude={"idempotency_key"}),
+            spec.model_dump(
+                mode="json",
+                exclude={"idempotency_key", "type_key"}
+                if spec.type_key is None
+                else {"idempotency_key"},
+            ),
         )
         if key is not None
         else None
@@ -307,6 +314,7 @@ def create_project(
                     organisation_id=spec.organisation_id,
                     name=spec.name,
                     kind=LibraryKind.PROJECT,
+                    type_key=spec.type_key,
                     audience_scope=spec.audience_scope,
                     idempotency_key=None,
                 ),
@@ -343,7 +351,7 @@ def get_project(
         cur.execute(
             """
             SELECT l.id, l.name, l.kind, l.audience_scope, l.created_at, l.generation,
-                   p.description, p.pinned_at,
+                   l.type_key, p.description, p.pinned_at,
                    (SELECT count(*) FROM kb.project_library_link k
                      WHERE k.project_id = p.id),
                    (SELECT count(*) FROM kb.project_library_link k
@@ -361,11 +369,11 @@ def get_project(
         return None
     return ProjectDetail(
         project=_as_library(row),
-        description=row[6],
-        pinned_at=row[7],
-        link_count=int(row[8]),
-        required_link_count=int(row[9]),
-        pin_count=int(row[10]),
+        description=row[7],
+        pinned_at=row[8],
+        link_count=int(row[9]),
+        required_link_count=int(row[10]),
+        pin_count=int(row[11]),
     )
 
 
@@ -495,7 +503,7 @@ def project_context(
         cur.execute(
             """
             SELECT k.is_required, l.id, l.name, l.kind, l.audience_scope,
-                   l.created_at, l.generation
+                   l.created_at, l.generation, l.type_key
             FROM kb.project_library_link k
             LEFT JOIN kb.library l ON l.id = k.library_id
             WHERE k.project_id = %s
@@ -513,7 +521,7 @@ def project_context(
                 is_required=row[0],
                 status="available" if resolved else "blocked",
                 library_id=row[1] if resolved else None,
-                library=_as_library(row[1:7]) if resolved else None,
+                library=_as_library(row[1:8]) if resolved else None,
             )
         )
 

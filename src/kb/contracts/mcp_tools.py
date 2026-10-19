@@ -19,6 +19,7 @@ from kb.contracts.entities import (
     JobStatusResult,
     Knowledge,
     Library,
+    LibraryTypeKey,
     Rule,
     Source,
 )
@@ -42,6 +43,7 @@ class ListLibrariesArgs(ToolArgs):
     ) = None
     limit: int = Field(default=50, ge=1, le=200)
     offset: int = Field(default=0, ge=0)
+    include_type_keys: list[LibraryTypeKey] | None = Field(default=None, max_length=50)
 
 
 class ListLibrariesResult(BaseModel):

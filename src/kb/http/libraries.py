@@ -27,6 +27,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response,
 
 from kb.access.policy import AccessDenied, Principal
 from kb.catalog import libraries as catalog
+from kb.contracts.entities import LibraryTypeKey
 from kb.contracts.enums import LibraryKind
 
 router = APIRouter(tags=["libraries"])
@@ -160,17 +161,24 @@ def list_libs(
     audience_scope: Annotated[catalog.AudienceScope | None, Query()] = None,
     limit: Annotated[int, Query(ge=1, le=200)] = 50,
     offset: Annotated[int, Query(ge=0)] = 0,
+    type_key: Annotated[list[LibraryTypeKey] | None, Query()] = None,
 ) -> catalog.LibraryPage:
     """Libraries the caller can see, filtered and counted server-side.
 
-    RLS has already removed the rest. ``kind`` and ``audience_scope`` narrow the
-    visible set and cannot extend it, and ``total`` is counted over the same
-    filtered statement — a global count would be a map of libraries the caller
-    is not allowed to know exist.
+    RLS has already removed the rest. ``kind``, repeated ``type_key`` and
+    ``audience_scope`` narrow the visible set and cannot extend it, and
+    ``total`` is counted over the same filtered statement — a global count
+    would map libraries the caller is not allowed to know exist.
     """
     with mapped_errors():
         return catalog.list_libraries(
-            conn, me, kinds=kind, audience_scope=audience_scope, limit=limit, offset=offset
+            conn,
+            me,
+            kinds=kind,
+            audience_scope=audience_scope,
+            type_keys=type_key,
+            limit=limit,
+            offset=offset,
         )
 
 

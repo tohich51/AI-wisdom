@@ -23,7 +23,7 @@ import datetime as dt
 from typing import Annotated, Literal
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, StringConstraints, model_validator
 
 from kb.contracts.enums import (
     LibraryKind,
@@ -100,12 +100,17 @@ class Provenance(Contract):
 # ---------------------------------------------------------------- entities
 
 
+LibraryTypeKey = Annotated[str, StringConstraints(pattern=r"^[a-z][a-z0-9_]{1,63}$")]
+
+
 class Library(Contract):
     id: UUID
     name: str = Field(min_length=1, max_length=200)
     kind: LibraryKind
-    # Audience is independent of kind: a brand library may be project-private
-    # and a reference library may be open to all invited users.
+    # NULL means the original core kind/template. A non-NULL key is an optional
+    # template binding and PostgreSQL checks it against this explicit core kind.
+    type_key: LibraryTypeKey | None = None
+    # Audience remains independent of both the core kind and type binding.
     audience_scope: Literal["private", "invited", "all_invited"] = "private"
     created_at: dt.datetime = Field(default_factory=_now)
     generation: int = Field(default=1, ge=1)

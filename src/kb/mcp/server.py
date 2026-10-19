@@ -29,6 +29,7 @@ from kb.catalog import (
     workspace,
     writes,
 )
+from kb.contracts.entities import LibraryTypeKey
 from kb.contracts.enums import LibraryKind
 from kb.contracts.mcp_tools import (
     MCP_TOOLS,
@@ -279,12 +280,19 @@ def build_mcp(app, hosts):
         | None = None,
         limit: Annotated[int, Field(ge=1, le=200)] = 50,
         offset: Annotated[int, Field(ge=0)] = 0,
+        include_type_keys: (Annotated[list[LibraryTypeKey], Field(max_length=50)] | None) = None,
     ):
-        args = ListLibrariesArgs(include_kinds=include_kinds, limit=limit, offset=offset)
+        args = ListLibrariesArgs(
+            include_kinds=include_kinds,
+            limit=limit,
+            offset=offset,
+            include_type_keys=include_type_keys,
+        )
         return call(
             ctx,
             libraries.list_libraries,
             kinds=[LibraryKind(k) for k in args.include_kinds] if args.include_kinds else None,
+            type_keys=args.include_type_keys,
             limit=args.limit,
             offset=args.offset,
         )

@@ -23,6 +23,7 @@ from __future__ import annotations
 import contextlib
 import datetime as dt
 import json
+import re
 from typing import Any, Literal
 from uuid import UUID
 
@@ -39,10 +40,13 @@ from kb.catalog.idempotency import (
     record_create_operation,
     validate_idempotency_key,
 )
-from kb.contracts.entities import Grant, Library
+from kb.contracts.entities import Grant, Library, LibraryTypeKey
 from kb.contracts.enums import LibraryKind, LibraryRole
 
 AudienceScope = Literal["private", "invited", "all_invited"]
+
+_TYPE_KEY_RE = re.compile(r"[a-z][a-z0-9_]{1,63}")
+MAX_TYPE_KEY_FILTERS = 50
 
 
 class _Model(BaseModel):
@@ -61,6 +65,7 @@ class LibraryType(_Model):
     """
 
     key: str
+    base_kind: LibraryKind
     title: str
     description: str | None = None
     template_version: int = Field(ge=1)
@@ -78,6 +83,7 @@ class RegisterLibraryType(_Model):
     """
 
     key: str = Field(pattern=r"^[a-z][a-z0-9_]{1,63}$")
+    base_kind: LibraryKind = LibraryKind.REFERENCE
     title: str = Field(min_length=1, max_length=120)
     description: str | None = Field(default=None, max_length=2000)
     allowed_extra_fields: list[dict[str, Any]] = Field(default_factory=list)
@@ -87,10 +93,10 @@ class RegisterLibraryType(_Model):
 
 _TYPE_COLUMNS = (
     "t.key, t.title, t.description, t.template_version, "
-    "t.allowed_extra_fields, t.review_process, t.is_core, t.retired_at"
+    "t.allowed_extra_fields, t.review_process, t.is_core, t.retired_at, t.base_kind"
 )
 
-_LIB_COLUMNS = "l.id, l.name, l.kind, l.audience_scope, l.created_at, l.generation"
+_LIB_COLUMNS = "l.id, l.name, l.kind, l.audience_scope, l.created_at, l.generation, l.type_key"
 
 
 def _type_from_row(row: tuple) -> LibraryType:
@@ -103,6 +109,7 @@ def _type_from_row(row: tuple) -> LibraryType:
         review_process=dict(row[5] or {}),
         is_core=row[6],
         retired_at=row[7],
+        base_kind=row[8],
     )
 
 
@@ -114,6 +121,7 @@ def _library_from_row(row: tuple) -> Library:
         audience_scope=row[3],
         created_at=row[4],
         generation=row[5],
+        type_key=row[6],
     )
 
 
@@ -188,8 +196,8 @@ def register_library_type(
             """
             INSERT INTO kb.library_type
                 (key, title, description, template_version,
-                 allowed_extra_fields, review_process, is_core)
-            VALUES (%s, %s, %s, %s, %s::jsonb, %s::jsonb, false)
+                 allowed_extra_fields, review_process, is_core, base_kind)
+            VALUES (%s, %s, %s, %s, %s::jsonb, %s::jsonb, false, %s::kb.library_kind)
             """,
             (
                 spec.key,
@@ -198,6 +206,7 @@ def register_library_type(
                 spec.template_version,
                 json.dumps(spec.allowed_extra_fields),
                 json.dumps(spec.review_process),
+                spec.base_kind.value,
             ),
         )
     created = get_library_type(conn, spec.key, principal)
@@ -227,12 +236,23 @@ class CreateLibrary(_Model):
     organisation_id: UUID
     name: str = Field(min_length=1, max_length=200)
     kind: LibraryKind
-    # Independent axis: no validator ties it to ``kind``, and none should be
-    # added. A brand library may be private; a reference library may be
-    # readable by everyone invited. Coupling them is the bug this card exists
-    # to prevent, not a validation rule.
+    # NULL retains the original core kind/template. For a non-NULL binding the
+    # database requires an active registered type whose base kind is this kind.
+    type_key: LibraryTypeKey | None = None
+    # Audience remains an independent axis. A brand library may be private; a
+    # reference library may be readable by everyone invited.
     audience_scope: AudienceScope = "private"
     idempotency_key: str | None = Field(default=None, min_length=1, max_length=200)
+
+
+def _validate_type_keys(type_keys: list[str]) -> None:
+    if len(type_keys) > MAX_TYPE_KEY_FILTERS:
+        raise ValueError("at most 50 type_key filters are allowed")
+    if any(
+        not isinstance(type_key, str) or _TYPE_KEY_RE.fullmatch(type_key) is None
+        for type_key in type_keys
+    ):
+        raise ValueError("invalid type_key")
 
 
 def list_libraries(
@@ -241,6 +261,7 @@ def list_libraries(
     *,
     kinds: list[LibraryKind] | None = None,
     audience_scope: AudienceScope | None = None,
+    type_keys: list[LibraryTypeKey] | None = None,
     limit: int = 50,
     offset: int = 0,
 ) -> LibraryPage:
@@ -262,6 +283,11 @@ def list_libraries(
     if audience_scope is not None:
         where.append(sql.SQL("l.audience_scope = %s"))
         params.append(audience_scope)
+    if type_keys is not None:
+        _validate_type_keys(type_keys)
+        if type_keys:
+            where.append(sql.SQL("COALESCE(l.type_key, l.kind::text) = ANY(%s)"))
+            params.append(type_keys)
     tail = sql.SQL(" AND ").join(where) if where else sql.SQL("")
 
     query: sql.Composable = sql.SQL(
@@ -275,7 +301,7 @@ def list_libraries(
         rows = cur.fetchall()
 
     if rows:
-        total = int(rows[0][6])
+        total = int(rows[0][7])
     else:
         # An empty page past the end has no row to carry the total. Ask for it
         # over the same clause rather than reporting 0: "no libraries" and
@@ -353,7 +379,11 @@ def create_library(conn: psycopg.Connection, principal: Principal, spec: CreateL
     request_digest = (
         hash_create_request(
             LIBRARY_CREATE,
-            spec.model_dump(mode="json", exclude={"idempotency_key"}),
+            spec.model_dump(
+                mode="json",
+                exclude={"idempotency_key"},
+                exclude_none=True,
+            ),
         )
         if key is not None
         else None
@@ -379,13 +409,14 @@ def create_library(conn: psycopg.Connection, principal: Principal, spec: CreateL
                 return _library_from_row(replayed)
 
         cur.execute(
-            "SELECT kb.create_owned_library(%s, %s, %s::kb.library_kind, %s, %s)",
+            "SELECT kb.create_owned_library(%s, %s, %s::kb.library_kind, %s, %s, %s)",
             (
                 spec.organisation_id,
                 spec.name,
                 spec.kind.value,
                 spec.audience_scope,
                 principal.principal_id,
+                spec.type_key,
             ),
         )
         row = cur.fetchone()

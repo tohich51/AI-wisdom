@@ -124,11 +124,11 @@ async def test_list_libraries_forwards_page_through_trusted_scope_and_middleware
         resolutions.append(token)
         return identity
 
-    def list_libraries(db, principal, *, kinds, limit, offset):
+    def list_libraries(db, principal, *, kinds, type_keys, limit, offset):
         assert db is conn
         assert principal.principal_id == identity.principal_id
         assert principal.account_id == identity.account_id
-        calls.append((kinds, limit, offset))
+        calls.append((kinds, type_keys, limit, offset))
         return {"libraries": [], "total": 0, "limit": limit, "offset": offset}
 
     monkeypatch.setattr("kb.catalog.libraries.list_libraries", list_libraries)
@@ -148,11 +148,16 @@ async def test_list_libraries_forwards_page_through_trusted_scope_and_middleware
 
     result = await server.call_tool(
         "list_libraries",
-        {"include_kinds": ["reference"], "limit": 7, "offset": 11},
+        {
+            "include_kinds": ["reference"],
+            "include_type_keys": ["runbook"],
+            "limit": 7,
+            "offset": 11,
+        },
         context=context,
     )
     assert not result.is_error
-    assert calls == [([LibraryKind.REFERENCE], 7, 11)]
+    assert calls == [([LibraryKind.REFERENCE], ["runbook"], 7, 11)]
     assert resolutions == [bearer]
 
     strict_arguments = next(
@@ -180,7 +185,7 @@ async def test_list_libraries_forwards_page_through_trusted_scope_and_middleware
     assert refused.is_error
     assert refused.content[0].text == "invalid_tool_arguments"
     assert not continued
-    assert calls == [([LibraryKind.REFERENCE], 7, 11)]
+    assert calls == [([LibraryKind.REFERENCE], ["runbook"], 7, 11)]
 
     identity.scopes = frozenset()
     with pytest.raises(UnexpectedToolError):
@@ -189,5 +194,5 @@ async def test_list_libraries_forwards_page_through_trusted_scope_and_middleware
             {"limit": 7, "offset": 11},
             context=context,
         )
-    assert calls == [([LibraryKind.REFERENCE], 7, 11)]
+    assert calls == [([LibraryKind.REFERENCE], ["runbook"], 7, 11)]
     assert resolutions == [bearer, bearer]

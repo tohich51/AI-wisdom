@@ -253,7 +253,9 @@ def test_no_combination_of_kind_and_audience_is_refused(kind, audience):
 
 def test_a_library_type_may_have_no_description():
     """Unknown stays unknown. A registry entry with no description is valid."""
-    empty = cat_lib.LibraryType(key="runbook", title="Runbook", template_version=1)
+    empty = cat_lib.LibraryType(
+        key="runbook", title="Runbook", base_kind="reference", template_version=1
+    )
     assert empty.description is None
     assert empty.allowed_extra_fields == []
     assert empty.review_process == {}
