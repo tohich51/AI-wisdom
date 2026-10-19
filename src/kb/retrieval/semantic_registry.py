@@ -94,7 +94,18 @@ def capture(conn, principal: Principal, library_id: UUID) -> Snapshot:
     return Snapshot(library_id, library["generation"], documents)
 
 
-def begin(conn, principal: Principal, snapshot: Snapshot, *, force=False) -> Build:
+def begin(
+    conn,
+    principal: Principal,
+    snapshot: Snapshot,
+    *,
+    force=False,
+    force_after: int | None = None,
+) -> Build:
+    if force_after is not None and (
+        isinstance(force_after, bool) or not isinstance(force_after, int) or force_after < 0
+    ):
+        raise ValueError("rebuild_after must be a non-negative integer")
     with transaction_identity(conn, principal), conn.cursor(row_factory=dict_row) as cur:
         cur.execute(
             "SELECT pg_advisory_xact_lock(hashtextextended(%s,91))", (str(snapshot.library_id),)
@@ -118,7 +129,15 @@ def begin(conn, principal: Principal, snapshot: Snapshot, *, force=False) -> Bui
             (snapshot.library_id, snapshot.content_hash, SELECTED_PROFILE.profile_hash),
         )
         existing = cur.fetchone()
-        if existing and (existing["state"] == "building" or not force):
+        if existing and (
+            existing["state"] == "building"
+            or not force
+            or (
+                existing["state"] == "current"
+                and force_after is not None
+                and existing["generation"] > force_after
+            )
+        ):
             return Build(snapshot, existing["generation"], existing["state"] == "current")
         cur.execute(
             "UPDATE kb.index_generation SET state='retired',updated_at=now(),finished_at=now() "

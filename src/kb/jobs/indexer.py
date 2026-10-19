@@ -23,6 +23,13 @@ from kb.retrieval.embedding_profile import SELECTED_PROFILE
 from kb.retrieval.provisioning import load_account, request_provisioning
 
 
+def _validate_rebuild_after(rebuild_after: int | None) -> None:
+    if rebuild_after is not None and (
+        isinstance(rebuild_after, bool) or not isinstance(rebuild_after, int) or rebuild_after < 0
+    ):
+        raise ValueError("rebuild_after must be a non-negative integer")
+
+
 def _checkpoint(conn, principal, build, document):
     # FK deletion and revision locks can deadlock; retry SQL only, not embedding.
     for attempt in range(3):
@@ -44,11 +51,14 @@ def reindex(
     keys_root,
     terminal_failure=True,
     rebuild=False,
+    rebuild_after: int | None = None,
 ):
+    _validate_rebuild_after(rebuild_after)
     build = None
     writer = None
     with psycopg.connect(dsn, autocommit=True) as conn:
-        if not conn.execute("SELECT pg_try_advisory_lock(112187,1)").fetchone()[0]:
+        writer_lock = conn.execute("SELECT pg_try_advisory_lock(112187,1)").fetchone()
+        if not writer_lock or not writer_lock[0]:
             raise RuntimeError("index_writer_busy")
         try:
             registry.capture(conn, principal, library_id)
@@ -71,7 +81,13 @@ def reindex(
                     (SELECTED_PROFILE.profile_hash, library_id, SELECTED_PROFILE.profile_hash),
                 )
             snapshot = registry.capture(conn, principal, library_id)
-            build = registry.begin(conn, principal, snapshot, force=rebuild)
+            build = registry.begin(
+                conn,
+                principal,
+                snapshot,
+                force=rebuild,
+                force_after=rebuild_after,
+            )
             if build.already_current:
                 return {"state": "current", "documents": len(snapshot.documents), "unchanged": True}
             path = keys_root / "index" / account.index_identity / "key"
@@ -80,6 +96,8 @@ def reindex(
                 raise RuntimeError("index_key_permissions")
             writer = OpenVikingWriter(url, path.read_text().strip())
             writer.prepare(build.resource_root)
+            previous_root: str | None
+            previous_hashes: dict[UUID, str]
             if rebuild:
                 previous_root, previous_hashes = None, {}
             else:
@@ -170,7 +188,15 @@ def build_queue(dsn, config):
         pass_context=True,
         retry=procrastinate.RetryStrategy(max_attempts=3, wait=20),
     )
-    def index(context, library_id: str, rebuild: bool = False):
+    def index(
+        context,
+        library_id: str,
+        rebuild: bool = False,
+        rebuild_after: int | None = None,
+    ):
+        _validate_rebuild_after(rebuild_after)
+        if rebuild and rebuild_after is None:
+            raise ValueError("queued rebuild requires rebuild_after")
         library_uuid = UUID(library_id)
         with psycopg.connect(dsn, autocommit=True) as conn:
             principal = registry.resolve_context(conn, library_uuid)
@@ -181,6 +207,7 @@ def build_queue(dsn, config):
             principal,
             library_uuid,
             rebuild=rebuild,
+            rebuild_after=rebuild_after,
             terminal_failure=context.job.attempts >= 2,
             **config,
         )
@@ -193,11 +220,23 @@ def build_queue(dsn, config):
                 if principal is None:
                     raise RuntimeError("semantic_context_unavailable")
                 registry.capture(conn, principal, rebuild_library)
+                with transaction_identity(conn, principal):
+                    current = conn.execute(
+                        "SELECT generation FROM kb.index_generation "
+                        "WHERE library_id=%s AND state='current' "
+                        "ORDER BY generation DESC LIMIT 1",
+                        (rebuild_library,),
+                    ).fetchone()
+                rebuild_after = 0 if current is None else current[0]
                 try:
                     return index.configure(
                         lock="semantic-installation",
                         queueing_lock=f"semantic:{rebuild_library}",
-                    ).defer(library_id=str(rebuild_library), rebuild=True)
+                    ).defer(
+                        library_id=str(rebuild_library),
+                        rebuild=True,
+                        rebuild_after=rebuild_after,
+                    )
                 except AlreadyEnqueued:
                     raise RuntimeError("semantic_rebuild_busy_not_queued") from None
             for library_id in registry.pending_libraries(conn, rotation=rotation):

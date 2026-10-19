@@ -219,6 +219,7 @@ def test_explicit_rebuild_queue_is_durable_deduplicated_and_resolves_context_fre
         assert args == {
             "library_id": str(semantic_library),
             "rebuild": True,
+            "rebuild_after": 0,
         }
         assert lock == "semantic-installation"
         assert queueing_lock == "semantic:" + str(semantic_library)
@@ -278,3 +279,78 @@ def test_explicit_rebuild_queue_is_durable_deduplicated_and_resolves_context_fre
         ).fetchall()
     }
     assert granted_roles == {"kb_app", "kb_provisioner"}
+
+
+def test_rebuild_retry_after_activation_does_not_create_another_generation(
+    semantic_library, sdk_writer, provisioner, world, monkeypatch
+):
+    writer, keys_root = sdk_writer
+    run_index(provisioner, world.manager, semantic_library, keys_root)
+    old = current(provisioner, world, semantic_library)
+    writer.writes.clear()
+    original_close = writer.close
+    once = True
+
+    def lost_completion():
+        nonlocal once
+        if once:
+            once = False
+            raise RuntimeError("synthetic completion lost after activation")
+        original_close()
+
+    monkeypatch.setattr(writer, "close", lost_completion)
+    kwargs = dict(
+        url="opaque://unused",
+        keys_root=keys_root,
+        rebuild=True,
+        rebuild_after=old.generation,
+    )
+    with pytest.raises(RuntimeError, match="synthetic completion lost after activation"):
+        indexer.reindex(provisioner.info.dsn, world.manager, semantic_library, **kwargs)
+    completed = current(provisioner, world, semantic_library)
+    assert completed.generation == old.generation + 1
+    written = list(writer.writes)
+    assert written
+    retry = indexer.reindex(provisioner.info.dsn, world.manager, semantic_library, **kwargs)
+    assert retry == {"state": "current", "documents": 1, "unchanged": True}
+    assert current(provisioner, world, semantic_library).generation == completed.generation
+    assert writer.writes == written
+
+
+def test_rebuild_cli_serializes_the_real_deferred_job_id(
+    semantic_library, world, admin, monkeypatch, capsys
+):
+    import contextlib
+    import json
+
+    login = "projection_cli_" + uuid4().hex[:12]
+    install_queue(admin.info.dsn)
+    admin.execute(
+        sql.SQL(
+            "CREATE ROLE {} LOGIN NOSUPERUSER NOBYPASSRLS IN ROLE kb_app,kb_provisioner"
+        ).format(sql.Identifier(login))
+    )
+    dsn = make_conninfo(admin.info.dsn, user=login)
+    app, enqueue = indexer.build_queue(dsn, {})
+    with app.open():
+        job_id = enqueue(rebuild_library=semantic_library)
+    assert isinstance(job_id, int) and not isinstance(job_id, bool)
+    calls = []
+
+    def observed_enqueue(**kw):
+        calls.append(kw)
+        return job_id
+
+    # No run_worker method: the explicit CLI must enqueue one library and exit.
+    cli_app = SimpleNamespace(open=lambda: contextlib.nullcontext())
+    monkeypatch.setenv("KB_INDEXER_DATABASE_URL", dsn)
+    monkeypatch.setattr(indexer, "configuration", lambda: {})
+    monkeypatch.setattr(indexer, "build_queue", lambda *_: (cli_app, observed_enqueue))
+    monkeypatch.setattr("sys.argv", ["indexer", "--rebuild-library", str(semantic_library)])
+    indexer.main()
+    assert calls == [{"rebuild_library": semantic_library}]
+    assert json.loads(capsys.readouterr().out) == {
+        "state": "queued",
+        "library_id": str(semantic_library),
+        "queue_job_id": job_id,
+    }

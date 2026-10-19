@@ -161,6 +161,7 @@ def test_task_resolves_a_fresh_replacement_on_every_attempt(world, tmp_path, mon
         *,
         terminal_failure=True,
         rebuild=False,
+        rebuild_after=None,
         **observed_config,
     ):
         observations.append(
