@@ -125,7 +125,7 @@ def test_the_request_carries_the_approved_address(monkeypatch, url, approved, ho
     assert len(seen) == 1
     request = seen[0]
     assert request.url.host == approved, "the transport must be given the approved IP"
-    assert request.headers["host"] == host_header
+    assert request.headers.get_list("host") == [host_header]
     assert request.extensions.get("sni_hostname") == sni
     assert request.url.path == httpx.URL(url).path
     assert request.url.query == httpx.URL(url).query
@@ -133,3 +133,48 @@ def test_the_request_carries_the_approved_address(monkeypatch, url, approved, ho
     assert fetched.content == b"%PDF-1.7\n"
     assert fetched.media_type == "application/pdf"
     assert fetched.approved_addresses == (approved,)
+
+
+def test_cookie_jar_not_shared_across_redirect_hops(monkeypatch):
+    """Hop 1 Set-Cookie must never reach the (possibly shared) approved IP of hop 2."""
+    from kb.catalog import upload_fetch as mod
+
+    ip = "93.184.216.34"
+    seen: list = []
+
+    def fake_resolver(host, port=0, *args, **kwargs):
+        return [ip]
+
+    monkeypatch.setattr(mod, "default_resolver", fake_resolver)
+
+    def handle_request(self, request):  # default transport, no proxy, no WAN
+        seen.append(request)
+        if len(seen) == 1:
+            return httpx.Response(
+                302,
+                headers={
+                    "Location": "https://second.example/next",
+                    "Set-Cookie": "private-origin-canary=1; Path=/",
+                },
+                content=b"",
+                request=request,
+            )
+        return httpx.Response(200, content=b"ok", request=request)
+
+    monkeypatch.setattr(httpx.HTTPTransport, "handle_request", handle_request)
+
+    result = mod.fetch_url("https://first.example/start", mod.FetchPolicy())
+
+    assert len(seen) == 2
+    assert [r.url.host for r in seen] == [ip, ip]
+    assert [r.headers.get_list("host") for r in seen] == [
+        ["first.example"],
+        ["second.example"],
+    ]
+    assert [r.extensions["sni_hostname"] for r in seen] == [
+        "first.example",
+        "second.example",
+    ]
+    assert seen[1].headers.get("cookie") is None
+    assert str(result.final_url) == "https://second.example/next"
+    assert result.content == b"ok"

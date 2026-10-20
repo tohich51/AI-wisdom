@@ -376,6 +376,7 @@ def fetch_url(
             _scheme, host, port, _path = check_url(current, policy, resolver=resolver)
             approved = _approved(host, port, policy, resolver)
             try:
+                client.cookies.clear()
                 target = httpx.URL(current)
                 outgoing: httpx.URL = target
                 headers: dict[str, str] | None = None
