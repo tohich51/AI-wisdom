@@ -262,10 +262,11 @@ async function test(name,fn){await fn();passed++;console.log('PASS '+name);}
   const chosen=f.add('option','chosen-library-option',scope);chosen.setAttribute('value','selected');
   f.route.params=[id];
   f.run('selected={id:'+JSON.stringify(id)+',name:"Пример"};');
+  let draftAuthorized=true;
   f.context.WisdomForms.configureContext(()=>({
    accountId:'fixture-account',principalId:'fixture-reader',routeName:f.route.name,
    params:f.route.params,query:'',route:'/app/'+f.route.name+'/'+f.route.params.join('/'),
-   libraryId:f.route.params[0]||'',projectId:'',authorized:true
+   libraryId:f.route.params[0]||'',projectId:'',authorized:draftAuthorized
   }));
   const makeForm=(parent)=>{
    const form=f.add('form','route-draft',parent),input=f.add('input','route-draft-title',form);
@@ -287,7 +288,11 @@ async function test(name,fn){await fn();passed++;console.log('PASS '+name);}
   assert.equal(f.button(unrelated.form,'Восстановить введённый текст'),undefined,'old private text must not be re-keyed to Experience');
   unrelated.form.remove();
   Object.assign(f.route,{token:3,name:'libraries',params:[id]});
+  draftAuthorized=false;
   const reopened=makeForm(f.document.getElementById('library-detail'));f.context.WisdomForms.refreshRecovery();
+  assert.equal(f.button(reopened.form,'Восстановить введённый текст'),undefined,'fresh access must precede recovery');
+  f.context.WisdomForms.snapshotAll();f.context.WisdomForms.suspend();
+  draftAuthorized=true;f.context.WisdomForms.resume();
   const restore=f.button(reopened.form,'Восстановить введённый текст');
   assert(restore,'the old library draft must remain available on reopening');
   assert.equal(restore.parentElement.hidden,false);

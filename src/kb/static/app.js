@@ -1841,7 +1841,7 @@ const setIdentityChrome = complete => {
   if (logout) logout.hidden = false;
   if (complete) {
     const check = byId('check-login');
-    if (check) check.hidden = true;
+    if (check) { check.hidden = false; check.textContent = 'Черновики'; check.title = 'Проверить доступ и восстановить введённый текст'; }
     if (login) {
       login.removeAttribute('target');
       login.removeAttribute('rel');
@@ -2042,7 +2042,7 @@ window.WisdomData.onBeforeInvalidate(status => {
       login.rel = 'noopener noreferrer';
     }
     const check = byId('check-login');
-    if (check) { check.hidden = false; check.disabled = false; }
+    if (check) { check.hidden = false; check.disabled = false; check.textContent = 'Проверить вход'; }
     return;
   }
   if (status === 403) {

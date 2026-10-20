@@ -422,12 +422,14 @@
     const signature = formSignature(state.form);
     if (!context || !signature) return;
     const key = draftRecordKey(context, signature);
-    if (!state.draftEdits.size || state.draftOversized.size) {
+    if (state.draftOversized.size) {
       removeDraft(key);
       state.lastDraftKey = null;
       syncRecoveryAll();
       return;
     }
+    // An untouched remounted form must not erase its pending recovery record.
+    if (!state.draftEdits.size) return;
     const values = Array.from(state.draftEdits, ([field, value]) => ({field, value}));
     const weight = (signature.length + JSON.stringify(values).length) * 2;
     if (weight > MAX_DRAFT_TEXT) {
