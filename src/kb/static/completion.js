@@ -153,12 +153,15 @@
     try {
       if (!accountId) throw Error('В текущем профиле не найден идентификатор организации.');
       const dataGeneration=window.WisdomData.generation();
-      const [members, groups, invitations] = await Promise.all([
+      const [profile, members, groups, invitations] = await Promise.all([
+        host.api('/api/me', {noCache: true, cache: 'no-store'}),
         host.api('/api/orgs/' + encodeURIComponent(accountId) + '/members'),
         host.api('/api/orgs/' + encodeURIComponent(accountId) + '/groups'),
         host.api('/api/orgs/' + encodeURIComponent(accountId) + '/invitations')
       ]);
       if(!current() || dataGeneration !== window.WisdomData.generation())return;
+      if (profile?.account_id !== accountId || !identityMatches(host, accountId, profile?.principal_id)) throw Error('Ответ профиля доступа не совпадает с текущей организацией.');
+      const isOrgAdmin = profile.is_org_admin === true;
       const content = el('div', null, {class: 'completion-grid'});
       const libraries = host.libraries().filter(item => item?.id);
       const activeMembers = members.filter(member => member.status === 'active' && member.principal_id);
@@ -182,7 +185,7 @@
         const memberLine = el('div', null, {class: 'completion-list-item'});
         const label = [member.display_name, member.email, memberStatusLabel(member.status)].filter(Boolean).join(' · ') || member.principal_id;
         memberLine.append(el('p', label));
-        if (member.status === 'active') {
+        if (isOrgAdmin && member.status === 'active') {
           const deactivate = el('details'); deactivate.append(el('summary', 'Деактивировать участника'));
           const form = el('form', null, {class: 'completion-form'}), reason = field('Причина (необязательно)', 'reason');
           const confirmed = field('Подтверждаю блокировку участника и отзыв его активных сессий', 'confirmed', 'checkbox');
@@ -240,7 +243,8 @@
           await mountAccess(root, host);
         } catch (error) { if (current()) window.WisdomForms.formError(inviteForm, errorMessage(error)); } finally { submit.disabled = false; }
       });
-      inviteBox.append(inviteForm);
+      if (isOrgAdmin) inviteBox.append(inviteForm);
+      else inviteBox.append(el('p', 'Приглашать участников может только администратор организации.', {class: 'muted'}));
       const groupBox = card('Группы');
       if (!groups.length) empty(groupBox, 'Групп пока нет.');
       const groupCards = [];
@@ -312,7 +316,8 @@
               if (busy === null) remove.removeAttribute('aria-busy'); else remove.setAttribute('aria-busy', busy);
             }
           });
-        groupCard.append(membershipForm, removeForm);
+        if (isOrgAdmin) groupCard.append(membershipForm, removeForm);
+        else groupCard.append(el('p', 'Добавлять и удалять участников из группы может только администратор организации.', {class: 'muted'}));
 
         const grantsPath = '/api/orgs/' + encodeURIComponent(accountId) + '/groups/' + encodeURIComponent(group.id) + '/grants';
         let grantsGeneration=null;
@@ -340,10 +345,10 @@
                 await mountAccess(root, host);
               } catch (error) { if (actionCurrent()) throw error; }
             }, 'secondary', current);
-            row.append(document.createTextNode(' · '), revoke); groupCard.append(row);
+            if (isOrgAdmin) row.append(document.createTextNode(' · '), revoke); groupCard.append(row);
           }
         } catch (error) { if (current() && grantsGeneration === window.WisdomData.generation()) groupCard.append(el('p', error.message, {role: 'alert', class: 'completion-error'})); }
-        if (libraries.length) {
+        if (isOrgAdmin && libraries.length) {
           const grantForm = el('form', null, {class: 'completion-form'});
           const librarySelect = selectField(grantForm, 'Библиотека для группы', 'library_id', libraries, 'id', item => item.name || item.id);
           host.attachLibraryChooser(librarySelect, {pool:libraries});
@@ -380,7 +385,8 @@
         } catch (error) { if (current()) window.WisdomForms.formError(groupForm, errorMessage(error)); }
         finally { create.disabled = false; }
       });
-      groupBox.append(groupForm);
+      if (isOrgAdmin) groupBox.append(groupForm);
+      else groupBox.append(el('p', 'Создавать группы может только администратор организации.', {class: 'muted'}));
       const directBox = card('Прямые разрешения и объяснение доступа');
       const directChoice = el('select', null, {id:'access-library-choice'});
       addOptions(directChoice, libraries, 'id', item => item.name || item.id);

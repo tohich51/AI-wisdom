@@ -15,6 +15,7 @@ from test_runtime import world as world
 
 from kb.access.policy import AccessDenied, transaction_identity
 from kb.catalog import content, libraries, policies, upload, workspace, writes
+from kb.http.content import me_route
 from kb.jobs.ingestion import submit_processing
 from kb.research import notes
 
@@ -46,6 +47,29 @@ def grant_other(world, role):
             "INSERT INTO kb.library_grant(library_id,principal_id,role) VALUES(%s,%s,%s)",
             (world["lib"], world["other"].principal_id, role),
         )
+
+
+def test_me_route_reports_real_org_admin_authority(world):
+    """The /me flag is decided by kb.is_org_admin in PostgreSQL, not by member counts."""
+    with psycopg.connect(world["admin"]) as conn:
+        active_members = conn.execute(
+            "SELECT count(*) FROM kb.membership WHERE organisation_id=%s AND status='active'",
+            (world["principal"].account_id,),
+        ).fetchone()[0]
+    assert active_members == 2  # Identical counts, opposite authority.
+    with psycopg.connect(world["dsn"]) as conn:
+        owner = me_route(conn, world["principal"])
+        assert owner["principal_id"] == world["principal"].principal_id
+        assert owner["account_id"] == world["principal"].account_id
+        assert owner["is_org_admin"] is True
+        assert me_route(conn, world["other"])["is_org_admin"] is False
+    with psycopg.connect(world["admin"]) as conn:
+        conn.execute(
+            "DELETE FROM kb.organisation_admin WHERE organisation_id=%s AND principal_id=%s",
+            (world["principal"].account_id, world["principal"].principal_id),
+        )
+    with psycopg.connect(world["dsn"]) as conn:
+        assert me_route(conn, world["principal"])["is_org_admin"] is False
 
 
 @pytest.mark.parametrize("invalid", ["another_library", "missing_item"])

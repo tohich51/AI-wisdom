@@ -6,6 +6,7 @@ from uuid import UUID
 from fastapi import APIRouter, Query, Request
 from pydantic import BaseModel, ConfigDict, Field
 
+from kb.access import membership
 from kb.catalog import content, policies, shared_experience, workspace, writes
 from kb.http.libraries import Db, Me, mapped_errors
 from kb.jobs.ingestion import submit_processing
@@ -57,8 +58,14 @@ class PublishExperienceInput(Input):
 
 
 @router.get("/me")
-def me_route(me: Me):
-    return {"principal_id": me.principal_id, "account_id": me.account_id}
+def me_route(conn: Db, me: Me):
+    with mapped_errors():
+        return {
+            "principal_id": me.principal_id,
+            "account_id": me.account_id,
+            # Additive hint for UI gating only; the SQL function decides.
+            "is_org_admin": membership.is_org_admin(conn, me, me.account_id),
+        }
 
 
 @router.get("/libraries/{library_id}/policy")
