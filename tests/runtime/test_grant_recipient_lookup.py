@@ -184,6 +184,7 @@ def test_acl_is_kb_app_only_and_the_roster_did_not_widen(world):
     # The lookup opens no new read: through the ordinary catalogue call, this
     # non-admin manager still sees their single membership row and nobody else's.
     with psycopg.connect(world["dsn"]) as conn:
-        assert [row.principal_id for row in membership.list_memberships(conn, manager, manager.account_id)] == [
-            manager.principal_id
-        ]
+        assert [
+            row.principal_id
+            for row in membership.list_memberships(conn, manager, manager.account_id)
+        ] == [manager.principal_id]
