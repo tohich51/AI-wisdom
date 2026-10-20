@@ -383,3 +383,139 @@ def test_candidate_authlib_flow_exchanges_a_real_code_and_shares_only_pg_state(
                     binding=started.browser_binding,
                     now=dt.datetime.now(dt.UTC),
                 )
+
+
+@pytest.mark.requires_keycloak
+def test_two_personal_identities_receive_real_pkce_tokens_and_one_refreshes(
+    live_keycloak,
+) -> None:
+    """Two synthetic people each receive real product code+PKCE tokens.
+
+    Each person logs in through their own isolated browser session, exchanges
+    one real authorization code with PKCE at the public token endpoint, and the
+    current TokenVerifier accepts the result for the product audience only; one
+    refresh_token is redeemed once. Codes, tokens and responses stay in process
+    and are never logged or asserted raw.
+    """
+    import secrets
+    from contextlib import ExitStack
+    from urllib.parse import parse_qs, urlsplit
+    from uuid import UUID, uuid4
+
+    import httpx
+    from authlib.oauth2.client import OAuth2Client
+    from keycloak_admin import Secret
+    from keycloak_browser import post_form
+    from keycloak_user import synthetic_user
+
+    from kb.access.identity import IdentityRejected, IdentitySettings, TokenVerifier
+
+    product = next(c for c in live_keycloak.clients() if c["clientId"] == PRODUCT_CLIENT)
+    product_secret = Secret(
+        live_keycloak.admin_json(
+            "GET",
+            f"/admin/realms/{REALM}/clients/{product['id']}/client-secret",
+        )["value"]
+    )
+    issuer = live_keycloak.issuer
+    token_endpoint = issuer + "/protocol/openid-connect/token"
+    registered = urlsplit(GATEWAY_REDIRECT_URI)
+    account_id = str(uuid4())
+
+    def code_tokens(transport, browser, user):
+        """One real browser login plus PKCE exchange -> (access, refresh, nonce)."""
+        code_verifier = secrets.token_urlsafe(48)
+        nonce = secrets.token_urlsafe(24)
+        state = secrets.token_urlsafe(24)
+        oauth = OAuth2Client(
+            session=transport,
+            client_id=PRODUCT_CLIENT,
+            client_secret=product_secret.reveal(),
+            scope="openid",
+            redirect_uri=GATEWAY_REDIRECT_URI,
+            code_challenge_method="S256",
+        )
+        url, _ = oauth.create_authorization_url(
+            issuer + "/protocol/openid-connect/auth",
+            state=state,
+            nonce=nonce,
+            code_verifier=code_verifier,
+        )
+        assert "code_challenge_method=S256" in url and "code_challenge=" in url, (
+            "authorization request did not carry PKCE S256"
+        )
+        page = browser.get(url)
+        response = post_form(
+            browser,
+            page,
+            "kc-form-login",
+            {"username": user.username, "password": user.password.reveal()},
+        )
+        assert response.status_code == 302, "synthetic login did not return a code"
+        callback = urlsplit(response.headers["location"])
+        assert (callback.scheme, callback.netloc, callback.path) == (
+            registered.scheme,
+            registered.netloc,
+            registered.path,
+        ), "code did not reach the registered callback"
+        query = parse_qs(callback.query)
+        state_matches = query.get("state") == [state]
+        assert state_matches, "provider state mismatch"
+        exchanged = transport.post(
+            token_endpoint,
+            data={
+                "grant_type": "authorization_code",
+                "code": Secret(query["code"][0]).reveal(),
+                "redirect_uri": GATEWAY_REDIRECT_URI,
+                "code_verifier": code_verifier,
+            },
+            auth=(PRODUCT_CLIENT, product_secret.reveal()),
+        )
+        assert exchanged.status_code == 200, "authorization_code exchange did not succeed"
+        body = exchanged.json()
+        return Secret(body["access_token"]), Secret(body["refresh_token"]), nonce
+
+    with ExitStack() as stack:
+        transport = stack.enter_context(httpx.Client(timeout=20, follow_redirects=False))
+        verifier = TokenVerifier(
+            IdentitySettings(issuer=issuer, audience=PRODUCT_CLIENT, client_id=PRODUCT_CLIENT),
+            transport,
+        )
+        foreign = TokenVerifier(
+            IdentitySettings(
+                issuer=issuer,
+                audience=secrets.token_urlsafe(18),
+                client_id=PRODUCT_CLIENT,
+            ),
+            transport,
+        )
+        subjects: list[str] = []
+        refreshes: list[Secret] = []
+        for _ in range(2):
+            user = stack.enter_context(
+                synthetic_user(live_keycloak, mfa=False, account_id=account_id)
+            )
+            browser = stack.enter_context(httpx.Client(timeout=20, follow_redirects=False))
+            access, refresh, _nonce = code_tokens(transport, browser, user)
+            principal = verifier.verify(access.reveal(), require_scopes=False)
+            assert UUID(str(principal.principal_id)) == UUID(user.internal_id), (
+                "subject is not the person"
+            )
+            assert UUID(str(principal.account_id)) == UUID(account_id), "account claim is missing"
+            with pytest.raises(IdentityRejected) as refused:
+                foreign.verify(access.reveal(), require_scopes=False)
+            assert refused.value.code == "audience_mismatch", "foreign audience was not refused"
+            subjects.append(user.internal_id)
+            refreshes.append(refresh)
+        assert subjects[0] != subjects[1], "the two people share one subject"
+
+        renewed_response = transport.post(
+            token_endpoint,
+            data={"grant_type": "refresh_token", "refresh_token": refreshes[0].reveal()},
+            auth=(PRODUCT_CLIENT, product_secret.reveal()),
+        )
+        assert renewed_response.status_code == 200, "refresh_token grant did not succeed"
+        renewed = Secret(renewed_response.json()["access_token"])
+        principal = verifier.verify(renewed.reveal(), require_scopes=False)
+        assert UUID(str(principal.principal_id)) == UUID(subjects[0]), "refresh changed the subject"
+        assert UUID(str(principal.account_id)) == UUID(account_id), "refresh lost the account"
