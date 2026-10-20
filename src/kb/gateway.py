@@ -13,6 +13,7 @@ from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from psycopg_pool import ConnectionPool
+from starlette.middleware.gzip import GZipMiddleware
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from kb.adapters.originals import LocalBlobStore
@@ -210,5 +211,5 @@ def create_app() -> FastAPI:
             return _database_not_ready()
 
     mcp_server, child = build_mcp(app, allowed_hosts)
-    app.mount("/", child)
+    app.mount("/", GZipMiddleware(child, minimum_size=1024, compresslevel=3))
     return app
