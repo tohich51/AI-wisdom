@@ -223,6 +223,9 @@ class AuthorizationCodeFlow:
             raise LoginRejected("token_exchange_rejected") from None
         except httpx.HTTPError:
             raise LoginRejected("token_endpoint_unreachable") from None
+        except (ValueError, TypeError, OverflowError):
+            # SDK token-field normalization may reject an otherwise valid JSON object.
+            raise LoginRejected("token_response_malformed") from None
 
         # The gateway authenticates the browser session with the ID token. An
         # access token alone means the provider ignored response_type=code,

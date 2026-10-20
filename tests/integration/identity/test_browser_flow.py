@@ -591,3 +591,43 @@ def test_a_gateway_with_placeholder_configuration_refuses_to_start():
                 "KB_SESSION_IDLE_MINUTES": "0",
             }
         )
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"expires_in": "synthetic-invalid-expiry"},
+        {"expires_at": [1]},
+        {"error": "invalid_grant", "error_description": ["synthetic-private-detail"]},
+    ],
+)
+def test_malformed_sdk_token_fields_are_a_safe_callback_refusal(
+    auth_settings,
+    make_store,
+    provider,
+    payload,
+    caplog,
+):
+    """Exercise Authlib's actual parser with a labelled HTTP response double."""
+    with httpx.Client(timeout=5.0) as forwarding:
+
+        def response(request):
+            if request.url.path.endswith("/token"):
+                return httpx.Response(200, json=payload)
+            return forwarding.send(request)
+
+        with httpx.Client(transport=httpx.MockTransport(response)) as transport:
+            with TestClient(
+                _build(make_store("malformed-sdk"), auth_settings, transport),
+                base_url="http://127.0.0.1:8000",
+                follow_redirects=False,
+                raise_server_exceptions=False,
+            ) as browser:
+                started = browser.get("/auth/login")
+                with httpx.Client(timeout=5.0, follow_redirects=False) as provider_browser:
+                    at_provider = provider_browser.get(started.headers["location"])
+                refused = browser.get(callback_of(at_provider.headers["location"]))
+                assert refused.status_code == 400
+                assert refused.json() == {"error": "token_response_malformed"}
+                assert browser.get("/auth/session").json()["authenticated"] is False
+    assert "synthetic-private-detail" not in caplog.text
