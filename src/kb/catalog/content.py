@@ -329,6 +329,12 @@ def read_source(
 ) -> dict[str, Any]:
     """Read one visible source and a bounded, ordinal-ordered fragment page.
 
+    When the authorized source carries a stored ``origin_url``, ``url_history``
+    reports the nearest earlier and later source in the same library that shares
+    that exact stored URL. The stored URL is the only identity used: no
+    canonicalization, normalization, or renumbering is applied, and the two
+    nearest neighbors are returned. Local files report ``None``.
+
     When ``fragment_id`` is supplied, source authorization is checked first and
     the target must be a visible fragment of that source. ``fragment_id`` takes
     precedence over ``from_fragment``; missing, inaccessible, or mismatched
@@ -354,6 +360,50 @@ def read_source(
         source_row = cursor.fetchone()
         if source_row is None:
             raise AccessDenied("forbidden")
+
+        url_history = None
+        if source_row["origin_url"]:
+            cursor.execute(
+                """
+                SELECT id, title, content_hash, retrieved_at, created_at
+                FROM kb.source
+                WHERE library_id = %s
+                  AND origin_url = %s
+                  AND (created_at, id) < (%s, %s)
+                ORDER BY created_at DESC, id DESC
+                LIMIT 1
+                """,
+                (
+                    source_row["library_id"],
+                    source_row["origin_url"],
+                    source_row["created_at"],
+                    source_id,
+                ),
+            )
+            previous_row = cursor.fetchone()
+            cursor.execute(
+                """
+                SELECT id, title, content_hash, retrieved_at, created_at
+                FROM kb.source
+                WHERE library_id = %s
+                  AND origin_url = %s
+                  AND (created_at, id) > (%s, %s)
+                ORDER BY created_at ASC, id ASC
+                LIMIT 1
+                """,
+                (
+                    source_row["library_id"],
+                    source_row["origin_url"],
+                    source_row["created_at"],
+                    source_id,
+                ),
+            )
+            next_row = cursor.fetchone()
+            url_history = {
+                "origin_url": source_row["origin_url"],
+                "previous": dict(previous_row) if previous_row else None,
+                "next": dict(next_row) if next_row else None,
+            }
 
         resolved_from_fragment = from_fragment
         if fragment_id is not None:
@@ -392,6 +442,7 @@ def read_source(
     return {
         "source": dict(source_row),
         "fragments": fragments,
+        "url_history": url_history,
         "retrieved_only": True,
         "retrieval_event_id": event_id,
     }

@@ -1030,6 +1030,33 @@ async function viewSource(id, options = {}) {
   editMetadata.setAttribute('data-od-id', 'edit-source-metadata');
   d.append(editMetadata);
   d.append(node('a', 'Скачать оригинал', {href: '/api/sources/' + id + '/original', download: initial.source.title}));
+  const urlHistory = initial.url_history;
+  if (urlHistory) {
+    const snapshotDate = value => {
+      if (!value) return null;
+      const parsed = new Date(value);
+      return Number.isNaN(parsed.getTime()) ? String(value) : parsed.toLocaleString('ru-RU');
+    };
+    const history = node('section');
+    history.append(node('h3', 'История снимков статьи'));
+    history.append(node('p', 'Зафиксированный URL: ' + (urlHistory.origin_url ?? 'не указан')));
+    history.append(node('p', 'Текущий снимок: ' + (snapshotDate(initial.source.retrieved_at) ?? 'не указана') + ' · SHA-256: ' + (initial.source.content_hash ?? 'не указан')));
+    const neighbors = [['Предыдущий снимок', urlHistory.previous], ['Следующий снимок', urlHistory.next]];
+    for (const [label, neighbor] of neighbors) {
+      if (!neighbor) {
+        history.append(node('p', label + ': снимок отсутствует', {class: 'muted'}));
+        continue;
+      }
+      const neighborDate = snapshotDate(neighbor.retrieved_at) ?? snapshotDate(neighbor.created_at) ?? 'не указана';
+      const neighborHash = neighbor.content_hash ? neighbor.content_hash.slice(0, 12) : 'хэш не указан';
+      history.append(button(label + ' · ' + neighborDate + ' · ' + neighborHash, async () => {
+        if (!isCurrent() || !d.isConnected) return;
+        d.close();
+        await viewSource(neighbor.id, {isCurrent: callerIsCurrent, returnFocus});
+      }));
+    }
+    d.append(history);
+  }
   const content = node('div'), pagerLine = node('p'), targetLine = node('p');
   const locationOf = part => [
     part.chapter != null && part.chapter !== '' ? 'Глава: ' + part.chapter : null,

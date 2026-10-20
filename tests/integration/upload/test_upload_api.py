@@ -21,9 +21,13 @@ The card's acceptance criteria, and where each is proved:
 from __future__ import annotations
 
 import hashlib
+from uuid import UUID
 
 import httpx
 import pytest
+
+from kb.access.policy import AccessDenied, Principal
+from kb.catalog import content
 
 pytestmark = pytest.mark.integration
 
@@ -693,3 +697,133 @@ def test_a_retried_submission_after_revoke_is_refused_without_refetching(
     assert revoked.status_code == 403, revoked.text
     assert len(calls) == 1, "the refused retry must not reach the origin transport"
     assert len(world.sources_in(library)) == 1, "no second source may be created"
+
+
+def test_one_url_walked_twice_keeps_the_chain_readable_from_both_ends(
+    make_api, people, world, db_pool
+) -> None:
+    """Two fetches of one URL are two sources, joined by a readable chain."""
+    library = world.open_library(name="ref", who=people.owner, role="contributor")
+    bodies = [BOOK, OTHER]
+    hits: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        hits.append(str(request.url))
+        return httpx.Response(
+            200, content=bodies[len(hits) - 1], headers={"Content-Type": "application/pdf"}
+        )
+
+    client = make_api(
+        people.owner,
+        source_transport=httpx.MockTransport(handler),
+        source_resolver=_public_resolver,
+    )
+    route = f"/libraries/{library}/sources/from-url"
+    url = "https://public.test/a-book.pdf"
+
+    first = client.post(route, json={"url": url, "idempotency_key": "idem-chain-0001"})
+    assert first.status_code == 201, first.text
+    second = client.post(route, json={"url": url, "idempotency_key": "idem-chain-0002"})
+    assert second.status_code == 201, second.text
+
+    old_id = UUID(first.json()["source"]["id"])
+    new_id = UUID(second.json()["source"]["id"])
+    assert old_id != new_id, "different bytes must not collapse onto one source"
+    assert len(hits) == 2
+
+    who = Principal(people.owner, world.organisation())
+    with db_pool.connection() as conn:
+        old_view = content.read_source(conn, who, old_id)
+        new_view = content.read_source(conn, who, new_id)
+
+    assert old_view["source"]["id"] == old_id and new_view["source"]["id"] == new_id
+    assert old_view["source"]["content_hash"] == BOOK_HASH
+    assert new_view["source"]["content_hash"] == OTHER_HASH
+    assert old_view["fragments"] == [] and new_view["fragments"] == []
+
+    chain, history = new_view["url_history"], old_view["url_history"]
+    assert chain["origin_url"] == history["origin_url"] == url
+    assert history["previous"] is None and chain["next"] is None
+    assert chain["previous"]["id"] == old_id and history["next"]["id"] == new_id
+    assert chain["previous"]["content_hash"] == BOOK_HASH, "the old hash must survive"
+    assert history["next"]["content_hash"] == OTHER_HASH
+    assert chain["previous"]["title"] == first.json()["source"]["title"]
+    assert history["next"]["title"] == second.json()["source"]["title"]
+    assert chain["previous"]["retrieved_at"] is not None
+    assert history["next"]["retrieved_at"] is not None
+    assert history["next"]["created_at"] is not None
+
+    old_original = client.get(f"/sources/{old_id}/original")
+    assert old_original.status_code == 200, old_original.text
+    assert old_original.content == BOOK
+    new_original = client.get(f"/sources/{new_id}/original")
+    assert new_original.status_code == 200, new_original.text
+    assert new_original.content == OTHER
+    assert world.versions_of(old_id) == [(1, BOOK_HASH)]
+    assert world.versions_of(new_id) == [(1, OTHER_HASH)]
+
+    replay = client.post(route, json={"url": url, "idempotency_key": "idem-chain-0002"})
+    assert replay.status_code == 200, replay.text
+    assert replay.json()["source"]["id"] == str(new_id)
+    assert len(hits) == 2, "a replay must not walk the origin again"
+    assert len(world.sources_in(library)) == 2
+
+
+def test_another_library_walk_of_the_same_url_stays_out_of_this_read(
+    make_api, people, world, db_pool
+) -> None:
+    """One URL, two private libraries: neither read may name the other's file."""
+    mine = world.open_library(name="ref", who=people.owner, role="contributor")
+    theirs = world.open_library(name="other", who=people.colleague, role="contributor")
+    bodies = [BOOK, OTHER]
+    hits: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        hits.append(str(request.url))
+        return httpx.Response(
+            200, content=bodies[len(hits) - 1], headers={"Content-Type": "application/pdf"}
+        )
+
+    owner_api = make_api(
+        people.owner,
+        source_transport=httpx.MockTransport(handler),
+        source_resolver=_public_resolver,
+    )
+    colleague_api = make_api(
+        people.colleague,
+        source_transport=httpx.MockTransport(handler),
+        source_resolver=_public_resolver,
+    )
+    url = "https://public.test/a-book.pdf"
+    my_post = owner_api.post(
+        f"/libraries/{mine}/sources/from-url",
+        json={"url": url, "idempotency_key": "idem-two-0001", "title": "canary-mine"},
+    )
+    assert my_post.status_code == 201, my_post.text
+    their_post = colleague_api.post(
+        f"/libraries/{theirs}/sources/from-url",
+        json={"url": url, "idempotency_key": "idem-two-0002", "title": "canary-theirs"},
+    )
+    assert their_post.status_code == 201, their_post.text
+
+    my_id = UUID(my_post.json()["source"]["id"])
+    their_id = UUID(their_post.json()["source"]["id"])
+    assert my_id != their_id, "one URL in two libraries is two sources"
+    assert my_post.json()["source"]["title"] == "canary-mine"
+    assert their_post.json()["source"]["title"] == "canary-theirs"
+    assert my_post.json()["source"]["content_hash"] == BOOK_HASH
+    assert their_post.json()["source"]["content_hash"] == OTHER_HASH
+
+    who = Principal(people.owner, world.organisation())
+    with db_pool.connection() as conn:
+        view = content.read_source(conn, who, my_id)
+    with db_pool.connection() as conn:
+        with pytest.raises(AccessDenied):
+            content.read_source(conn, who, their_id)
+
+    assert view["source"]["id"] == my_id
+    assert view["source"]["title"] == "canary-mine"
+    assert view["url_history"]["origin_url"] == url
+    assert view["url_history"]["previous"] is None
+    assert view["url_history"]["next"] is None, "the other library is not my chain"
+    assert "canary-theirs" not in repr(view)
