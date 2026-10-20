@@ -11,9 +11,11 @@ import datetime as dt
 import hashlib
 import io
 import json
+import re
 import tempfile
 import zipfile
 from collections.abc import Sequence
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 from uuid import UUID
@@ -590,6 +592,58 @@ def lexical_search_knowledge(
     }
 
 
+def _normalise_library_types(values: Any) -> list[str] | None:
+    """Validate and de-duplicate library type keys; None is preserved."""
+    if values is None:
+        return None
+    if not isinstance(values, (list, tuple)):
+        raise ValueError("library types must be a list or tuple")
+    if len(values) > 50:
+        raise ValueError("at most 50 library types are allowed")
+    for value in values:
+        if not isinstance(value, str):
+            raise ValueError("library types must be strings")
+        if not re.fullmatch(r"[a-z][a-z0-9_]{1,63}", value):
+            raise ValueError(f"invalid library type: {value!r}")
+    return list(dict.fromkeys(values))
+
+
+def _filtered_search_scope(
+    conn: Any, principal: Any, scopes: Any, project_id: Any, types: Any
+) -> tuple[UUID, ...]:
+    """Visible library ids; caller already owns the transaction/connection."""
+    from kb.catalog import projects
+
+    if project_id is not None:
+        if projects.get_project(conn, principal, project_id) is None:
+            raise AccessDenied("forbidden")
+    sql = (
+        "SELECT l.id FROM kb.library AS l\n"
+        "WHERE (%s::uuid IS NULL OR l.id=%s::uuid OR EXISTS\n"
+        " (SELECT 1 FROM kb.project_library_link AS k"
+        " WHERE k.project_id=%s::uuid AND k.library_id=l.id))\n"
+        "AND (%s::text[] IS NULL OR COALESCE(l.type_key,l.kind::text)=ANY(%s::text[]))\n"
+        "AND (%s::uuid[] IS NULL OR l.id=ANY(%s::uuid[]))\n"
+        "ORDER BY l.id"
+    )
+    scope_ids = list(scopes) if scopes is not None else None  # [] stays []
+    params = (project_id, project_id, project_id, types, types, scope_ids, scope_ids)
+    with conn.cursor(row_factory=dict_row) as cur:
+        cur.execute(sql, params)
+        return tuple(row["id"] for row in cur.fetchall())
+
+
+@contextmanager
+def _search_phase(conn, factory, principal):
+    """One short SQL phase; no connection is held during external retrieval."""
+    if conn is not None:
+        with transaction_identity(conn, principal):
+            yield conn
+    else:
+        with identity_connection(factory, principal) as acquired:
+            yield acquired
+
+
 def search_knowledge(
     conn,
     principal,
@@ -602,6 +656,8 @@ def search_knowledge(
     source_ids=None,
     connections=None,
     deadline=None,
+    project_id=None,
+    library_types=None,
 ):
     """Shared HTTP/MCP search; the configured service owns semantic retrieval.
 
@@ -634,6 +690,14 @@ def search_knowledge(
     scopes = _normalise_uuids(library_ids, "library_ids", deny_none=False)
     sources = _normalise_uuids(source_ids, "source_ids", deny_none=False)
     limit = _bounded_integer(limit, "limit", minimum=1, maximum=50)
+    project = _require_uuid(project_id, "project_id") if project_id is not None else None
+    types = _normalise_library_types(library_types)
+    filtered = project is not None or types is not None
+    initial_scope = None
+    if filtered:
+        with _search_phase(conn, factory, principal) as phase_conn:
+            initial_scope = _filtered_search_scope(phase_conn, principal, scopes, project, types)
+        scopes = initial_scope
     paged = offset is not None
     # A supplied offset is validated and used exactly as given; only its
     # absence is normalised to zero, so a paged search never restarts at the top.
@@ -646,7 +710,15 @@ def search_knowledge(
     # issue identical backend work.
     paged_semantic = paged and semantic is not None
     backend_limit = SEMANTIC_CANDIDATE_WINDOW if paged_semantic else limit
-    if semantic is not None:
+    if scopes is not None and not scopes:
+        # Empty is an explicit filter, never the semantic planner's "all libraries".
+        result = {
+            "mode": "lexical",
+            "semantic_search_enabled": semantic is not None,
+            "hits": [],
+            "retrieved_only": True,
+        }
+    elif semantic is not None:
         result = semantic.search(
             conn,
             principal,
@@ -703,25 +775,29 @@ def search_knowledge(
             "ranking_scope": "bounded_candidates" if paged_semantic else "all_lexical_matches",
             "truncated": len(candidates) >= backend_limit if paged_semantic else False,
         }
-    # The audit is the last thing that happens and it is its own short phase.
-    if conn is not None:
-        with (
-            transaction_identity(conn, principal),
-            conn.cursor(row_factory=dict_row) as cursor,
-        ):
+    # Revalidate filters and assemble mandatory context in the same transaction
+    # as delivered-item auditing. A failure rolls back both pin and hit events.
+    with _search_phase(conn, factory, principal) as audit_conn:
+        if filtered:
+            requested_ids = _normalise_uuids(library_ids, "library_ids", deny_none=False)
+            if (
+                _filtered_search_scope(audit_conn, principal, requested_ids, project, types)
+                != initial_scope
+            ):
+                raise AccessDenied("forbidden")
+        if project is not None:
+            from kb.catalog import projects
+
+            context = projects.project_context(audit_conn, principal, project)
+            if context is None:
+                raise AccessDenied("forbidden")
+            result["project_context"] = context.to_mcp_result().model_dump(mode="json")
+        with audit_conn.cursor(row_factory=dict_row) as cursor:
             result["retrieval_event_ids"] = record_knowledge_retrievals(
                 cursor,
                 principal,
                 item_ids=tuple(UUID(str(hit["id"])) for hit in result["hits"]),
             )
-    else:
-        with identity_connection(factory, principal) as audit_conn:
-            with audit_conn.cursor(row_factory=dict_row) as cursor:
-                result["retrieval_event_ids"] = record_knowledge_retrievals(
-                    cursor,
-                    principal,
-                    item_ids=tuple(UUID(str(hit["id"])) for hit in result["hits"]),
-                )
     return result
 
 
