@@ -1,7 +1,7 @@
 {
   "schema_version": "1.0",
-  "updated_at": "2026-10-09T07:42:49+00:00",
-  "policy": "Single executor by default. Shared DDL, contracts and lockfiles have exactly one owner to avoid write contention; this session is that owner until a second environment is introduced.",
+  "updated_at": "2026-10-20T01:05:11.504160+00:00",
+  "policy": "Up to3 independent bounded coding/documentation lanes in isolated worktrees; root solely integrates/releases. Shared DDL/contracts/locks/auth have one assigned owner. One heavy server job, one OpenViking writer and one product generation.",
   "owners": {
     "session_<redacted>": {
       "role": "sole executor / single writer",
@@ -19,8 +19,9 @@
   },
   "integration_contract": {
     "mcp": "src/kb/mcp/** and the MCP tool registry",
-    "domain_services": "src/kh/domain/**",
-    "web_admin": "web/**",
+    "domain_services": "src/kb/catalog/**, src/kb/access/**, src/kb/retrieval/**",
+    "web_admin": "src/kb/static/** + src/kb/http/**",
     "note": "UI and MCP must call the same domain operations; the registry is single-owner to prevent divergence between the two surfaces."
-  }
+  },
+  "historical_owner_map_note": "Original session owners below are historical bootstrap records, not active workers or a serial-only restriction."
 }

@@ -129,5 +129,47 @@
       "exit_code": 0,
       "detail": "downloads possible with explicit pip index flags"
     }
-  ]
+  ],
+  "historical_cloud_observation_preserved": true,
+  "current_runtime": {
+    "observed_at": "2026-10-20T01:05:11.503533+00:00",
+    "workspace_absolute": "/home/kb-inspect/projects/runtime-delivery-docs-20261020",
+    "base_source_sha": "65a6eb9b22c27f7c6bcfce8a235d3c53235b7e2e",
+    "host": "owner-authorized current xorek",
+    "hardware": {
+      "architecture": "x86_64",
+      "logical_cpus": 8,
+      "mem_total_kib": 16375636,
+      "mem_available_kib": 11469820
+    },
+    "versions": {
+      "python": "Python 3.12.3",
+      "node": "v22.23.3",
+      "podman": "podman version 4.9.3",
+      "git": "git version 2.43.0",
+      "systemd": "systemd 255 (255.4-1ubuntu8.18)"
+    },
+    "rootless_podman": true,
+    "systemd_user_control": "verified by active services/runtime readback",
+    "slice": {
+      "CPUQuotaPerSecUSec": "4s",
+      "MemoryHigh": "11811160064",
+      "MemoryMax": "12884901888",
+      "TasksMax": "2048"
+    },
+    "minimax": {
+      "actual_model": "MiniMax-M3.1-Flash-Preview",
+      "actual_cli": "mmx1.0.25",
+      "route": "existing OAuth subscription guarded launcher; actual complete source artifacts C07/RUNTIME-DOCS",
+      "thinking_effort": "unknown; CLI has no exposed effort switch, no max claim",
+      "context_capacity": "not independently established from CLI metadata; no invented1m capacity"
+    },
+    "sol": {
+      "actual_model": "gpt-6.1-sol",
+      "reasoning_effort": "medium",
+      "actual_client": "codex-cli0.162.1",
+      "location": "xorek; OpenAI model inference in cloud, no Mac build"
+    },
+    "source_identity_note": "Current-runtime fields are authoritative for xorek; original top-level cloud values remain historical, not current hardware."
+  }
 }

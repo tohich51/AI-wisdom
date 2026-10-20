@@ -11,9 +11,7 @@ Exec=indexer
 ReadOnly=true
 NoNewPrivileges=true
 EnvironmentFile=%h/ai-wisdom-config/indexer.env
-Volume=%h/ai-wisdom-config/openviking/root.key:/run/secrets/openviking-root:ro
-Volume=%h/ai-wisdom-config/openviking-service-keys:/run/index-keys
-Volume=%h/ai-wisdom-config/openviking-bootstrap:/run/bootstrap-keys
+Volume=%h/ai-wisdom-config/openviking-service-keys/index:/run/index-keys/index:ro
 Tmpfs=/tmp:rw,nosuid,nodev,size=128m
 PodmanArgs=--memory=768m --memory-swap=768m --cpus=1 --pids-limit=256
 

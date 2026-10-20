@@ -1,27 +1,52 @@
-# Quadlet units — target runtime (E01)
+# deploy/quadlet — product unit templates
 
-These are Quadlet `.container` files. They are **delivery artifacts**: nothing
-here has been started in the cloud sandbox, because it has no systemd. On a
-rootless-Podman host, `systemctl --user daemon-reload` turns them into
-`~/.config/systemd/user/*.service` units.
+The four whitelisted product units, mechanically synchronized from the current
+rootless units on the accepted server (source `65a6`, source gates 1554 passed).
 
-Naming follows the PRODUCT-SPEC list. Memory limits are the **roomier** profile
-from `reference/capacity.json`, not the pilot one:
+All four use `localhost/ai-wisdom:__RELEASE_SHA__`. `__RELEASE_SHA__` is a
+required placeholder: replace it **only** after an exact `linux/amd64` image has
+been built and passed acceptance on that host. Until then these templates are not
+runnable as-is. Infrastructure pins live in [deploy/xorek](../xorek/README.md).
 
-| unit | MemoryMax | notes |
-|---|---|---|
-| gateway | 384M | FastAPI + MCP SDK + static React-admin |
-| postgres | 768M | authority for data and RLS |
-| keycloak | 2048M | needs a JRE in the image; none exists yet |
-| openviking | 1280M | needs an embedding endpoint; not provisioned yet |
-| embeddings | 1536M | CPU only, 1024 dims |
-| worker | 1024M | Procrastinate |
-| model-runner | 256M | subscription-scoped, one call at a time |
+## Install (explicit list — no wildcard)
 
-Total 7 296 MiB, plus 256 MiB transient allowance for maintenance jobs.
+Install into `~/.config/containers/systemd/`:
 
-**Secrets are never in these files.** The render step substitutes from the
-environment; the units themselves carry only variable references.
+| File | Unit | Responsibility | Published ports | Limits as written |
+|---|---|---|---|---|
+| `pkb-gateway.container` | `pkb-gateway.service` | HTTP entrypoint | `127.0.0.1:19280:8080` | `MemoryMax=512M`, `CPUQuota=100%` |
+| `pkb-worker.container` | `pkb-worker.service` | document processing and draft extraction | none | `MemoryMax=1536M`, `CPUQuota=100%` |
+| `pkb-model-runner.container` | `pkb-model-runner.service` | model runner with its specific runner OAuth path | none | `MemoryMax=768M`, `CPUQuota=50%` |
+| `pkb-indexer.container` | `pkb-indexer.service` | the single index writer (published knowledge only) | none | `--memory=768m`, `--cpus=1`, pids 256 |
 
-For the tested current xorek base, use ../xorek/README.md. These original
-full-product templates are not validated Podman4.9.3 deployment units.
+Dependency order is declared in the units themselves: gateway after
+postgres+keycloak+openviking, worker after postgres+model-runner, indexer after
+postgres+openviking. There is one index writer and one product generation; the
+current semantic path uses external OpenRouter qwen embeddings (4096-dim) — no
+Ollama or embedding sidecar. All four autostart via `WantedBy=default.target`.
+
+## Host-specific prerequisites
+
+`pkb-model-runner` mounts only the runner OAuth path (`~/.mmx` plus the pinned
+`node`, `mmx-subscription` and `ai-wisdom-tools` files). No sockets and no
+whole-home mounts. That credential path is per host: the source handoff is
+complete, but the owner must complete the E02 OAuth step on **each** new host, as
+described in [docs/runbooks/runtime.md](../../docs/runbooks/runtime.md).
+
+Closed env files (`gateway.env`, `worker.env`, `model-runner.env`,
+`indexer.env`) must already be provided under `%h/ai-wisdom-config/`; secret
+values never appear in these files or in this README.
+
+## Legacy files
+
+The legacy `gateway.container` is narrowed to a loopback publish to prevent
+all-interface exposure. That is a root-template correction only — the running
+production server is unchanged. Older unnamed files still present in this
+directory are historical/unvalidated: do not install them; deletion is a separate
+decision.
+
+This documentation describes the accepted current server; installation on a new
+host is **not** verified here.
+
+See also [deploy/xorek](../xorek/README.md) and
+[deploy/maintenance](../maintenance/README.md).

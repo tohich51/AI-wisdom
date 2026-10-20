@@ -1,7 +1,7 @@
 [Unit]
 Description=Personal Knowledge Base gateway
-Requires=pkb-postgres.service pkb-keycloak.service pkb-openviking.service
-After=pkb-postgres.service pkb-keycloak.service pkb-openviking.service
+Requires=pkb-postgres.service pkb-keycloak.service
+After=pkb-postgres.service pkb-keycloak.service
 
 [Container]
 Image=localhost/ai-wisdom:__RELEASE_SHA__
@@ -15,6 +15,7 @@ Exec=gateway
 PodmanArgs=--network-alias=pkb-gateway
 PublishPort=127.0.0.1:19280:8080
 Volume=%h/ai-wisdom-data/originals:/data/originals
+
 Volume=%h/ai-wisdom-config/openviking-service-keys/read:/run/read-keys:ro
 
 [Service]

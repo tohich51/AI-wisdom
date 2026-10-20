@@ -4,7 +4,6 @@ After=pkb-postgres.service
 Requires=pkb-postgres.service
 
 [Container]
-# Official Keycloak 26.8.0, linux/amd64; includes the multi-session logout fix.
 Image=quay.io/keycloak/keycloak@sha256:27b3230fbabb8c9ff3c66c864cf09dcd8a41aca82e5100679d109ef0eeb05741
 ContainerName=pkb-keycloak
 Network=pkb.network

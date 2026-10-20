@@ -1,43 +1,38 @@
-# Tested xorek infrastructure base
+# deploy/xorek — infrastructure unit templates
 
-Current target: xorek 150.241.115.134, rootless user kb-inspect (UID1003),
-Podman 4.9.3, systemd Quadlet. Parent slice: MemoryMax 8 GiB,
-MemoryHigh 7.5 GiB, CPUQuota 400%, TasksMax 2048.
+Rootless quadlet templates synchronized from the **currently accepted server**
+(source `65a6`, rootless Podman 4.9.3, `systemd --user`, UID 1003 `kb-inspect`).
+These are the infrastructure units; they contain no `__RELEASE_SHA__` placeholder.
+Upstream image digest pins and the accepted OpenViking source pin are fixed here.
 
-The included network/PostgreSQL/Keycloak units were generated and started on
-that host. Start and restart were checked with readiness, OIDC discovery and
-persistent table inventory. Both official images are pinned by digest.
-Keycloak includes its own JVM; no host Java installation is required.
-PostgreSQL has no host port; Keycloak is bound only to 127.0.0.1:19281,
-management readiness only to 127.0.0.1:19284.
+## Install (explicit list — no wildcard)
 
-Closed operator config lives under ~/ai-wisdom-config, data under
-~/ai-wisdom-data. Secrets are NOT included here. Keycloak realm import is
-rendered from deploy/identity with the chosen localhost URLs and a closed
-client credential. Its import mount is group-readable to the official
-UID 1000/GID 0 image; the host config parent remains 0700.
+Install into `~/.config/containers/systemd/`:
 
-Install these units into ~/.config/containers/systemd after preparing the
-closed environment/realm files and distinct PostgreSQL database/role for
-Keycloak, then daemon-reload. WantedBy=default.target supplies autostart.
-NetworkAlias is unsupported by 4.9.3; these units use PodmanArgs instead.
-MemoryMax/CPUQuota belong to [Service], not [Container].
+| File | Unit | Responsibility | Published ports | Limits as written |
+|---|---|---|---|---|
+| `pkb.network` | `pkb-network` | the single container network | — | — |
+| `pkb-postgres.container` | `pkb-postgres.service` | canonical PostgreSQL + separate Keycloak database | none (network-internal) | `--memory=768m`, `--cpus=1`, pids 256, `MemoryMax=768M` |
+| `pkb-keycloak.container` | `pkb-keycloak.service` | identity realm; JVM ships inside the official image | `127.0.0.1:19281:8080`, `127.0.0.1:19284:9000` | `--memory=2048m`, `--cpus=1.5`, pids 512, `MemoryMax=2048M` |
+| `pkb-openviking.container` | `pkb-openviking.service` | vector projection | `127.0.0.1:19285:1933` | `--memory=2g`, `--cpus=1.5`, pids 512 |
 
-Only the available infrastructure is deployed. The current source tree lacks
-Containerfiles and an assembled gateway; it cannot run the complete product.
-Legacy deploy/quadlet units remain unverified delivery templates.
+Copy exactly these four files, then `systemctl --user daemon-reload`. Use exactly this list. Historical unnamed templates are under deploy/quadlet,
+not this directory; do not install them.
 
-Embedding provider is deliberately unconfigured: see
-../embeddings/provider.env.example. Ollama and semantic indexing/search are
-not started. Do not use the old Qwen/1024 prototype defaults as an owner
-choice. Runtime OpenViking SDK/secret-sink and live Keycloak/MCP tests still
-need implementation before E03 acceptance.
+All seven permanent services autostart through `WantedBy=default.target`
+(`pkb-postgres`, `pkb-keycloak`, `pkb-openviking` here; the four product units in
+[deploy/quadlet](../quadlet/README.md)). A parent/host memory ceiling is managed
+separately and is not asserted by these units.
 
-MiniMax CLI 1.0.25 is installed on the server with an OAuth-only guarded
-launcher ~/.local/bin/mmx-subscription. A fresh server-specific OAuth login
-was completed on this host and independently verified with method=oauth,
-Coding Plan quota and a real MiniMax-M3.1-Flash-Preview request. The first
-delegated helper returned max_tokens with thinking only and no accepted
-artifact. The product model-runner remains unassembled. New installations
-need their own OAuth login; Mac/cloud-session OAuth is not copied.
-No API/PAYG fallback was used; this proof does not establish a billing hardcap.
+## Prerequisites
+
+The closed environment/config paths under `%h/ai-wisdom-config/`
+(`postgres.env`, `keycloak.env`, `openviking/ov.conf`, …) must already exist and
+must remain the only location of secrets; no values appear in this repository.
+These files are templates, **not** an automatic secure first installation —
+provisioning the config is a separate owner step documented in
+[docs/runbooks/runtime.md](../../docs/runbooks/runtime.md). Upgrades perform no
+setup and include no old-database discovery or cleanup.
+
+See also [deploy/quadlet](../quadlet/README.md) and
+[deploy/maintenance](../maintenance/README.md).

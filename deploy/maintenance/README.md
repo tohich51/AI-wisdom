@@ -1,30 +1,53 @@
-# C15: отдельный административный запуск OpenViking
+# deploy/maintenance — provisioning one-shot and timer
 
-Существующие OpenVikingAdmin и FileSecretSink создают аккаунт библиотеки, две служебные идентичности и закрытый корень. PostgreSQL хранит только соответствия и ссылки на ключи. Привилегированный код выполняется отдельным контейнером по запросам из PostgreSQL; постоянный индексатор располагает только ключами записи.
+Two units: the provisioning one-shot and its timer. They are *not* permanent
+services; there is no `WantedBy=default.target` here.
 
-## Команды
+## Install (explicit list — no wildcard)
 
-- `kb provision-index list-requests` — прочитать очередь, без OpenViking.
-- `kb provision-index run` — обработать ограниченную порцию допустимых запросов.
-- `kb provision-index run UUID` — возобновить конкретный запрос.
-- `kb provision-index show UUID` — прочитать соответствие библиотеки через проверенный контекст запроса.
+| File | Destination | Unit |
+|---|---|---|
+| `pkb-provision-index.container` | `~/.config/containers/systemd/` | `pkb-provision-index.service` (`Type=oneshot`, `RemainAfterExit=no`) |
+| `pkb-provision-index.timer` | `~/.config/systemd/user/` | `pkb-provision-index.timer` (`WantedBy=timers.target`) |
 
-CLI принимает только роль kb_provisioner без SUPERUSER и BYPASSRLS. Пользователь и организация берутся из kb.provisioning_context; повторно проверяются членство и право управления. Произвольный идентификатор организации не принимается. Учётные данные не передаются в аргументах команды и не печатаются.
+The `.container` file goes with the other quadlet units; the `.timer` goes to the
+systemd user directory. Then `systemctl --user daemon-reload`.
 
-## Развёртывание
+## Behaviour and limits
 
-Подставить точный принятый SHA в контейнерные файлы; mutable latest не используется. `kb-provision-index.container` устанавливается как `~/.config/containers/systemd/pkb-provision-index.container`. Таймер устанавливается отдельно в `~/.config/systemd/user/pkb-provision-index.timer`. Это обычный systemd timer, не дополнительная очередь. Имя службы таймера должно совпадать с установленным Quadlet.
+- Runs `provision-index run` after `pkb-postgres` and `pkb-openviking`; the timer
+  fires `OnActiveSec=15s` / `OnUnitInactiveSec=30s` to drain pending library
+  provisioning only.
+- It is **not** a second index writer: `pkb-indexer` remains the single writer of
+  published knowledge for the one product generation.
+- Limits as written: `MemoryMax=512M`, `CPUQuota=100%`, `TasksMax=256`,
+  `PidsLimit=128`, `TimeoutStartSec=1800`. A parent/host memory ceiling is
+  managed separately.
+- The root key is read-only; service/bootstrap key directories are writable
+  outputs for the provisioning process, under the closed `%h/ai-wisdom-config/` paths
+  (`provisioner.env`, OpenViking root key, service keys, bootstrap keys); no
+  secret values appear in these files or in this README. `Pull=never`.
 
-После установки: `systemctl --user daemon-reload`, затем `systemctl --user enable --now pkb-provision-index.timer`. Генерируемую Quadlet-службу отдельно не enable. Type=oneshot/RemainAfterExit=no позволяет повторные запуски; один и тот же advisory lock (112187,1) сериализует административные операции и запись индекса. Занятый lock и ошибка дают nonzero; повтор выполняет таймер. Запуск ограничен временем, памятью и размером порции.
+The image is `localhost/ai-wisdom:__RELEASE_SHA__`; substitute the accepted SHA
+**only** after an exact `linux/amd64` build has passed acceptance on that host.
 
-Прежняя неисполненная инструкция требовала ручного запуска для каждой библиотеки. Текущий таймер выполняет отдельные административные запуски автоматически, сохраняя изоляцию ключей. Сам привилегированный контейнер не является постоянной службой.
+## Historical files — do not install
 
-Заполненный provisioner.env хранится только на сервере с правами 0600; директории ключей — 0700, файлы — 0600. Корневой ключ и bootstrap доступны только административному контейнеру. Индексатор использует pkb-indexer.container с подключённым read-only подкаталогом index. Gateway имеет только read-ключи; parser и worker генерации ключей OpenViking не получают. Сокеты контейнерных движков в приложения не подключаются.
+`kb-provision-index.container` and the duplicate `pkb-indexer.container` in this
+directory are historical. It is an older alternative for the same unit filename: use only the product
+unit from deploy/quadlet. Both historical files are retained, not installed.
 
-## Возобновление и границы
+## Scope
 
-Сохранившийся закрытый файл ключа позволяет восстановить ссылку PostgreSQL без повторной выдачи. Реально отсутствующий файл можно восстановить; ошибка прав, ссылка или неоднозначная ошибка ввода-вывода не разрешает ротацию. Точный внешний эффект до сохранения файла не считается exactly-once.
+These templates reflect the accepted current server (source `65a6`); a new-host
+install is not verified here, and nothing here performs setup on upgrades or
+cleans old databases. See [deploy/xorek](../xorek/README.md),
+[deploy/quadlet](../quadlet/README.md) and
+[docs/runbooks/runtime.md](../../docs/runbooks/runtime.md).
+## Existing administrative commands
 
-Имеющееся обнаружение библиотек индексатором ограничено настроенным пользователем. Приёмка C15 не означает готовность индексации всех десяти пользователей; маршрутизация их заданий остаётся отдельной работой C16.
-
-Файлы здесь — артефакты поставки. Реальное применение, отсутствие ключей у постоянных служб, испытание возобновления на настоящем OpenViking и итоговый SHA подтверждаются отдельным runtime receipt. SQL doubles и чтение unit-файла не заменяют такую проверку. Таймер включается только при принятом выпуске; этот каталог сам ничего не развёртывает.
+The same CLI supports list-requests, run (a bounded batch), run UUID (resume)
+and show UUID. It requires kb_provisioner without SUPERUSER/BYPASSRLS and derives
+actor/account from the canonical PostgreSQL request; keys never appear in argv.
+The existing shared advisory lock serializes provisioning with index writes.
+A stored key file allows a partial request to resume without issuing another key.

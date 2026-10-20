@@ -1,0 +1,29 @@
+# Install as pkb-provision-index.container after substituting accepted SHA.
+[Unit]
+Description=AI-wisdom isolated library provisioning
+Requires=pkb-postgres.service pkb-openviking.service
+After=pkb-postgres.service pkb-openviking.service
+
+[Container]
+Image=localhost/ai-wisdom:__RELEASE_SHA__
+ContainerName=pkb-provision-index
+Network=pkb.network
+Exec=provision-index run
+EnvironmentFile=%h/ai-wisdom-config/provisioner.env
+Volume=%h/ai-wisdom-config/openviking/root.key:/run/secrets/openviking-root:ro
+Volume=%h/ai-wisdom-config/openviking-service-keys:/run/index-keys
+Volume=%h/ai-wisdom-config/openviking-bootstrap:/run/bootstrap-keys
+ReadOnly=yes
+NoNewPrivileges=yes
+DropCapability=ALL
+Pull=never
+PidsLimit=128
+Tmpfs=/tmp:rw,nosuid,nodev,size=64m
+
+[Service]
+Type=oneshot
+RemainAfterExit=no
+TimeoutStartSec=1800
+MemoryMax=512M
+CPUQuota=100%
+TasksMax=256
