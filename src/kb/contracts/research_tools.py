@@ -55,6 +55,8 @@ class GraphArgs(LibraryArgs):
 
 class SemanticArgs(LibraryArgs):
     limit: int = Field(default=200, ge=1, le=500)
+    # Opt-in only: False keeps the legacy expanded payload byte-identical.
+    compact: bool = Field(default=False, strict=True)
 
 
 class SimilarityArgs(LibraryArgs):

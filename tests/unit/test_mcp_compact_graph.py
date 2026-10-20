@@ -50,6 +50,7 @@ def test_sdk_catalog_exposes_truthful_semantic_read_annotations() -> None:
         "properties": {
             "library_id": {"format": "uuid", "title": "Library Id", "type": "string"},
             "limit": {"default": 200, "title": "Limit", "type": "integer"},
+            "compact": {"default": False, "title": "Compact", "type": "boolean"},
         },
         "required": ["library_id"],
         "title": "get_semantic_networkArguments",
@@ -192,7 +193,8 @@ def test_get_semantic_network_compacts_complete_sdk_result(
     assert len(compact_wire) < len(sdk_pretty_wire)
 
 
-def test_get_semantic_network_propagates_request_refusal() -> None:
+@pytest.mark.parametrize("compact", [False, True])
+def test_get_semantic_network_propagates_request_refusal(compact: bool) -> None:
     server = FakeServer()
     refusal = ValueError("request_refused")
 
@@ -208,6 +210,31 @@ def test_get_semantic_network_propagates_request_refusal() -> None:
     semantic_network = server.tools["get_semantic_network"]
 
     with pytest.raises(ValueError, match=r"\Arequest_refused\Z") as error:
-        semantic_network(library_id=LIBRARY_ID, ctx=object())
+        semantic_network(library_id=LIBRARY_ID, ctx=object(), compact=compact)
 
     assert error.value is refusal
+
+
+def test_opt_in_indexes_checked_citations_through_registered_handler() -> None:
+    server = FakeServer()
+    row = {"quote": "Synthetic quote", "locator": {"file_page": 7}, "source_version_id": "v2"}
+    fixture = {"nodes": [{"id": "n1", "evidence": [row, row]}], "edges": [], "truncated": False}
+    calls = []
+
+    def shared_call(ctx, handler, library_id, limit):
+        calls.append((ctx, handler, library_id, limit))
+        return fixture
+
+    install_tools(server, shared_call)
+    ctx = object()
+    result = server.tools["get_semantic_network"](library_id=LIBRARY_ID, ctx=ctx, compact=True)
+    assert calls == [(ctx, semantic.semantic_network, LIBRARY_ID, 200)]
+    decoded = json.loads(result.content[0].text)
+    assert decoded == {
+        "nodes": [{"id": "n1", "evidence_refs": ["e0", "e0"]}],
+        "edges": [],
+        "truncated": False,
+        "evidence_format": "indexed-v1",
+        "evidence_index": {"e0": row},
+    }
+    assert fixture["nodes"][0]["evidence"] == [row, row]

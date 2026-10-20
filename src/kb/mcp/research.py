@@ -8,6 +8,7 @@ from mcp.server.mcpserver import Context
 from mcp.types import CallToolResult, TextContent, ToolAnnotations
 
 from kb.catalog import graphs
+from kb.mcp.graph_payload import compact_network
 from kb.mcp.timing import measure
 from kb.research import notes, rule_handoff, runs, semantic, similarity
 from kb.research.generation import Kind, Predicate
@@ -80,8 +81,18 @@ def install_tools(server, call):
             openWorldHint=False,
         )
     )
-    def get_semantic_network(library_id: UUID, ctx: Context, limit: int = 200):
+    def get_semantic_network(
+        library_id: UUID, ctx: Context, limit: int = 200, compact: bool = False
+    ):
+        """Read the full authorized network with citations.
+
+        compact=True uses indexed-v1: expand each node/edge evidence_refs key
+        through evidence_index. The default preserves expanded evidence lists.
+        """
         data = call(ctx, semantic.semantic_network, library_id, limit)
+        if compact:
+            # Runs only after every catalog/RLS/citation check inside `call`.
+            data = compact_network(data)
         with measure("graph_json_dump"):
             text = json.dumps(data, ensure_ascii=False, separators=(",", ":"), allow_nan=False)
         return CallToolResult(content=[TextContent(type="text", text=text)])
