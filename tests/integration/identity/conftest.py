@@ -173,6 +173,7 @@ class LocalOidcProvider:
     keys: dict[str, SigningKey] = field(default_factory=dict)
     codes: dict[str, _AuthCode] = field(default_factory=dict)
     token_requests: list[dict[str, str]] = field(default_factory=list)
+    token_auth_methods: list[str] = field(default_factory=list)
     jwks_generation: int = 0
     forced_issuer: str | None = None
     key_order: list[str] = field(default_factory=list)
@@ -330,12 +331,23 @@ def _make_handler(provider: LocalOidcProvider) -> type[BaseHTTPRequestHandler]:
             if form.get("grant_type") != "authorization_code":
                 self._json(400, {"error": "unsupported_grant_type"})
                 return
-            if form.get("client_id") != provider.client_id:
+            authorization = self.headers.get("authorization", "")
+            if authorization.startswith("Basic "):
+                try:
+                    client_id, client_secret = (
+                        base64.b64decode(authorization[6:], validate=True).decode().split(":", 1)
+                    )
+                except (ValueError, UnicodeError):
+                    self._json(401, {"error": "invalid_client"})
+                    return
+                method = "client_secret_basic"
+            else:
+                client_id, client_secret = form.get("client_id"), form.get("client_secret")
+                method = "client_secret_post"
+            if (client_id, client_secret) != (provider.client_id, provider.client_secret):
                 self._json(401, {"error": "invalid_client"})
                 return
-            if form.get("client_secret") != provider.client_secret:
-                self._json(401, {"error": "invalid_client"})
-                return
+            provider.token_auth_methods.append(method)
             code = form.get("code", "")
             record = provider.codes.get(code)
             if record is None:

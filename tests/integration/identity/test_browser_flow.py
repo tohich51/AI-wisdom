@@ -231,7 +231,8 @@ def test_the_redirect_uri_that_came_from_the_provider_is_the_one_we_registered(g
     assert posted["redirect_uri"] == gateways.settings.redirect_uri
     assert posted["grant_type"] == "authorization_code"
     assert posted["code_verifier"]  # the sealed verifier was unsealed and sent
-    assert posted["client_secret"] == provider.client_secret
+    assert "client_secret" not in posted
+    assert provider.token_auth_methods[-1] == "client_secret_basic"
 
 
 def test_a_replayed_callback_is_refused(gateways, provider):

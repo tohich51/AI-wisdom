@@ -278,3 +278,108 @@ def test_logout_at_the_provider_invalidates_the_session_locally(live_keycloak) -
     from keycloak_logout_check import check_provider_logout
 
     check_provider_logout(live_keycloak)
+
+
+@pytest.mark.requires_keycloak
+def test_candidate_authlib_flow_exchanges_a_real_code_and_shares_only_pg_state(
+    live_keycloak,
+    make_store,
+) -> None:
+    """Real existing realm; local disposable PG, no production gateway session."""
+    import datetime as dt
+    from urllib.parse import parse_qs, urlsplit
+    from uuid import UUID, uuid4
+
+    import httpx
+    from keycloak_admin import Secret
+    from keycloak_browser import post_form
+    from keycloak_user import synthetic_user
+
+    from kb.access.identity import IdentitySettings, TokenVerifier
+    from kb.access.session import Sealer
+    from kb.http.auth_config import AuthSettings
+    from kb.http.auth_flow import AuthorizationCodeFlow, LoginRejected
+
+    product = next(c for c in live_keycloak.clients() if c["clientId"] == PRODUCT_CLIENT)
+    secret = Secret(
+        live_keycloak.admin_json(
+            "GET",
+            f"/admin/realms/{REALM}/clients/{product['id']}/client-secret",
+        )["value"]
+    )
+    account = uuid4()
+    settings = AuthSettings(
+        issuer=live_keycloak.issuer,
+        audience=PRODUCT_CLIENT,
+        client_id=PRODUCT_CLIENT,
+        client_secret=secret.reveal(),
+        identity_key=Sealer.generate(),
+        redirect_uri=GATEWAY_REDIRECT_URI,
+    )
+    first, second = make_store("authlib-live-a"), make_store("authlib-live-b")
+    with synthetic_user(live_keycloak, account_id=str(account)) as user:
+        with (
+            httpx.Client(timeout=20, follow_redirects=False) as browser,
+            httpx.Client(
+                timeout=20,
+                follow_redirects=False,
+            ) as transport,
+        ):
+            verifier = TokenVerifier(
+                IdentitySettings(
+                    issuer=settings.issuer,
+                    audience=settings.audience,
+                    client_id=settings.client_id,
+                ),
+                transport,
+            )
+            a = AuthorizationCodeFlow(
+                settings=settings,
+                verifier=verifier,
+                store=first,
+                client=transport,
+            )
+            b = AuthorizationCodeFlow(
+                settings=settings,
+                verifier=verifier,
+                store=second,
+                client=transport,
+            )
+            started = a.start(return_to="/app/libraries", now=dt.datetime.now(dt.UTC))
+            page = browser.get(started.authorization_url)
+            response = post_form(
+                browser,
+                page,
+                "kc-form-login",
+                {
+                    "username": user.username,
+                    "password": user.password.reveal(),
+                },
+            )
+            assert response.status_code == 302, "synthetic login did not return a code"
+            callback = urlsplit(response.headers["location"])
+            registered = urlsplit(GATEWAY_REDIRECT_URI)
+            assert (callback.scheme, callback.netloc, callback.path) == (
+                registered.scheme,
+                registered.netloc,
+                registered.path,
+            )
+            query = parse_qs(callback.query)
+            state_matches = query.get("state") == [started.state]
+            assert state_matches, "provider state mismatch"
+            completed = b.complete(
+                code=query["code"][0],
+                state=started.state,
+                binding=started.browser_binding,
+                now=dt.datetime.now(dt.UTC),
+            )
+            loaded = first.load(completed.issued.cookie_value, now=dt.datetime.now(dt.UTC))
+            assert loaded.principal_id == UUID(user.internal_id) and loaded.account_id == account
+            assert completed.return_to == "/app/libraries"
+            with pytest.raises(LoginRejected):
+                a.complete(
+                    code=query["code"][0],
+                    state=started.state,
+                    binding=started.browser_binding,
+                    now=dt.datetime.now(dt.UTC),
+                )

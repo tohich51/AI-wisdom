@@ -1,43 +1,9 @@
 """C07 — the browser's authorization-code flow.
 
-This is the *relying party* half of OIDC and nothing more. The authorization
-server is Keycloak; this module only sends the browser there, receives the
-code back, redeems it once, and turns the ID token into a durable session.
-There is no grant issuance, no user store and no token minting anywhere in
-this repository — a gateway that issued its own tokens would be a second,
-unreviewed identity provider.
-
-What is delegated rather than written here
-------------------------------------------
-* every cryptographic and claim-level check, in :mod:`kb.access.identity`
-  (PyJWT);
-* the discovery and JWKS fetches, in the same module (httpx);
-* session persistence and CSRF comparison, in :mod:`kb.access.session`.
-
-What remains here is the protocol sequence itself: build the authorization
-request, POST the code to the token endpoint, check the result. That is the
-part that is genuinely the gateway's, and it is short on purpose. If Authlib
-is later added to the lock (see ``docs/handoff/results/C07.json``), this
-module is the only thing that changes.
-
-Why PKCE is always ``S256``
----------------------------
-RFC 7636 §4.2, and there is no code path that offers ``plain``: an intercepted
-authorization code is useless without the verifier, and the verifier exists
-only in the browser that started this flow and in the sealed column of one
-``auth_login_transaction`` row.
-
-What is logged here, and what is not
----------------------------------
-The audit trail records the outcome, a fixed reason code, the principal, the
-session and the gateway instance. It never records the authorization code, the
-state, the PKCE verifier, the client secret or a cookie value.
-:func:`kb.access.identity.redact` is what stands between a credential and a
-log line, and ``tests/integration/identity/test_browser_flow.py`` turns the
-root logger to DEBUG and checks that the whole login still produces nothing
-replayable. (The `httpx`/`httpcore` loggers were checked for the same reason
-and found not to print bodies at any level, so no suppression of them is
-shipped — a control with a made-up rationale is worse than no control.)
+Relying-party half of OIDC: send the browser to the provider, redeem the
+code once, and turn the ID token into a durable session. Authlib builds the
+authorization URL, PKCE challenge and token request; this module owns the
+sequence, the shared httpx client and the decision to refuse.
 """
 
 from __future__ import annotations
@@ -45,11 +11,12 @@ from __future__ import annotations
 import datetime as dt
 import logging
 from dataclasses import dataclass
-from urllib.parse import urlencode
 
 import httpx
+from authlib.oauth2.client import OAuth2Client
+from authlib.oauth2.rfc6749.errors import OAuth2Error
 
-from kb.access.identity import IdentityRejected, TokenVerifier, redact
+from kb.access.identity import IdentityRejected, TokenVerifier
 from kb.access.session import (
     IssuedSession,
     LoginTransaction,
@@ -106,6 +73,21 @@ class AuthorizationCodeFlow:
         self._store = store
         self._client = client
 
+    def _protocol_client(self) -> OAuth2Client:
+        """A throwaway Authlib client bound to the shared httpx pool.
+
+        One per protocol step. It carries a token only for the duration of a
+        single ``fetch_token`` call, so nothing survives to be reused.
+        """
+        return OAuth2Client(
+            session=self._client,
+            client_id=self._settings.client_id,
+            client_secret=self._settings.client_secret,
+            scope=self._settings.scopes,
+            redirect_uri=self._settings.redirect_uri,
+            code_challenge_method="S256",
+        )
+
     # -- step 1: send the browser to the provider ------------------------
 
     def start(self, *, return_to: str | None, now: dt.datetime) -> LoginRequest:
@@ -126,22 +108,17 @@ class AuthorizationCodeFlow:
             now=now,
         )
 
-        query = urlencode(
-            {
-                "response_type": "code",
-                "client_id": self._settings.client_id,
-                "redirect_uri": self._settings.redirect_uri,
-                "scope": self._settings.scopes,
-                "state": state,
-                "nonce": nonce,
-                "code_challenge": code_challenge_for(verifier),
-                "code_challenge_method": "S256",
-            }
-        )
         endpoint = self._verifier.endpoint("authorization_endpoint")
-        separator = "&" if "?" in endpoint else "?"
+        # Authlib derives the challenge from the verifier and picks S256 from
+        # ``code_challenge_method``; there is no ``plain`` path to take.
+        url, _state = self._protocol_client().create_authorization_url(
+            endpoint,
+            state=state,
+            code_verifier=verifier,
+            nonce=nonce,
+        )
         return LoginRequest(
-            authorization_url=f"{endpoint}{separator}{query}",
+            authorization_url=url,
             state=state,
             browser_binding=binding,
             return_to=target,
@@ -194,53 +171,65 @@ class AuthorizationCodeFlow:
         )
         return LoginCompleted(issued=issued, return_to=transaction.return_to)
 
-    def _redeem(self, code: str, transaction: LoginTransaction) -> str:
-        """POST the code to the provider's token endpoint and return the ID token.
+    def _check_answer(self, response: httpx.Response) -> httpx.Response:
+        """Refuse anything that is not a 200 carrying a JSON object.
 
-        ``client_secret_post`` rather than HTTP Basic: both are standard,
-        Keycloak accepts both for a confidential client, and posting keeps the
-        secret out of a request line that a proxy might log. Whatever the
-        provider answers, only one field name is read.
+        Registered as an ``access_token_response`` compliance hook, so the
+        return value is Authlib's next input: the answer is passed back
+        untouched for the SDK to parse. Only the status line is logged, never
+        the provider's body.
         """
-        endpoint = self._verifier.endpoint("token_endpoint")
-        try:
-            response = self._client.post(
-                endpoint,
-                data={
-                    "grant_type": "authorization_code",
-                    "code": code,
-                    "redirect_uri": transaction.redirect_uri,
-                    "client_id": self._settings.client_id,
-                    "client_secret": self._settings.client_secret,
-                    "code_verifier": transaction.code_verifier,
-                },
-                headers={"accept": "application/json"},
-            )
-        except httpx.HTTPError as exc:
-            raise LoginRejected("token_endpoint_unreachable") from exc
-
         if response.status_code != 200:
             _log.warning(
                 "auth.token_exchange.rejected",
                 extra={
                     "event": "token_exchange_rejected",
-                    "provider_status": response.status_code,
-                    "code": redact(code),
+                    "reason": "provider_status",
+                    "status_code": response.status_code,
                 },
             )
-            raise LoginRejected("token_exchange_rejected")
+            raise LoginRejected("token_exchange_rejected") from None
         try:
             payload = response.json()
-        except ValueError as exc:
-            raise LoginRejected("token_response_malformed") from exc
+        except ValueError:
+            raise LoginRejected("token_response_malformed") from None
         if not isinstance(payload, dict):
             raise LoginRejected("token_response_malformed")
-        id_token = payload.get("id_token")
+        return response
+
+    def _redeem(self, code: str, transaction: LoginTransaction) -> str:
+        """POST the code to the provider's token endpoint and return the ID token.
+
+        Authlib builds the form, performs the POST through the shared httpx
+        client with Basic client authentication, and parses the answer; this
+        method decides which answers are refusals.
+        """
+        endpoint = self._verifier.endpoint("token_endpoint")
+        protocol = self._protocol_client()
+        protocol.register_compliance_hook("access_token_response", self._check_answer)
+        try:
+            token = protocol.fetch_token(
+                endpoint,
+                grant_type="authorization_code",
+                code=code,
+                redirect_uri=transaction.redirect_uri,
+                code_verifier=transaction.code_verifier,
+                auth=(self._settings.client_id, self._settings.client_secret),
+                headers={"accept": "application/json"},
+            )
+        except OAuth2Error:
+            # A well-formed OAuth error: the provider's description is its
+            # own wording about the code, and it stays with the provider.
+            raise LoginRejected("token_exchange_rejected") from None
+        except httpx.HTTPError:
+            raise LoginRejected("token_endpoint_unreachable") from None
+
+        # The gateway authenticates the browser session with the ID token. An
+        # access token alone means the provider ignored response_type=code,
+        # and accepting it would mean trusting a token whose audience is some
+        # API rather than this client.
+        id_token = token.get("id_token") if isinstance(token, dict) else None
         if not isinstance(id_token, str) or not id_token:
-            # The gateway authenticates the browser session with the ID token.
-            # An access token here means the provider ignored
-            # response_type=code, and accepting it would mean trusting a
-            # token whose audience is some API rather than this client.
             raise LoginRejected("id_token_missing")
         return id_token
 
