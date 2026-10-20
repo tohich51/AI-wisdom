@@ -370,6 +370,7 @@ def test_every_handler_in_the_scope_table_is_reachable():
 
 def test_sources_knowledge_and_rules_are_paginated():
     assert set(PAGINATED_OPERATIONS) == {
+        "/search",
         "/libraries/{library_id}/sources",
         "/libraries/{library_id}/knowledge",
         "/libraries/{library_id}/rules",
