@@ -30,6 +30,7 @@ has to honour the same lease contract the application honours.
 from __future__ import annotations
 
 import contextlib
+import dataclasses
 import datetime as dt
 import uuid
 from collections.abc import Iterator
@@ -199,6 +200,9 @@ def _app(resolve: Any) -> FastAPI:
             "principal_id": str(principal.principal_id),
             "account_id": str(principal.account_id),
             "issuer": request.state.identity.issuer,
+            "access_management_allowed": (
+                getattr(request.state, "_kb_admin_scope_allowed", False) is True
+            ),
         }
 
     @app.get("/api/me-twice")
@@ -240,6 +244,47 @@ def _signed_in_client(resolve: Any, settings: AuthSettings, cookie: str, csrf: s
     client.cookies.set(session_cookie_name(settings), cookie)
     client.cookies.set(CSRF_COOKIE, csrf)
     return client
+
+
+@pytest.mark.parametrize(
+    ("authority_scopes", "allowed"),
+    [
+        (None, True),
+        (frozenset({"kb:read"}), False),
+        (frozenset({"kb:read", "kb:admin"}), True),
+    ],
+)
+def test_admin_hint_follows_the_scopes_the_session_actually_holds(
+    identity_db, pool, make_store, auth_settings, authority_scopes, allowed
+):
+    """The hint is what the credential could reach, not what the role could.
+
+    An unscoped browser session is the full session even though its resolved
+    identity carries an empty scope set, and a forged header cannot lift a
+    scoped one: only the resolver's own request state sets the flag.
+    """
+    connections = RecordingFactory(build_connection_factory(pool))
+    store = make_store("gateway-a")
+    resolve, _token = create_resolver(connections, store, auth_settings, _UnusedBearerVerifier())
+    account, subject = uuid.uuid4(), str(uuid.uuid4())
+    _add_member(identity_db, account, subject)
+    identity = dataclasses.replace(
+        _verified(subject, account), scopes=frozenset({"openid", "kb:read", "kb:admin"})
+    )
+    issued = store.create_session(
+        identity,
+        now=dt.datetime.now(UTC),
+        authority_scopes=authority_scopes,
+        authority_cloud_client=authority_scopes is not None,
+        credential_expires_at=identity.expires_at,
+    )
+    client = _signed_in_client(resolve, auth_settings, issued.cookie_value, issued.csrf_token)
+    try:
+        me = client.get("/api/me", headers={"x-admin-scope": "true"}).json()
+        assert me["access_management_allowed"] is allowed
+        assert me["principal_id"] == subject  # signed in either way
+    finally:
+        client.close()
 
 
 @pytest.fixture

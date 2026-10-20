@@ -7,6 +7,7 @@ from uuid import uuid4
 
 import psycopg
 import pytest
+from starlette.requests import Request
 from test_research_grounding import parsed
 from test_research_product import execute
 from test_runtime import rule, source
@@ -20,6 +21,13 @@ from kb.jobs.ingestion import submit_processing
 from kb.research import notes
 
 pytestmark = [pytest.mark.integration, pytest.mark.acceptance]
+
+
+def _me_request(admin_scope_allowed=None):
+    """The request the resolver left its hint on; None means no flag at all."""
+    flag = "_kb_admin_scope_allowed"
+    state = {} if admin_scope_allowed is None else {flag: admin_scope_allowed}
+    return Request({"type": "http", "state": state})
 
 
 def draft_knowledge(world, principal, library_id, ident, statement="Original claim"):
@@ -58,18 +66,21 @@ def test_me_route_reports_real_org_admin_authority(world):
         ).fetchone()[0]
     assert active_members == 2  # Identical counts, opposite authority.
     with psycopg.connect(world["dsn"]) as conn:
-        owner = me_route(conn, world["principal"])
+        granted = _me_request(True)
+        owner = me_route(granted, conn, world["principal"])
         assert owner["principal_id"] == world["principal"].principal_id
         assert owner["account_id"] == world["principal"].account_id
         assert owner["is_org_admin"] is True
-        assert me_route(conn, world["other"])["is_org_admin"] is False
+        assert owner["access_management_allowed"] is True
+        assert me_route(granted, conn, world["other"])["is_org_admin"] is False
+        assert me_route(_me_request(), conn, world["other"])["access_management_allowed"] is False
     with psycopg.connect(world["admin"]) as conn:
         conn.execute(
             "DELETE FROM kb.organisation_admin WHERE organisation_id=%s AND principal_id=%s",
             (world["principal"].account_id, world["principal"].principal_id),
         )
     with psycopg.connect(world["dsn"]) as conn:
-        assert me_route(conn, world["principal"])["is_org_admin"] is False
+        assert me_route(granted, conn, world["principal"])["is_org_admin"] is False
 
 
 @pytest.mark.parametrize("invalid", ["another_library", "missing_item"])

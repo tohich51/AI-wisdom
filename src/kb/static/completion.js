@@ -153,15 +153,18 @@
     try {
       if (!accountId) throw Error('В текущем профиле не найден идентификатор организации.');
       const dataGeneration=window.WisdomData.generation();
-      const [profile, members, groups, invitations] = await Promise.all([
-        host.api('/api/me', {noCache: true, cache: 'no-store'}),
+      const profile = await host.api('/api/me', {noCache: true, cache: 'no-store'});
+      if(!current() || dataGeneration !== window.WisdomData.generation())return;
+      if (profile?.account_id !== accountId || !identityMatches(host, accountId, profile?.principal_id)) throw Error('Ответ профиля доступа не совпадает с текущей организацией.');
+      const canManageAccess = profile.access_management_allowed === true;
+      const isOrgAdmin = canManageAccess && profile.is_org_admin === true;
+      let members = [], groups = [], invitations = [];
+      if (canManageAccess) [members, groups, invitations] = await Promise.all([
         host.api('/api/orgs/' + encodeURIComponent(accountId) + '/members'),
         host.api('/api/orgs/' + encodeURIComponent(accountId) + '/groups'),
         host.api('/api/orgs/' + encodeURIComponent(accountId) + '/invitations')
       ]);
       if(!current() || dataGeneration !== window.WisdomData.generation())return;
-      if (profile?.account_id !== accountId || !identityMatches(host, accountId, profile?.principal_id)) throw Error('Ответ профиля доступа не совпадает с текущей организацией.');
-      const isOrgAdmin = profile.is_org_admin === true;
       const content = el('div', null, {class: 'completion-grid'});
       const libraries = host.libraries().filter(item => item?.id);
       const libraryPolicies = new Map();
@@ -413,10 +416,10 @@
           const cachedPolicy = libraryPolicies.get(library.id) || {policy: null, error: null};
           if (cachedPolicy.error) throw cachedPolicy.error;
           const policy = cachedPolicy.policy || {};
-          const grants = await host.api('/api/libraries/' + encodeURIComponent(library.id) + '/grants');
+          const grants = canManageAccess ? await host.api('/api/libraries/' + encodeURIComponent(library.id) + '/grants') : [];
           if(!current() || policyGeneration !== window.WisdomData.generation())return;
-          const manager = policy.effective_role === 'manager';
-          if (!grants.length) empty(libraryCard, 'Видимых прямых разрешений нет.');
+          const manager = canManageAccess && policy.effective_role === 'manager';
+          if (canManageAccess && !grants.length) empty(libraryCard, 'Видимых прямых разрешений нет.');
           for (const grant of grants) {
             const member = members.find(item => item.principal_id === grant.principal_id);
             const row = el('p', [member?.display_name || grant.principal_id, member?.email, roleLabel(grant.role)].filter(Boolean).join(' · '));
@@ -458,11 +461,11 @@
               finally { save.disabled = false; }
             });
             libraryCard.append(form);
-          } else libraryCard.append(el('p', 'Менять прямые разрешения может только менеджер этой библиотеки.', {class: 'muted'}));
+          } else if (canManageAccess) libraryCard.append(el('p', 'Менять прямые разрешения может только менеджер этой библиотеки.', {class: 'muted'}));
         } catch (error) { if (current() && policyGeneration === window.WisdomData.generation()) libraryCard.append(el('p', error.message, {role: 'alert', class: 'completion-error'})); }
         directBox.append(libraryCard);
       }
-      if (libraries.length) {
+      if (canManageAccess && libraries.length) {
         const explain = el('form', null, {class: 'completion-form'});
         const member = selectField(explain, 'Проверить участника', 'principal_id', members, 'principal_id', item => [item.display_name, item.email, memberStatusLabel(item.status)].filter(Boolean).join(' · ') || item.principal_id);
         const library = selectField(explain, 'Библиотека', 'library_id', libraries, 'id', item => item.name || item.id);
@@ -490,7 +493,8 @@
         directBox.append(explain);
       }
       if(!current())return;
-      content.append(memberBox, inviteBox, groupBox, directBox);
+      if (canManageAccess) content.append(memberBox, inviteBox, groupBox, directBox);
+      else content.append(el('p', 'Этот вход не разрешает управление доступом. Здесь показаны доступные вам разрешения.', {class: 'muted'}), directBox);
       root.replaceChildren(action('Обновить доступ', () => mountAccess(root, host), 'secondary', current), content);
     } catch (error) { if (current()) fail(root, error); }
   }

@@ -258,6 +258,9 @@ def create_resolver(
             except (AttributeError, TypeError, ValueError):
                 _raise_unauthorized()
 
+            # UI hint only, set after every check above: this credential's own
+            # scopes decide whether the administrative APIs are reachable.
+            state._kb_admin_scope_allowed = "kb:admin" in (identity.scopes or frozenset())
             state.principal = principal
             state.identity = identity
             state._kb_identity_resolved = True
@@ -316,6 +319,11 @@ def create_resolver(
         if not _is_pending_browser_invitation_accept(request, principal.account_id):
             admit(identity, principal)
 
+        # UI hint only: an unscoped browser session is the full session, and a
+        # scoped one carries administrative scope only when it says so.
+        state._kb_admin_scope_allowed = session.authority_scopes is None or (
+            "kb:admin" in session.authority_scopes
+        )
         state.principal = principal
         state.identity = identity
         state._kb_identity_resolved = True

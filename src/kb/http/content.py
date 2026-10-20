@@ -58,13 +58,18 @@ class PublishExperienceInput(Input):
 
 
 @router.get("/me")
-def me_route(conn: Db, me: Me):
+def me_route(request: Request, conn: Db, me: Me):
     with mapped_errors():
         return {
             "principal_id": me.principal_id,
             "account_id": me.account_id,
             # Additive hint for UI gating only; the SQL function decides.
             "is_org_admin": membership.is_org_admin(conn, me, me.account_id),
+            # What the credential could reach at all, which is transport
+            # authority rather than org role; a missing flag fails closed.
+            "access_management_allowed": (
+                getattr(request.state, "_kb_admin_scope_allowed", False) is True
+            ),
         }
 
 
