@@ -214,7 +214,7 @@ function renderSearchPageMeta(host, result, current) {
   for (const reason of context.unresolved_dependencies || [])
     host.append(node('p', ({linked_library_access_missing:'Обязательная библиотека недоступна.',pinned_rule_access_missing:'Обязательное правило недоступно.',pinned_version_conflict:'Конфликт закреплённых версий.'})[reason] || 'Обязательная зависимость не разрешена.'));
   for (const rule of context.pinned_rules || []) if (UUID_PATTERN.test(String(rule.id || '')) && Number.isInteger(rule.version_no))
-    host.append(button((rule.title || 'Закреплённое правило') + ' · версия ' + rule.version_no, () => { if (current()) featureHost.openRuleVersion(rule.id, rule.version_no); }));
+    host.append(button((rule.title || 'Закреплённое правило') + ' · версия ' + rule.version_no, () => { if (current()) return featureHost.openRuleVersion(rule.id, rule.version_no); }));
 }
 function syncSearchScope() {
   const scope = byId('search-scope');
