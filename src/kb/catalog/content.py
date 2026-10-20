@@ -332,7 +332,8 @@ def read_source(
     When the authorized source carries a stored ``origin_url``, ``url_history``
     reports the nearest earlier and later source in the same library that shares
     that exact stored URL, ordered by (created_at, id). No
-    canonicalization or renumbering is applied. Local files report ``None``.
+    canonicalization or renumbering is applied. For local files (no
+    ``origin_url``) the ``url_history`` key is omitted from the result entirely.
 
     When ``fragment_id`` is supplied, source authorization is checked first and
     the target must be a visible fragment of that source. ``fragment_id`` takes
@@ -438,13 +439,15 @@ def read_source(
         fragments = [dict(row) for row in cursor.fetchall()]
         event_id = record_retrieval(cursor, principal, item_kind="source", item_id=source_id)
 
-    return {
+    result = {
         "source": dict(source_row),
         "fragments": fragments,
-        "url_history": url_history,
         "retrieved_only": True,
         "retrieval_event_id": event_id,
     }
+    if url_history is not None:
+        result["url_history"] = url_history
+    return result
 
 
 def attach_knowledge_provenance(cursor, hits) -> None:
