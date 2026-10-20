@@ -8,6 +8,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from kb.access import membership
 from kb.catalog import content, policies, shared_experience, workspace, writes
+from kb.contracts.entities import LibraryTypeKey
 from kb.http.libraries import Db, Me, mapped_errors
 from kb.jobs.ingestion import submit_processing
 
@@ -188,6 +189,9 @@ def search(
     library_id: UUID | None = None,
     limit: int = Query(default=10, ge=1, le=50),
     source_id: list[UUID] | None = Query(default=None, max_length=100),  # noqa: B008
+    offset: int | None = Query(default=None, ge=0, le=9223372036854775807),
+    project_id: UUID | None = None,
+    library_type: list[LibraryTypeKey] | None = Query(default=None, max_length=50),  # noqa: B008
 ):
     """Search over every library the caller may read, HTTP and MCP alike.
 
@@ -208,6 +212,9 @@ def search(
             semantic=getattr(request.app.state, "semantic_search", None),
             source_ids=source_id,
             connections=getattr(request.app.state, "db_connection", None),
+            offset=offset,
+            project_id=project_id,
+            library_types=library_type,
         )
 
 

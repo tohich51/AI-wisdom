@@ -314,6 +314,9 @@ def build_mcp(app, hosts):
         limit: int = 10,
         use_generation: bool = False,
         source_ids: list[UUID] | None = None,
+        offset: int | None = None,
+        project_id: UUID | None = None,
+        library_types: list[LibraryTypeKey] | None = None,
     ):
         args = SearchKnowledgeArgs(
             query=query,
@@ -321,6 +324,9 @@ def build_mcp(app, hosts):
             limit=limit,
             use_generation=use_generation,
             source_ids=source_ids,
+            offset=offset,
+            project_id=project_id,
+            library_types=library_types,
         )
         if args.use_generation:
             raise ValueError("generation_is_not_retrieval")
@@ -335,6 +341,9 @@ def build_mcp(app, hosts):
             semantic=getattr(app.state, "semantic_search", None),
             source_ids=args.source_ids,
             connections=app.state.db_connection,
+            offset=args.offset,
+            project_id=args.project_id,
+            library_types=args.library_types,
         )
 
     @server.tool(

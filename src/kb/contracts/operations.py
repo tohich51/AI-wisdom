@@ -78,12 +78,12 @@ class Page:
 
     limit_default: int
     limit_max: int
-    offset_default: int = 0
+    offset_default: int | None = 0
 
     def __post_init__(self) -> None:
         if not 1 <= self.limit_default <= self.limit_max:
             raise ValueError("limit_default must be within 1..limit_max")
-        if self.offset_default < 0:
+        if self.offset_default is not None and self.offset_default < 0:
             raise ValueError("offset_default must not be negative")
 
 
@@ -390,6 +390,7 @@ OPERATIONS: Final[tuple[Operation, ...]] = (
         "kb:read",
         "Search knowledge, lexically and optionally semantically.",
         mcp_tool="search_knowledge",
+        page=Page(limit_default=10, limit_max=50, offset_default=None),
     ),
     _op(
         "jobs.read",

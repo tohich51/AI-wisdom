@@ -59,6 +59,9 @@ class SearchKnowledgeArgs(ToolArgs):
     limit: int = Field(default=10, ge=1, le=50)
     # Ordinary retrieval must work without cloud generation.
     use_generation: bool = False
+    offset: int | None = Field(default=None, ge=0, le=9223372036854775807, strict=True)
+    project_id: UUID | None = None
+    library_types: list[LibraryTypeKey] | None = Field(default=None, max_length=50)
 
 
 class SearchKnowledgeResult(BaseModel):
