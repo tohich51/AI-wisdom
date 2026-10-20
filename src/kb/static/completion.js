@@ -445,20 +445,88 @@
           libraryCard.append(el('p', 'Действующая роль с учётом прямых и групповых разрешений: ' + (roleLabel(policy.effective_role) || 'нет доступа'), {class: 'muted'}));
           if (manager) {
             const form = el('form', null, {class: 'completion-form'});
-            const memberSelect = selectField(form, 'Участник', 'principal_id', activeMembers, 'principal_id', member => [member.display_name, member.email].filter(Boolean).join(' · ') || member.principal_id);
-            memberSelect.required = true;
-            memberSelect.addEventListener('change', () => window.WisdomForms.clearErrors(form, [memberSelect]));
-            const role = roleField(form); const save = el('button', 'Сохранить прямую роль', {type: 'submit'}); form.append(save);
-            window.WisdomForms.submit(form, async () => {
-              if (!current() || !memberSelect.value) return;
+            const emailField = field('Электронная почта участника (точное совпадение)', 'email', 'email');
+            emailField.input.required = true; emailField.input.maxLength = 320; emailField.input.autocomplete = 'off';
+            const resolve = el('button', 'Найти участника', {type: 'button'});
+            const recipientStatus = el('p', null, {role: 'status'});
+            form.append(emailField.wrap, resolve, recipientStatus);
+            const role = roleField(form);
+            const save = el('button', 'Сохранить прямую роль', {type: 'submit'});
+            save.disabled = true;
+            form.append(save);
+            const principalPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+            const typedEmail = () => emailField.input.value.trim();
+            let lookupSerial = 0, lookupsInFlight = 0, recipientId = null, recipientEmail = '', recipientGeneration = null;
+            const resetRecipient = () => {
+              lookupSerial++;
+              recipientId = null; recipientEmail = ''; recipientGeneration = null;
+              save.disabled = true;
+              recipientStatus.replaceChildren();
+            };
+            const onEmailChanged = () => {
+              if (!current()) return;
+              resetRecipient();
+              window.WisdomForms.clearErrors(form, [emailField.input]);
+            };
+            emailField.input.addEventListener('input', onEmailChanged);
+            emailField.input.addEventListener('change', onEmailChanged);
+            resolve.addEventListener('click', async () => {
+              const actionCurrent = current;
+              if (!actionCurrent() || lookupsInFlight > 0) return;
+              const requestedEmail = typedEmail();
+              if (!requestedEmail) { emailField.input.focus(); return; }
+              const serial = ++lookupSerial;
+              const startGeneration = window.WisdomData.generation();
+              recipientId = null; recipientEmail = ''; recipientGeneration = null;
+              lookupsInFlight++;
+              resolve.disabled = true; save.disabled = true; resolve.setAttribute('aria-busy', 'true');
+              window.WisdomForms.clearErrors(form, [emailField.input]);
+              recipientStatus.replaceChildren(el('span', 'Ищу участника по точной почте…'));
+              try {
+                const answer = await host.post('/api/libraries/' + encodeURIComponent(library.id) + '/grant-recipients/resolve', {email: requestedEmail});
+                if (!actionCurrent() || serial !== lookupSerial || typedEmail() !== requestedEmail) return;
+                if (window.WisdomData.generation() !== startGeneration + 1) {
+                  save.disabled = true;
+                  recipientStatus.replaceChildren(el('span', 'Данные доступа изменились. Повторите поиск участника.'));
+                  return;
+                }
+                const found = answer?.recipient;
+                const principalId = typeof found?.principal_id === 'string' ? found.principal_id.trim() : '';
+                if (found && principalPattern.test(principalId)) {
+                  recipientId = principalId; recipientEmail = requestedEmail; recipientGeneration = window.WisdomData.generation();
+                  save.disabled = false;
+                  recipientStatus.replaceChildren(el('span', 'Найден участник: ' + ([found.display_name, found.email].filter(Boolean).join(' · ') || principalId)));
+                } else {
+                  save.disabled = true;
+                  recipientStatus.replaceChildren(el('span', 'Участник не найден. Проверьте точную почту и приглашение в организацию.'));
+                }
+              } catch (error) {
+                if (!actionCurrent() || serial !== lookupSerial || typedEmail() !== requestedEmail) return;
+                recipientId = null; recipientEmail = ''; recipientGeneration = null; save.disabled = true;
+                recipientStatus.replaceChildren(el('span', 'Поиск участника не удался.'));
+                window.WisdomForms.formError(form, errorMessage(error));
+              } finally {
+                lookupsInFlight = Math.max(0, lookupsInFlight - 1);
+                if (actionCurrent()) { resolve.disabled = lookupsInFlight > 0; if (!lookupsInFlight) resolve.removeAttribute('aria-busy'); }
+              }
+            });
+            window.WisdomForms.submit(form, async event => {
+              event.preventDefault();
+              if (!current() || !recipientId || lookupsInFlight > 0) return;
+              if (typedEmail() !== recipientEmail || recipientGeneration === null || window.WisdomData.generation() !== recipientGeneration) {
+                resetRecipient();
+                window.WisdomForms.formError(form, 'Данные доступа изменились. Повторите поиск участника перед сохранением роли.');
+                return;
+              }
+              const principalId = recipientId;
               save.disabled = true;
               try {
-                await host.api('/api/libraries/' + encodeURIComponent(library.id) + '/grants', {method: 'PUT', body: JSON.stringify({principal_id: memberSelect.value, role: role.value})});
+                await host.api('/api/libraries/' + encodeURIComponent(library.id) + '/grants', {method: 'PUT', body: JSON.stringify({principal_id: principalId, role: role.value})});
                 if (!current()) return;
                 host.notify('Прямое разрешение сохранено.');
                 await mountAccess(root, host);
               } catch (error) { if (current()) window.WisdomForms.formError(form, errorMessage(error)); }
-              finally { save.disabled = false; }
+              finally { if (current()) save.disabled = recipientId === null; }
             });
             libraryCard.append(form);
           } else if (canManageAccess) libraryCard.append(el('p', 'Менять прямые разрешения может только менеджер этой библиотеки.', {class: 'muted'}));
