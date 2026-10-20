@@ -181,8 +181,8 @@
         "C02"
       ],
       "implementation_status": "implemented",
-      "card_acceptance": "evidence_missing",
-      "remaining": "Accepted two-person live audience proof and explicit refresh evidence are missing from the permitted evidence set.",
+      "card_acceptance": "source_evidence_supported",
+      "remaining": "Кандидат ожидает итоговый gate/build/runtime readback; границы доказательств сохранены.",
       "running_task": null,
       "file_leases": [],
       "original_acceptance": {
@@ -190,12 +190,13 @@
         "clauses": [
           {
             "number": 1,
-            "status": "unverified",
+            "status": "supported",
             "evidence": [
-              "tests/integration/identity/test_keycloak_live.py",
-              "W:acceptance-matrix-current.json#A01"
+              "tests/integration/identity/test_keycloak_live.py#test_two_personal_identities_receive_real_pkce_tokens_and_one_refreshes",
+              "docs/decisions/identity-compatibility.md",
+              "operator:C03-LIVE-PROOF/live-r2.json"
             ],
-            "note": "Live token/login evidence exists, but the accepted two-person intended/foreign-audience combination is not established."
+            "note": "Two actual personal access JWTs and a real refresh accepted; same signed JWT is rejected by a mismatched expected audience verifier. No invited-member MCP positive claim."
           },
           {
             "number": 2,
@@ -225,7 +226,13 @@
             "note": "Actual Keycloak login and local OIDC doubles are distinguishable. Refresh is not claimed verified."
           }
         ],
-        "named_artifacts": "Reproducible SDK prototype and actual product transport exist. Compatibility information is distributed across pins, realm templates and runtime receipts rather than one current compatibility-matrix artifact."
+        "named_artifacts": "Reproducible SDK prototype and actual product transport exist. Compatibility information is distributed across pins, realm templates and runtime receipts rather than one current compatibility-matrix artifact. Current exact identity dependency note and two-person live token/refresh proof supplied."
+      },
+      "post_audit_resolution": {
+        "accepted_module_sha": "36a03007840b87b2c0fb91ccc6a7b3b4094c9aa0",
+        "source_status": "supported",
+        "note": "Actual two-person product access JWT/audience and refresh proof; dependency compatibility note; no two invited MCP-user positive claim.",
+        "deployed": false
       }
     },
     {
@@ -740,8 +747,8 @@
       ],
       "implementation_status": "partial",
       "card_acceptance": "changes_required",
-      "remaining": "Connected address is checked too late.; Refetched content is not linked as a new logical source version.",
-      "running_task": "URL-PINNING (focusedpassed; internalMiniMax/Solpending); C12Blinkedversionhistoryseparate",
+      "remaining": "Linked understandable URL snapshot history remains missing; first-approved-IP fetch has no multi-address fallback.",
+      "running_task": null,
       "file_leases": [],
       "original_acceptance": {
         "audited_sha": "da879608c707b3f99d312d6414482f31c4ff531e",
@@ -751,16 +758,22 @@
             "status": "supported",
             "evidence": [
               "tests/integration/upload/test_url_ingestion.py",
-              "W:acceptance-matrix-current.json#A14"
+              "W:acceptance-matrix-current.json#A14",
+              "operator:URL-PINNING/sol-review/verdict.json",
+              "operator:URL-PINNING/cookie-fix-researched/green.json",
+              "operator:URL-PINNING/cookie-fix-researched/tls-negative.json"
             ],
             "note": "The accepted controlled-fixture A14 scope is preserved; it does not prove pre-request connection pinning."
           },
           {
             "number": 2,
-            "status": "needs_work",
+            "status": "supported",
             "evidence": [
               "src/kb/catalog/upload_fetch.py#fetch_url",
-              "tests/integration/upload/test_url_stream.py#test_refusal_closes_without_reading_body"
+              "tests/integration/upload/test_url_stream.py#test_refusal_closes_without_reading_body",
+              "operator:URL-PINNING/sol-review/verdict.json",
+              "operator:URL-PINNING/cookie-fix-researched/green.json",
+              "operator:URL-PINNING/cookie-fix-researched/tls-negative.json"
             ],
             "note": "Peer validation occurs after GET is sent; a changed DNS answer can reach an internal service before refusal."
           },
@@ -784,6 +797,12 @@
           }
         ],
         "named_artifacts": "URL ingest, retrieved_at, immutable raw snapshot and BeautifulSoup extractor provenance exist. Safe pre-request rebinding handling and understandable logical URL versions remain incomplete."
+      },
+      "post_audit_resolution": {
+        "accepted_module_sha": "2cd32c9fc87a07fb00d67d290665524196b72185",
+        "scope": "Preconnect DNS-rebinding, anonymous cookie isolation and same-key no-refetch fixed; URL snapshot history not yet implemented",
+        "source_status": "partial",
+        "deployed": false
       }
     },
     {
@@ -1210,7 +1229,7 @@
       "implementation_status": "partial",
       "card_acceptance": "changes_required",
       "remaining": "Authorization-unavailable state is incorrectly finalized as processing failure.; Thinking, subscription-only route and one-fragment real product execution remain unverified within the permitted evidence.",
-      "running_task": null,
+      "running_task": "C20-PAUSE next-wave MiniMax source artifact returned; root review pending; actual product thinking/subscription proof still separate",
       "file_leases": [],
       "original_acceptance": {
         "audited_sha": "da879608c707b3f99d312d6414482f31c4ff531e",
@@ -1431,10 +1450,10 @@
       "depends_on": [
         "C22"
       ],
-      "implementation_status": "partial",
-      "card_acceptance": "changes_required",
-      "remaining": "Named archive output is not delivered, and no explicit accepted equivalence covers the substitution.",
-      "running_task": "SKILL-ARCHIVE MiniMaxauthor",
+      "implementation_status": "implemented",
+      "card_acceptance": "source_evidence_supported",
+      "remaining": "Кандидат ожидает итоговый gate/build/runtime readback; границы доказательств сохранены.",
+      "running_task": null,
       "file_leases": [],
       "original_acceptance": {
         "audited_sha": "da879608c707b3f99d312d6414482f31c4ff531e",
@@ -1477,6 +1496,12 @@
           }
         ],
         "named_artifacts": "SKILL.md, exact-rule/source manifest and checksums exist in the JSON response. The requested versioned archive is absent; the UI discards the manifest when downloading only SKILL.md."
+      },
+      "post_audit_resolution": {
+        "accepted_module_sha": "c4eec7a94ef544183907aa389e57d647a3061edf",
+        "source_status": "supported",
+        "note": "Versioned ZIP contains SKILL.md+canonical manifest; exact rule/source refs, real API revoke/withdrawal negatives. Browser/native archive readback pending release.",
+        "deployed": false
       }
     },
     {
@@ -1551,10 +1576,10 @@
         "C25",
         "C13"
       ],
-      "implementation_status": "partial",
-      "card_acceptance": "changes_required",
-      "remaining": "Inherited C12B pre-request DNS-rebinding gap; no separate MCP-only bypass was found.",
-      "running_task": "URL-PINNING (focusedpassed; internalMiniMax/Solpending); C12Blinkedversionhistoryseparate",
+      "implementation_status": "implemented",
+      "card_acceptance": "source_evidence_supported",
+      "remaining": "Кандидат ожидает итоговый gate/build/runtime readback; границы доказательств сохранены.",
+      "running_task": null,
       "file_leases": [],
       "original_acceptance": {
         "audited_sha": "da879608c707b3f99d312d6414482f31c4ff531e",
@@ -1597,6 +1622,12 @@
           }
         ],
         "named_artifacts": "The remaining five tools, strict identity-free arguments, truthful annotations and negative tests exist. Safe URL submission is incomplete because its shared fetch dependency has the C12B defect."
+      },
+      "post_audit_resolution": {
+        "accepted_module_sha": "2cd32c9fc87a07fb00d67d290665524196b72185",
+        "source_status": "supported",
+        "note": "Inherited URL preconnect DNS-rebinding/cookie boundary closed by shared default fetch; no MCP-only alternate fetch.",
+        "deployed": false
       }
     },
     {
@@ -2128,10 +2159,10 @@
         "C23",
         "C26"
       ],
-      "implementation_status": "partial",
-      "card_acceptance": "changes_required",
-      "remaining": "Inherited SSRF connection-validation defect; the four numbered race/identity clauses remain separately supported.",
-      "running_task": "URL-PINNING (focusedpassed; internalMiniMax/Solpending); C12Blinkedversionhistoryseparate",
+      "implementation_status": "implemented",
+      "card_acceptance": "source_evidence_supported",
+      "remaining": "Кандидат ожидает итоговый gate/build/runtime readback; границы доказательств сохранены.",
+      "running_task": null,
       "file_leases": [],
       "original_acceptance": {
         "audited_sha": "da879608c707b3f99d312d6414482f31c4ff531e",
@@ -2174,6 +2205,12 @@
           }
         ],
         "named_artifacts": "Race/adversarial fixtures and event-order assertions exist. The accepted controlled A14 cases do not close the newly identified request-before-peer-check edge in C12B."
+      },
+      "post_audit_resolution": {
+        "accepted_module_sha": "2cd32c9fc87a07fb00d67d290665524196b72185",
+        "source_status": "supported",
+        "note": "Four original race/identity clauses already supported; inherited A14 preconnect defect now resolved with counted real internal HTTP boundary plus labelled fixtures.",
+        "deployed": false
       }
     },
     {
@@ -2443,6 +2480,18 @@
     "source_candidate_not_deployed": true,
     "full_product_complete": false,
     "first_native_mcp_target_closed": false,
-    "verified_at": "2026-10-20T01:38:38.868760+00:00"
+    "verified_at": "2026-10-20T01:38:38.868760+00:00",
+    "post_audit_resolutions": {
+      "C03": "36a03007840b87b2c0fb91ccc6a7b3b4094c9aa0",
+      "C24": "c4eec7a94ef544183907aa389e57d647a3061edf",
+      "C26": "2cd32c9fc87a07fb00d67d290665524196b72185",
+      "C33C": "2cd32c9fc87a07fb00d67d290665524196b72185"
+    },
+    "current_source_counts": {
+      "source_evidence_supported": 35,
+      "changes_required": 4,
+      "final_release_pending": 3
+    },
+    "warning": "Counts are source/evidence scope. C31A/C31B/C36 runtime acceptance is recorded outside immutable source in operator CURRENT/receipts after release; do not infer another rollout is needed from this dated source snapshot."
   }
 }
