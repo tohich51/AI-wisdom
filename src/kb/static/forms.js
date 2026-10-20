@@ -247,7 +247,8 @@
       } finally {
         state.pending = false;
         if (submitter) {
-          if (previousDisabled !== null) submitter.disabled = previousDisabled;
+          if (previousDisabled !== null) submitter.disabled = previousDisabled
+            || (typeof options.canSubmit === 'function' && !options.canSubmit());
           if (previousBusy === null) submitter.removeAttribute('aria-busy');
           else submitter.setAttribute('aria-busy', previousBusy);
         }

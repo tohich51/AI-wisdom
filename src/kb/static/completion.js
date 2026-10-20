@@ -529,11 +529,11 @@
                 if (!current()) return;
                 if (window.WisdomData.generation() !== recipientGeneration) resetRecipient();
                 window.WisdomForms.formError(form, errorMessage(error));
-              } finally {
-                if (current()) save.disabled = recipientId === null
-                  || window.WisdomData.generation() !== recipientGeneration;
               }
-            });
+            }, {canSubmit: () => current() && recipientId !== null
+              && typedEmail() === recipientEmail && lookupsInFlight === 0
+              && recipientGeneration !== null
+              && window.WisdomData.generation() === recipientGeneration});
             libraryCard.append(form);
           } else if (canManageAccess) libraryCard.append(el('p', 'Менять прямые разрешения может только менеджер этой библиотеки.', {class: 'muted'}));
         } catch (error) { if (current() && policyGeneration === window.WisdomData.generation()) libraryCard.append(el('p', error.message, {role: 'alert', class: 'completion-error'})); }
