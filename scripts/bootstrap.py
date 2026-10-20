@@ -1,31 +1,16 @@
 #!/usr/bin/env python3
-"""C05 — install the schema and bootstrap an EMPTY product.
-
-Bootstrap creates the organisation and nothing else. No libraries, no sources,
-no fragments, no knowledge, no rules and no grants: the owner uploads their own
-material, and a product that ships with demo content is a product whose first
-real upload is ambiguous.
-
-S04 is a product requirement with two halves, and both have to hold at once:
-
-* a clean, empty database reports zero content after bootstrap;
-* a repeat run over a database that already holds the owner's uploads returns
-  the real counts, destroys nothing, and reports empty_after_bootstrap=false.
-
-Applying only 0001 satisfied neither. The later migrations were never applied,
-so the "schema" was not the product's schema, and the counts printed afterwards
-were literal zeros written by this script rather than anything read from the
-database — a report that would happily call a populated product empty.
-"""
+"""Install the full schema and optionally bind an explicit first owner."""
 
 from __future__ import annotations
 
 import argparse
 import json
 import pathlib
-import re
 import subprocess
 import sys
+import uuid
+
+import psycopg
 
 from kb.migrate import apply_migrations
 
@@ -36,46 +21,144 @@ OWNER_SYSTEM_PRINCIPAL = "00000000-0000-4000-8000-000000000001"
 ORGANISATION_NAME = "owner-organisation"
 
 
-def apply_schema(srv) -> list[str]:
-    """Install the current complete schema, idempotently.
+class BootstrapError(RuntimeError):
+    """Safe operator refusal without identity or connection values."""
 
-    kb.migrate.apply_migrations applies every pending 0*.sql under its checksum
-    ledger and advisory session lock, so this is correct on a clean pgdata, on
-    a database that only ever saw 0001, and on one whose owner has already
-    uploaded material: it brings the schema up to date and leaves the data
-    alone. It is also the only thing here that touches the schema — no ad-hoc
-    DDL, and no dropping, truncating or replacing a database.
-    """
+
+def apply_schema(srv) -> list[str]:
+    """Apply every pending checksummed migration without replacing data."""
     return list(apply_migrations(srv.get_uri(), MIGRATIONS))
 
 
-def bootstrap(srv, *, organisation: str, owner_principal: str) -> dict:
-    """Create the organisation only. Idempotent: running again changes nothing.
+def bootstrap(
+    srv,
+    *,
+    organisation: str,
+    owner_principal: str,
+    owner_issuer: str | None = None,
+    owner_subject: str | None = None,
+) -> dict:
+    """Keep content empty; optionally bind operator-verified identity coordinates."""
+    issuer, subject = _present(owner_issuer), _present(owner_subject)
+    if (issuer is None) != (subject is None):
+        # Before any write: a half identity must not reach the database.
+        raise BootstrapError("owner_issuer and owner_subject must be given together")
+    principal = _uuid(owner_principal, "owner principal") if issuer else owner_principal
 
-    Nothing else is inserted: no sources, no fragments, no knowledge, no rules
-    and no grants, so an empty start really is empty. owner_principal is
-    operator metadata — who runs the product — and is only recorded here. The
-    principal is not created, no issuer or user is invented for it, and it is
-    granted nothing: identity and membership are bootstrapped elsewhere, and a
-    fabricated identity row here would later be mistaken for a real owner.
-
-    The counts are measured with content_counts rather than asserted, so on a
-    database that already holds the owner's uploads they are the real counts.
-    This function never deletes or rewrites anything to make them zero.
-    """
     org_uuid = _one(
         srv, f"SELECT id FROM kb.organisation WHERE name = {_lit(organisation)} LIMIT 1;"
     ) or _insert_org(srv, organisation)
-    if not re.fullmatch(r"[0-9a-f-]{36}", org_uuid):
-        raise ValueError(f"organisation id is not a uuid: {org_uuid!r}")
+    try:
+        uuid.UUID(str(org_uuid))
+    except (TypeError, ValueError, AttributeError):
+        raise ValueError(f"organisation id is not a uuid: {org_uuid!r}") from None
+
+    owner = {"owner_configured": bool(issuer), "owner_setup_required": not issuer}
+    if issuer:
+        owner = setup_owner(
+            srv,
+            org_uuid,
+            owner_principal=principal,
+            owner_issuer=issuer,
+            owner_subject=subject,
+        )
     return {
         "organisation": organisation,
         "organisation_id": org_uuid,
-        # Operator metadata only: recorded, never created, never granted.
-        "owner_principal": owner_principal,
+        # Existing metadata key; explicit setup is reported separately.
+        "owner_principal": principal if issuer else owner_principal,
+        **owner,
         # Flat mirrors of the measured counts, keeping the historic key names.
         **content_counts(srv),
     }
+
+
+def setup_owner(
+    srv,
+    organisation_id,
+    *,
+    owner_principal: str,
+    owner_issuer: str | None = None,
+    owner_subject: str | None = None,
+) -> dict:
+    """Bind the first owner atomically; never replace or reactivate a membership."""
+    issuer, subject = _present(owner_issuer), _present(owner_subject)
+    if (issuer is None) != (subject is None):
+        raise BootstrapError("owner_issuer and owner_subject must be given together")
+    if issuer is None:
+        raise BootstrapError("an owner needs both issuer and subject")
+    principal = _uuid(owner_principal, "owner principal")
+    org = _uuid(organisation_id, "organisation id")
+
+    with psycopg.connect(srv.get_uri()) as conn, conn.cursor() as cur:
+        cur.execute("SELECT 1 FROM kb.organisation WHERE id = %s FOR UPDATE;", (org,))
+        if cur.fetchone() is None:
+            raise BootstrapError("organisation does not exist")
+
+        cur.execute(
+            "SELECT principal_id FROM kb.organisation_admin WHERE organisation_id = %s;",
+            (org,),
+        )
+        admins = {str(row[0]) for row in cur.fetchall()}
+        if admins - {principal}:
+            raise BootstrapError("organisation already has an administrator")
+
+        cur.execute(
+            "SELECT principal_id FROM kb.membership"
+            " WHERE organisation_id = %s AND issuer = %s AND subject = %s;",
+            (org, issuer, subject),
+        )
+        if {str(row[0]) for row in cur.fetchall()} - {principal}:
+            raise BootstrapError("issuer/subject identify another principal here")
+
+        cur.execute(
+            "SELECT issuer, subject, status FROM kb.membership"
+            " WHERE organisation_id = %s AND principal_id = %s;",
+            (org, principal),
+        )
+        row = cur.fetchone()
+        if row is None:
+            try:
+                cur.execute(
+                    "INSERT INTO kb.membership"
+                    " (organisation_id, principal_id, issuer, subject, status)"
+                    " VALUES (%s, %s, %s, %s, 'active') RETURNING 1;",
+                    (org, principal, issuer, subject),
+                )
+            except psycopg.errors.UniqueViolation:
+                raise BootstrapError("membership changed under this bootstrap") from None
+            membership = "created"
+        else:
+            if (row[0], row[1]) != (issuer, subject):
+                raise BootstrapError("owner membership has different issuer/subject")
+            if row[2] != "active":
+                raise BootstrapError("owner membership is deactivated")
+            membership = "existing"
+
+        cur.execute(
+            "INSERT INTO kb.organisation_admin (organisation_id, principal_id)"
+            " VALUES (%s, %s) ON CONFLICT DO NOTHING;",
+            (org, principal),
+        )
+
+    return {
+        "owner_configured": True,
+        "owner_setup_required": False,
+        "owner_membership": membership,
+        "owner_admin": "existing" if principal in admins else "granted",
+    }
+
+
+def _present(value) -> str | None:
+    """The value, or None when it is absent or blank."""
+    return value if value is not None and str(value).strip() else None
+
+
+def _uuid(value, what: str) -> str:
+    try:
+        return str(uuid.UUID(str(value)))
+    except (TypeError, ValueError, AttributeError):
+        raise BootstrapError(f"{what} is not a uuid") from None
 
 
 def _lit(value: str) -> str:
@@ -149,11 +232,26 @@ def main() -> int:
     ap.add_argument("--organisation", default=ORGANISATION_NAME)
     ap.add_argument("--owner-principal", default=OWNER_SYSTEM_PRINCIPAL)
     ap.add_argument(
+        "--owner-issuer",
+        default=None,
+        help="issuer of the owner identity, operator-verified; needs --owner-subject",
+    )
+    ap.add_argument(
+        "--owner-subject",
+        default=None,
+        help="subject of the owner identity; needs --owner-issuer",
+    )
+    ap.add_argument(
         "--json",
         action="store_true",
         help="accepted for compatibility; the report is JSON either way",
     )
     a = ap.parse_args()
+
+    issuer, subject = _present(a.owner_issuer), _present(a.owner_subject)
+    if (issuer is None) != (subject is None):
+        # Refused here: before pgdata is opened, before any migration or write.
+        ap.error("--owner-issuer and --owner-subject must be given together")
 
     import pgserver
 
@@ -165,7 +263,18 @@ def main() -> int:
         # neither does this.
         print(f"schema install failed ({type(error).__name__})", file=sys.stderr)
         return 1
-    info = bootstrap(srv, organisation=a.organisation, owner_principal=a.owner_principal)
+    try:
+        info = bootstrap(
+            srv,
+            organisation=a.organisation,
+            owner_principal=a.owner_principal,
+            owner_issuer=issuer,
+            owner_subject=subject,
+        )
+    except Exception as error:
+        # Type only: no connection string, no issuer, no subject.
+        print(f"bootstrap failed ({type(error).__name__})", file=sys.stderr)
+        return 1
     counts = content_counts(srv)
     result = {
         **info,

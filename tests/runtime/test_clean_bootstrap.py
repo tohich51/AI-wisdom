@@ -154,3 +154,76 @@ def test_bootstrap_reports_actual_counts_and_preserves_uploaded_identity_and_rig
             content.get_rule(conn, principal, rule["id"])["provenance"][0]["fragment_id"]
             == fragment
         )
+
+
+def test_explicit_first_owner_bootstrap_is_idempotent_and_refuses_identity_changes(
+    runtime_db,
+):
+    path = Path(__file__).resolve().parents[2] / "scripts/bootstrap.py"
+    spec = importlib.util.spec_from_file_location("owner_bootstrap", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    server = SimpleNamespace(get_uri=lambda: runtime_db)
+    owner = uuid4()
+    name = "Explicit first owner"
+    options = dict(
+        organisation=name,
+        owner_principal=str(owner),
+        owner_issuer="https://identity.test",
+        owner_subject=str(owner),
+    )
+    first = module.bootstrap(server, **options)
+    assert first["owner_configured"] is True
+    org = UUID(first["organisation_id"])
+    principal = Principal(owner, org)
+    dsn = make_conninfo(runtime_db, user="kb_app")
+    with psycopg.connect(dsn) as conn:
+        library = libraries.create_library(
+            conn,
+            principal,
+            libraries.CreateLibrary(organisation_id=org, name="Owner library", kind="reference"),
+        )
+
+    def rows():
+        with psycopg.connect(runtime_db) as conn:
+            return {
+                table: conn.execute(
+                    sql.SQL("SELECT * FROM kb.{} ORDER BY 1").format(sql.Identifier(table))
+                ).fetchall()
+                for table in (
+                    "organisation",
+                    "membership",
+                    "organisation_admin",
+                    "library",
+                    "library_grant",
+                )
+            }
+
+    before = rows()
+    assert module.bootstrap(server, **options)["owner_configured"] is True
+    assert rows() == before
+    for changed in (
+        dict(owner_principal=str(uuid4()), owner_subject="different-owner"),
+        dict(owner_issuer="https://other-identity.test"),
+        dict(owner_subject="changed-subject"),
+    ):
+        with pytest.raises(module.BootstrapError):
+            module.bootstrap(server, **(options | changed))
+        assert rows() == before
+    # A malformed request must not create even an organisation.
+    with pytest.raises(module.BootstrapError):
+        module.bootstrap(
+            server, **(options | dict(organisation="must-not-exist", owner_subject=None))
+        )
+    assert rows() == before
+    with psycopg.connect(runtime_db) as conn:
+        conn.execute(
+            "UPDATE kb.membership SET status='deactivated', deactivated_at=now(),"
+            " deactivated_by=%s WHERE organisation_id=%s AND principal_id=%s",
+            (owner, org, owner),
+        )
+    closed = rows()
+    with pytest.raises(module.BootstrapError):
+        module.bootstrap(server, **options)
+    assert rows() == closed
+    assert library.id is not None
