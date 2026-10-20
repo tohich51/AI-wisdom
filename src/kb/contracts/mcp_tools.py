@@ -168,6 +168,15 @@ class ExportSkillArgs(ToolArgs):
     install_to_device: Literal[False] = False
 
 
+class ExportSkillArchiveResult(BaseModel):
+    """Portable ZIP (SKILL.md + manifest.json) delivered inline as base64."""
+
+    filename: str
+    content_base64: str
+    sha256: str
+    bytes: int
+
+
 class ExportSkillResult(BaseModel):
     filename: str
     content: str
@@ -175,6 +184,7 @@ class ExportSkillResult(BaseModel):
     bytes: int
     manifest: dict
     manifest_sha256: str
+    archive: ExportSkillArchiveResult | None = None
 
 
 class ListJobsArgs(ToolArgs):

@@ -74,7 +74,11 @@ else, and
 answer.
 """
 
+import base64
+import hashlib
+import io
 import json
+import zipfile
 from uuid import UUID, uuid4
 
 import psycopg
@@ -197,7 +201,8 @@ def test_withdrawn_source_then_revoked_grant_close_every_link(world, reader):
 
             opened = reader.get(prefix + rule_path)
             assert opened.status_code == 200, opened.text
-            assert opened.json()["title"] == RULE_TITLE
+            rule_body = opened.json()
+            assert rule_body["title"] == RULE_TITLE
 
             artifact = reader.post(prefix + export_path, json=export_body)
             assert artifact.status_code == 200, artifact.text
@@ -210,6 +215,35 @@ def test_withdrawn_source_then_revoked_grant_close_every_link(world, reader):
             )
             assert fragment_id in body["content"], (
                 "the SKILL provenance must carry the real cited fragment"
+            )
+
+            archive = body["archive"]
+            blob = base64.b64decode(archive["content_base64"])
+            assert archive["bytes"] == len(blob)
+            assert archive["sha256"] == hashlib.sha256(blob).hexdigest()
+            assert archive["filename"] == "ai-wisdom-" + body["manifest_sha256"][:16] + ".zip"
+            with zipfile.ZipFile(io.BytesIO(blob)) as portable:
+                assert portable.namelist() == ["SKILL.md", "manifest.json"]
+                assert all(
+                    info.date_time == (1980, 1, 1, 0, 0, 0) for info in portable.infolist()
+                ), "the archive must carry a pinned timestamp for reproducible hashing"
+                assert portable.read("SKILL.md").decode("utf-8") == body["content"]
+                packed_manifest = portable.read("manifest.json").decode("utf-8")
+            assert packed_manifest == json.dumps(
+                manifest, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+            )
+            packed = json.loads(packed_manifest)
+            assert packed == manifest
+            assert (
+                hashlib.sha256(packed_manifest.encode("utf-8")).hexdigest()
+                == body["manifest_sha256"]
+            )
+            packed_rules = {entry["id"]: entry for entry in packed["rules"]}
+            assert packed_rules[str(rule_body["id"])]["version_no"] == rule_body["version_no"], (
+                "the archived manifest must carry the exact rule version"
+            )
+            assert {source["id"] for source in packed["sources"]} >= {source_id}, (
+                "the archived manifest must carry the real source id"
             )
 
     def links_closed(*, source_access_revoked):

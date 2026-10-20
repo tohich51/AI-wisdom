@@ -1494,10 +1494,14 @@ async function openLibrary(lib, {guard = null, confirmedMutation = '', handoff =
           message('Применение записано. Результат добавьте в разделе «Опыт».');
         });
         }));
-        if (policy.export_allowed) card.append(button('Экспорт SKILL.md', async () => {
+        if (policy.export_allowed) card.append(button('Скачать навык (.zip)', async () => {
+          if (!current()) return;
           const result = await post('/api/libraries/' + lib.id + '/export', {rule_ids: [rule.id]});
-          const url = URL.createObjectURL(new Blob([result.content], {type: 'text/markdown;charset=utf-8'}));
-          const a = node('a', null, {href: url, download: 'SKILL.md'}); a.click(); setTimeout(() => URL.revokeObjectURL(url), 5000);
+          if (!current()) return;
+          const archive = result.archive;
+          if (!archive || !archive.content_base64) throw new Error('Архив навыка недоступен. Повторите экспорт.');
+          const bytes = Uint8Array.from(atob(archive.content_base64), character => character.charCodeAt(0));
+          downloadBlob(archive.filename, new Blob([bytes], {type: 'application/zip'}));
         }));
         else card.append(node('p', 'Экспорт отключён политикой библиотеки.', {class: 'muted'}));
       }

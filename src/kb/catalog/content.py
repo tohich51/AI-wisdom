@@ -6,10 +6,13 @@ and row-level security remain the sole authority for visibility.
 
 from __future__ import annotations
 
+import base64
 import datetime as dt
 import hashlib
+import io
 import json
 import tempfile
+import zipfile
 from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
@@ -677,13 +680,37 @@ def get_rule(
         return result
 
 
+def _build_skill_archive(markdown: str, manifest_json: str, manifest_sha256: str) -> dict[str, Any]:
+    """Pack the deliverable into a deterministic in-memory ZIP.
+
+    Two entries only, in fixed order, with a pinned timestamp so the same
+    export always hashes identically. Nothing is written to the server and no
+    original book bytes are included; the archive is never installed or run.
+    """
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+        for entry_name, payload in (("SKILL.md", markdown), ("manifest.json", manifest_json)):
+            info = zipfile.ZipInfo(entry_name, date_time=(1980, 1, 1, 0, 0, 0))
+            info.compress_type = zipfile.ZIP_DEFLATED
+            info.create_system = 0
+            info.external_attr = 0o644 << 16
+            archive.writestr(info, payload.encode("utf-8"))
+    blob = buffer.getvalue()
+    return {
+        "filename": f"ai-wisdom-{manifest_sha256[:16]}.zip",
+        "content_base64": base64.b64encode(blob).decode("ascii"),
+        "sha256": hashlib.sha256(blob).hexdigest(),
+        "bytes": len(blob),
+    }
+
+
 def export_skill(
     conn: psycopg.Connection,
     principal: Principal,
     library_id: UUID,
     rule_ids: Sequence[UUID],
 ) -> dict[str, Any]:
-    """Build a portable SKILL.md artifact without writing it to the server."""
+    """Build a portable SKILL.md artifact and ZIP archive without writing it to the server."""
     _require_principal(principal)
     library_id = _require_uuid(library_id, "library_id")
     requested_ids = _normalise_uuids(rule_ids, "rule_ids", deny_none=True)
@@ -749,6 +776,9 @@ def export_skill(
         ],
     }
     manifest_json = json.dumps(manifest, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    manifest_sha256 = hashlib.sha256(manifest_json.encode("utf-8")).hexdigest()
+    # Built before the closing recheck, from already-validated text only.
+    archive = _build_skill_archive(markdown, manifest_json, manifest_sha256)
     # Validation and rendering may take time. Recheck the complete export closure
     # immediately before delivery; do not record failed or revoked exports.
     with transaction_identity(conn, principal), conn.cursor() as cursor:
@@ -767,5 +797,6 @@ def export_skill(
         "sha256": hashlib.sha256(encoded).hexdigest(),
         "bytes": len(encoded),
         "manifest": manifest,
-        "manifest_sha256": hashlib.sha256(manifest_json.encode("utf-8")).hexdigest(),
+        "manifest_sha256": manifest_sha256,
+        "archive": archive,
     }
