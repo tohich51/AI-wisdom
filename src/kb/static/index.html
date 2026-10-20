@@ -70,7 +70,15 @@
 <option value="all">Все доступные библиотеки</option>
 <option value="selected" disabled>Выбранная библиотека недоступна</option>
 </select>
-<p id="search-scope-note" class="muted">Можно ограничить поиск открытой библиотекой.</p>
+<label for="search-project">Проект</label>
+<select id="search-project" name="project_id" data-od-id="search-project">
+<option value="">Без проекта</option>
+</select>
+<label for="search-library-type">Тип библиотеки</label>
+<select id="search-library-type" name="library_type" data-od-id="search-library-type">
+<option value="">Все типы</option>
+</select>
+<p id="search-scope-note" class="muted">Можно ограничить поиск открытой библиотекой, проектом или типом библиотеки.</p>
 <button type="submit" data-od-id="search-submit">Найти</button>
 </form>
 <div id="search-results" data-od-id="search-results"></div>

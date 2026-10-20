@@ -230,12 +230,30 @@
       return Number.isSafeInteger(offset) && offset >= 0 ? offset : null;
     };
 
+    // Оболочка поиска: {hits:[], page:{offset, limit, has_more, next_offset}}.
+    // Проверяется только согласованность с запрошенным окном; серверный total
+    // в этой форме отсутствует и не выдумывается.
+    const looksLikeSearch = response => !!response && typeof response === 'object' && !Array.isArray(response)
+      && (Object.hasOwn(response, 'hits') || Object.hasOwn(response, 'page'));
+    const readSearchEnvelope = (response, requestOffset) => {
+      const meta = response.page;
+      if (!Array.isArray(response.hits) || !meta || typeof meta !== 'object' || Array.isArray(meta)) return null;
+      if (!Number.isSafeInteger(meta.offset) || meta.offset < 0 || meta.offset !== requestOffset) return null;
+      if (!Number.isSafeInteger(meta.limit) || meta.limit !== size) return null;
+      if (typeof meta.has_more !== 'boolean') return null;
+      if (meta.has_more ? meta.next_offset !== meta.offset + meta.limit : meta.next_offset !== null) return null;
+      if (response.hits.length > meta.limit || (meta.has_more && response.hits.length !== meta.limit)) return null;
+      if (meta.has_more && !Number.isSafeInteger(meta.next_offset)) return null;
+      return {hits: response.hits, done: !meta.has_more};
+    };
+
     let cacheKey = positionKey(host, options, 'server');
     const initialOffset = offsetFor(readPosition(cacheKey));
     let offset = initialOffset === null ? 0 : initialOffset;
     let shown = 0;
     let total = null;
     let done = false;
+    let searchCursor = false;
     let busy = false;
     let epoch = 0;
     let controller = null;
@@ -257,6 +275,7 @@
       offset = 0;
       shown = 0;
       done = false;
+      searchCursor = false;
       restorationFallbackAvailable = false;
       list.replaceChildren();
       paintStatus('');
@@ -318,12 +337,17 @@
           }
           if (!list.isConnected) break;
 
+          const searchRequest = looksLikeSearch(response);
+          const search = searchRequest ? readSearchEnvelope(response, requestOffset) : null;
+          if (searchRequest && !search)
+            throw new Error('Сервер вернул некорректную страницу поиска.');
           const envelope = !Array.isArray(response) && Array.isArray(response?.libraries);
           if (envelope && (!Number.isSafeInteger(response.total) || response.total < 0
               || response.limit !== size || response.offset !== requestOffset))
             throw new Error('Сервер вернул некорректную страницу библиотек.');
-          const rows = Array.isArray(response) ? response : envelope ? response.libraries : [];
-          total = envelope ? response.total : null;
+          const rows = search ? search.hits : Array.isArray(response) ? response : envelope ? response.libraries : [];
+          total = search ? null : envelope ? response.total : null;
+          searchCursor = Boolean(search);
           if (!rows.length && requestOffset !== 0 && shown === 0 && restorationFallbackAvailable) {
             pageIndex = 0;
             requestOffset = 0;
@@ -353,7 +377,7 @@
           list.replaceChildren(fragment);
           offset = requestOffset;
           shown = rows.length;
-          done = total === null ? rows.length < size : offset + shown >= total;
+          done = search ? search.done : total === null ? rows.length < size : offset + shown >= total;
           writePosition(cacheKey, pageIndex);
           restorationFallbackAvailable = false;
           committed = true;
@@ -392,7 +416,7 @@
           + (total !== null ? (done ? ' · конец списка' : '') : reachedEnd
             ? ' · конец списка'
             : done
-              ? ' · страница короче размера'
+              ? searchCursor ? ' · конец списка' : ' · страница короче размера'
               : ' · следующая страница ещё не проверена')
         : '');
       if (scrollAfter) { list.tabIndex = -1; list.focus({preventScroll: true}); }

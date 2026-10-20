@@ -177,6 +177,45 @@ const SOURCE_PAGE_SIZE = 200;
 const SOURCE_AUTO_SEARCH_PAGES = 3;
 const SOURCE_REQUEST_TIMEOUT_MS = 12000;
 const message = text => { byId('status').textContent = text; };
+function syncSearchProjects() {
+  const select = byId('search-project');
+  if (!select) return;
+  const value = select.value, previous = select.selectedOptions[0]?.textContent || 'Ранее выбранный проект';
+  const options = [node('option', 'Без проекта', {value:''})];
+  for (const library of libraries) if (library.kind === 'project')
+    options.push(node('option', library.name || 'Без названия', {value:String(library.id)}));
+  if (value && !options.some(option => option.value === value))
+    options.push(node('option', previous, {value}));
+  select.replaceChildren(...options);
+  select.value = value;
+}
+function syncSearchTypes() {
+  const select = byId('search-library-type');
+  if (!select) return;
+  const value = select.value;
+  const options = [node('option', 'Все типы', {value:''}),
+    ...Array.from(LIBRARY_KIND_LABELS, ([key,title]) => node('option',title,{value:key}))];
+  if (value && !LIBRARY_KIND_LABELS.has(value))
+    options.push(node('option', value + ' · ранее выбранный тип', {value}));
+  select.replaceChildren(...options);
+  select.value = value;
+}
+function renderSearchPageMeta(host, result, current) {
+  if (!current()) return;
+  host.replaceChildren(node('p', ({semantic:'Поиск по смыслу',hybrid:'Поиск по смыслу и словам',lexical:'Поиск по словам'}[result.mode] || 'Результаты поиска')));
+  if (result.page?.ranking_scope === 'bounded_candidates')
+    host.append(node('p', 'Поиск в ограниченном наборе кандидатов. Порядок может меняться между страницами.' + (result.page.truncated ? ' Достигнут предел кандидатов.' : '')));
+  if (Number(result.pending_library_count) > 0)
+    host.append(node('p', 'Для части библиотек индекс не готов: используется поиск по словам.'));
+  const context = result.project_context;
+  if (!context) return;
+  const complete = context.manifest?.complete === true && context.manifest?.context_state === 'complete';
+  host.append(node('p', complete ? 'Обязательный контекст проекта доступен.' : 'Обязательный контекст проекта неполон или содержит конфликт.', {role:complete?'status':'alert'}));
+  for (const reason of context.unresolved_dependencies || [])
+    host.append(node('p', ({linked_library_access_missing:'Обязательная библиотека недоступна.',pinned_rule_access_missing:'Обязательное правило недоступно.',pinned_version_conflict:'Конфликт закреплённых версий.'})[reason] || 'Обязательная зависимость не разрешена.'));
+  for (const rule of context.pinned_rules || []) if (UUID_PATTERN.test(String(rule.id || '')) && Number.isInteger(rule.version_no))
+    host.append(button((rule.title || 'Закреплённое правило') + ' · версия ' + rule.version_no, () => { if (current()) featureHost.openRuleVersion(rule.id, rule.version_no); }));
+}
 function syncSearchScope() {
   const scope = byId('search-scope');
   const option = scope?.querySelector('option[value="selected"]');
@@ -184,6 +223,7 @@ function syncSearchScope() {
   const selectedId = String(selected?.id || '');
   const current = UUID_PATTERN.test(selectedId) && selected && String(selected.id) === selectedId
     ? libraries.find(item => String(item?.id || '') === selectedId) || selected : null;
+  syncSearchProjects();
   option.disabled = !current;
   option.textContent = current ? 'Выбранная библиотека: ' + String(current.name || 'Без названия') : 'Выбранная библиотека недоступна';
   if (!current && scope.value === 'selected') scope.value = 'all';
@@ -237,6 +277,8 @@ const clearPrivateRoots = () => {
   sourceProcessRequests.clear();
   selected = null;
   syncSearchScope();
+  byId('search-project')?.replaceChildren(node('option','Без проекта',{value:''}));
+  byId('search-library-type')?.replaceChildren(node('option','Все типы',{value:''}));
   for (const id of [
     'library-list', 'library-detail', 'uses-list', 'context-workspace', 'research-workspace',
     'maps-workspace', 'access-workspace', 'jobs-workspace', 'search-results'
@@ -872,6 +914,7 @@ async function loadLibraryTypes(preferred) {
   // Keep core choices as fallback labels when the registry request fails.
   LIBRARY_KIND_LABELS.clear();
   for (const [key, title] of CORE_LIBRARY_KIND_LABELS) LIBRARY_KIND_LABELS.set(key, title);
+  syncSearchTypes();
   const types = await api('/api/library-types', {noCache:true});
   if (!current()) throw new DOMException('Список типов устарел.', 'AbortError');
   const select = byId('library-kind'), value = preferred || select.value;
@@ -887,6 +930,7 @@ async function loadLibraryTypes(preferred) {
     const title = type.is_core === true && seed && type.title === seed[0] ? seed[1] : type.title;
     LIBRARY_KIND_LABELS.set(type.key, title);
   }
+  syncSearchTypes();
   const registered = new Map(types.map(type => [type.key, type]));
   select.replaceChildren(...Array.from(LIBRARY_KIND_LABELS, ([key, title]) =>
     node('option', title, {value:key, 'data-base-kind':registered.get(key)?.base_kind || (CORE_LIBRARY_KIND_LABELS.has(key) ? key : '')})));
@@ -1665,74 +1709,7 @@ byId('create-library').addEventListener('submit', safe(async event => {
     window.WisdomForms.formError(form, 'Библиотека создана, но список или открытие экрана не обновились. Причина: ' + readableError(error));
   }
 }));
-const searchForm = byId('search');
-const searchInput = searchForm.querySelector('input[name="q"]');
-const searchScope = byId('search-scope');
-syncSearchScope();
-const existingClear = searchForm.querySelector('[data-wisdom-clear-search]') || Array.from(searchForm.querySelectorAll('button')).find(candidate => /^(Очистить поиск|Clear search)$/i.test((candidate.textContent || '').trim()));
-const searchClear = existingClear || node('button', 'Очистить поиск', {type: 'button'});
-searchClear.type = 'button';
-searchClear.setAttribute('data-wisdom-clear-search', 'true');
-if (!existingClear) searchForm.append(searchClear);
-searchClear.hidden = !String(searchInput?.value || '').trim();
-searchClear.addEventListener('click', () => {
-  cancelSearchResults({resetForm: true});
-  searchInput?.focus();
-});
-searchScope?.addEventListener('change', () => cancelSearchResults());
-searchInput?.addEventListener('input', () => { searchClear.hidden = !String(searchInput.value || '').trim(); });
-let searchComposing = false;
-searchInput?.addEventListener('compositionstart', () => { searchComposing = true; });
-searchInput?.addEventListener('compositionend', () => { searchComposing = false; });
-searchInput?.addEventListener('keydown', event => {
-  if (event.key !== 'Enter') return;
-  if (!event.isComposing && event.keyCode !== 229 && !searchComposing) return;
-  event.preventDefault();
-  event.stopPropagation();
-});
-window.WisdomForms.submit(searchForm, async event => {
-  event.preventDefault();
-  if (searchComposing || event.isComposing) return;
-  const query = String(new FormData(event.target).get('q') || '').trim();
-  const requestedScope = String(searchScope?.value || 'all');
-  const scopedLibrary = requestedScope === 'selected' ? syncSearchScope() : null;
-  if (requestedScope === 'selected' && !scopedLibrary) {
-    searchScope.value = 'all';
-    cancelSearchResults({prompt: 'Выбранная библиотека больше недоступна. Выберите область поиска заново.'});
-    return;
-  }
-  const list = byId('search-results');
-  if (!query) {
-    searchController?.abort(); searchController = null; searchSerial++;
-    searchClear.hidden = true;
-    list.replaceChildren(node('p', 'Введите запрос для поиска.'));
-    message('Введите запрос для поиска.');
-    return;
-  }
-  searchController?.abort();
-  const controller = new AbortController(), serial = ++searchSerial;
-  searchController = controller; searchClear.hidden = false;
-  list.replaceChildren(node('p', 'Ищу совпадения…', {role: 'status'}));
-  try {
-    const params = new URLSearchParams({q: query});
-    if (scopedLibrary) params.set('library_id', String(scopedLibrary.id));
-    const result = await api('/api/search?' + params.toString(), {signal: controller.signal});
-    if (serial !== searchSerial || controller.signal.aborted) return;
-    list.replaceChildren(node('p', ({semantic:'Поиск по смыслу',hybrid:'Поиск по смыслу и словам',lexical:'Поиск по словам'}[result.mode] || result.mode) + ' · ' + result.hits.length + ' совпадений'));
-    if (result.indexed_library_count != null || result.pending_library_count != null) {
-      const counts = [];
-      if (result.indexed_library_count != null) counts.push('индекс готов — ' + result.indexed_library_count);
-      if (result.pending_library_count != null) counts.push('индекс не готов — ' + result.pending_library_count);
-      list.append(node('p', 'Библиотеки: ' + counts.join(' · ') + '.'));
-    }
-    if (['semantic', 'hybrid'].includes(result.mode) && Number(result.pending_library_count) > 0)
-      list.append(node('p', 'В библиотеках с неготовым индексом доступен поиск по словам.'));
-    else if (result.mode === 'lexical' && result.fallback_reason === 'index_pending_or_unavailable')
-      list.append(node('p', 'Пока доступен поиск по словам: индекс библиотеки ещё не готов или временно недоступен.'));
-    const hits = pager({
-      empty: 'Совпадений не найдено.',
-      size: 10,
-      renderItem: hit => {
+function renderSearchHit(hit, current) {
         const block = node('article', null, {class: 'search-hit'});
         block.append(node('p', hit.statement));
         const citations = Array.isArray(hit.provenance) ? hit.provenance : [];
@@ -1755,7 +1732,7 @@ window.WisdomForms.submit(searchForm, async event => {
           const sourceId = provenance.source_id, quote = typeof provenance.quote === 'string' ? provenance.quote : '';
           const hasLocator = ['chapter','file_page','printed_label','paragraph','table_index','cell_row','cell_column'].some(key => locator[key] != null);
           if (typeof sourceId === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(sourceId)) {
-            const sourceOptions = {quote, locator, isCurrent:() => serial === searchSerial && !controller.signal.aborted};
+            const sourceOptions = {quote, locator, isCurrent:current};
             if (provenance.fragment_id != null) sourceOptions.fragmentId = provenance.fragment_id;
             details.append(document.createTextNode(' · '), button(quote || provenance.fragment_id != null || hasLocator ? 'Открыть точное место' : 'Открыть источник', () => viewSource(sourceId, sourceOptions)));
           }
@@ -1768,18 +1745,99 @@ window.WisdomForms.submit(searchForm, async event => {
           block.append(details);
         }
         return block;
-      }
-    });
-    hits.set(result.hits);
-    list.append(hits.element, hits.navigation, hits.status);
+}
+const searchForm = byId('search');
+const searchInput = searchForm.querySelector('input[name="q"]');
+const searchScope = byId('search-scope');
+syncSearchScope();
+syncSearchTypes();
+attachLibraryChooser(byId('search-project'), {accept:library => library.kind === 'project'});
+for (const id of ['search-project','search-library-type']) byId(id).addEventListener('change', () => cancelSearchResults({prompt:'Фильтры изменились. Повторите поиск.'}));
+const existingClear = searchForm.querySelector('[data-wisdom-clear-search]') || Array.from(searchForm.querySelectorAll('button')).find(candidate => /^(Очистить поиск|Clear search)$/i.test((candidate.textContent || '').trim()));
+const searchClear = existingClear || node('button', 'Очистить поиск', {type: 'button'});
+searchClear.type = 'button';
+searchClear.setAttribute('data-wisdom-clear-search', 'true');
+if (!existingClear) searchForm.append(searchClear);
+searchClear.hidden = !String(searchInput?.value || '').trim();
+searchClear.addEventListener('click', () => {
+  cancelSearchResults({resetForm: true});
+  searchInput?.focus();
+});
+searchScope?.addEventListener('change', () => cancelSearchResults());
+searchInput?.addEventListener('input', () => cancelSearchResults({prompt:'Запрос изменился. Выполните поиск.'}));
+let searchComposing = false;
+searchInput?.addEventListener('compositionstart', () => { searchComposing = true; });
+searchInput?.addEventListener('compositionend', () => { searchComposing = false; });
+searchInput?.addEventListener('keydown', event => {
+  if (event.key !== 'Enter') return;
+  if (!event.isComposing && event.keyCode !== 229 && !searchComposing) return;
+  event.preventDefault();
+  event.stopPropagation();
+});
+window.WisdomForms.submit(searchForm, async event => {
+  event.preventDefault();
+  if (searchComposing || event.isComposing) return;
+  const query = String(new FormData(event.target).get('q') || '').trim();
+  const requestedScope = String(searchScope?.value || 'all');
+  const scopedLibrary = requestedScope === 'selected' ? syncSearchScope() : null;
+  const list = byId('search-results');
+  const metaHost = node('div', null, {'data-wisdom-search-meta':'true'});
+  if (requestedScope === 'selected' && !scopedLibrary) {
+    searchScope.value = 'all';
+    cancelSearchResults({prompt: 'Выбранная библиотека больше недоступна. Выберите область поиска заново.'});
+    searchClear.hidden = true;
+    return;
+  }
+  if (!query) {
+    cancelSearchResults({prompt: 'Введите запрос для поиска.'});
+    searchClear.hidden = true;
+    list.replaceChildren(node('p', 'Введите запрос для поиска.'));
+    message('Введите запрос для поиска.');
+    return;
+  }
+  cancelSearchResults();
+  const controller = new AbortController();
+  searchController = controller;
+  const serial = ++searchSerial;
+  searchClear.hidden = false;
+  const coordinates = identityCoordinates(identity);
+  const routeToken = captureRouteToken();
+  const generation = window.WisdomData.generation();
+  const isCurrent = () => serial === searchSerial && !controller.signal.aborted
+    && window.WisdomData.generation() === generation
+    && sameIdentity(identityCoordinates(identity), coordinates)
+    && isRouteCurrent(routeToken);
+  const libraryId = scopedLibrary ? scopedLibrary.id : '';
+  const projectId = String(byId('search-project')?.value || '').trim();
+  const libraryType = String(byId('search-library-type')?.value || '').trim();
+  metaHost.replaceChildren();
+  list.replaceChildren(node('p', 'Ищу совпадения…', {role: 'status'}));
+  const pager = window.WisdomList.createServer(featureHost, {
+    size: 10,
+    library: null,
+    stateKey: 'search:' + serial,
+    fetchPage: async ({limit, offset, signal}) => {
+      if (!isCurrent() || signal.aborted) throw new DOMException('Поиск отменён.', 'AbortError');
+      const params = new URLSearchParams({q: query, limit: String(limit), offset: String(offset)});
+      if (libraryId) params.set('library_id', String(libraryId));
+      if (projectId) params.set('project_id', projectId);
+      if (libraryType) params.set('library_type', libraryType);
+      const combined = AbortSignal.any([controller.signal, signal]);
+      const result = await api('/api/search?' + params.toString(), {signal: combined});
+      if (!isCurrent() || combined.aborted) throw new DOMException('Поиск отменён.', 'AbortError');
+      renderSearchPageMeta(metaHost, result, isCurrent);
+      return result;
+    },
+    renderItem: hit => renderSearchHit(hit, isCurrent),
+    empty: 'Совпадений не найдено.'
+  });
+  list.replaceChildren(metaHost, pager.element, pager.navigation, pager.status);
+  try {
+    await pager.load();
   } catch (error) {
-    if (serial !== searchSerial || error.name === 'AbortError') return;
-    const text = 'Поиск не завершён. ' + (error.message ? error.message + ' ' : 'Сервер не указал причину. ') + 'Проверьте запрос и повторите поиск.';
-    list.replaceChildren(node('p', text, {role: 'alert'}));
-    window.WisdomForms.formError(searchForm, text);
-    message(text);
-  } finally {
-    if (serial === searchSerial) searchController = null;
+    if (!isCurrent() || error?.name === 'AbortError') return;
+    const detail = error?.message ? error.message + ' ' : 'Сервер не указал причину. ';
+    window.WisdomForms.formError(searchForm, 'Поиск не завершён. ' + detail + 'Проверьте запрос и повторите поиск.');
   }
 });
 byId('logout').addEventListener('click', safe(async () => { await post('/auth/logout'); location.reload(); }));
