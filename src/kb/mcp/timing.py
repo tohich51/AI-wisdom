@@ -13,6 +13,13 @@ _STAGE_NAMES = (
     "handler",
     "jsonable_encode",
     "graph_json_dump",
+    "network_concepts",
+    "network_relations",
+    "similarity_ready",
+    "similarity_build",
+    "similarity_edges",
+    "citation_rows",
+    "manifest_checks",
 )
 _STAGES = frozenset(_STAGE_NAMES)
 _request_record: ContextVar[dict | None] = ContextVar("kb.mcp.timing.record", default=None)

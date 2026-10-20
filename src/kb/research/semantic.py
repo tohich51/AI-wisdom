@@ -16,6 +16,7 @@ from kb.catalog.idempotency import (
     record_create_operation,
     validate_idempotency_key,
 )
+from kb.mcp.timing import measure
 from kb.research.grounding import (
     check_snapshot,
     validate_citation,
@@ -130,27 +131,30 @@ def semantic_network(conn, principal, library_id, limit=200):
 
     with transaction_identity(conn, principal), conn.cursor(row_factory=dict_row) as cur:
         access = _library(cur, principal, library_id)
-        cur.execute(
-            # cheap constant-parameter prefilter narrows selectivity only; RLS stays authoritative
-            "SELECT * FROM kb.semantic_concept WHERE library_id=%s AND publication<>'withdrawn' "
-            "AND (publication='published' OR principal_id=%s) "
-            "ORDER BY created_at,id LIMIT %s",
-            (library_id, principal.principal_id, limit + 1),
-        )
-        rows = cur.fetchall()
+        with measure("network_concepts"):
+            cur.execute(
+                # Constant filters narrow candidates; RLS remains authoritative.
+                "SELECT * FROM kb.semantic_concept "
+                "WHERE library_id=%s AND publication<>'withdrawn' "
+                "AND (publication='published' OR principal_id=%s) "
+                "ORDER BY created_at,id LIMIT %s",
+                (library_id, principal.principal_id, limit + 1),
+            )
+            rows = cur.fetchall()
         selected_rows = rows[:limit]
         ids = [row["id"] for row in selected_rows]
         node_hashes = {
             row["id"]: concept_text_hash(row["label"], row["body"]) for row in selected_rows
         }
-        cur.execute(
-            """SELECT * FROM kb.semantic_relation WHERE library_id=%s
+        with measure("network_relations"):
+            cur.execute(
+                """SELECT * FROM kb.semantic_relation WHERE library_id=%s
                      AND publication<>'withdrawn' AND
                      from_concept=ANY(%s::uuid[]) AND to_concept=ANY(%s::uuid[])
                      ORDER BY created_at,id LIMIT %s""",
-            (library_id, ids, ids, limit * 3 + 1),
-        )
-        rels = cur.fetchall()
+                (library_id, ids, ids, limit * 3 + 1),
+            )
+            rels = cur.fetchall()
         selected_rels = rels[: limit * 3]
         similarity = similarity_layer(cur, principal, library_id, node_hashes, limit)
 

@@ -20,6 +20,7 @@ from psycopg.rows import dict_row
 from psycopg.types.json import Jsonb
 
 from kb.access.policy import AccessDenied, transaction_identity
+from kb.mcp.timing import measure
 from kb.research.grounding import check_snapshot, validate_citation
 from kb.retrieval.embedding_profile import SELECTED_PROFILE
 
@@ -653,32 +654,35 @@ def similarity_layer(
         {"concept_id": str(concept_id), "text_hash": text_hash}
         for concept_id, text_hash in node_hashes.items()
     ]
-    cur.execute(
-        """SELECT e.concept_id
+    with measure("similarity_ready"):
+        cur.execute(
+            """SELECT e.concept_id
           FROM kb.concept_embedding e
           JOIN jsonb_to_recordset(%s::jsonb)
             AS wanted(concept_id uuid,text_hash text)
             ON e.concept_id=wanted.concept_id
            AND e.text_hash=wanted.text_hash
           WHERE e.library_id=%s AND e.profile_hash=%s""",
-        (Jsonb(wanted), library_id, profile_hash),
-    )
-    ready_ids = {row["concept_id"] for row in cur.fetchall()}
-    cur.execute(
-        """SELECT b.edge_ids
+            (Jsonb(wanted), library_id, profile_hash),
+        )
+        ready_ids = {row["concept_id"] for row in cur.fetchall()}
+    with measure("similarity_build"):
+        cur.execute(
+            """SELECT b.edge_ids
           FROM kb.concept_similarity_build b
           WHERE b.library_id=%s AND b.profile_hash=%s
             AND b.selection_hash=%s""",
-        (library_id, profile_hash, selection_hash),
-    )
-    build = cur.fetchone()
+            (library_id, profile_hash, selection_hash),
+        )
+        build = cur.fetchone()
 
     edges: list[dict] = []
     truncated = False
     edge_limit = min(max(limit, 1) * 3, 1500)
     if build is not None and ready_ids:
-        cur.execute(
-            """SELECT s.id,s.source_concept,s.target_concept,s.score
+        with measure("similarity_edges"):
+            cur.execute(
+                """SELECT s.id,s.source_concept,s.target_concept,s.score
               FROM unnest(%s::uuid[]) AS selected(edge_id)
               JOIN kb.concept_similarity s ON s.id=selected.edge_id
               JOIN jsonb_to_recordset(%s::jsonb)
@@ -694,18 +698,18 @@ def similarity_layer(
                 AND s.target_text_hash=wanted_target.text_hash
               ORDER BY s.source_concept,s.target_concept
               LIMIT %s""",
-            (
-                build["edge_ids"],
-                Jsonb(wanted),
-                Jsonb(wanted),
-                library_id,
-                profile_hash,
-                list(ready_ids),
-                list(ready_ids),
-                edge_limit + 1,
-            ),
-        )
-        rows = cur.fetchall()
+                (
+                    build["edge_ids"],
+                    Jsonb(wanted),
+                    Jsonb(wanted),
+                    library_id,
+                    profile_hash,
+                    list(ready_ids),
+                    list(ready_ids),
+                    edge_limit + 1,
+                ),
+            )
+            rows = cur.fetchall()
         edges = [
             {
                 "id": str(row["id"]),

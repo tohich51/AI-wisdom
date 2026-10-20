@@ -14,6 +14,7 @@ from uuid import UUID
 from psycopg.rows import dict_row
 
 from kb.access.policy import AccessDenied, Principal, transaction_identity
+from kb.mcp.timing import measure
 
 
 def _hash(text: str) -> str:
@@ -305,8 +306,9 @@ def validate_graph_citations(
         raise ValueError("invalid_citation") from exc
 
     keys = list(requests)
-    cur.execute(
-        """WITH requested AS (
+    with measure("citation_rows"):
+        cur.execute(
+            """WITH requested AS (
              SELECT DISTINCT source_id,source_version_id,fragment_id
              FROM unnest(%s::uuid[],%s::uuid[],%s::uuid[])
                AS u(source_id,source_version_id,fragment_id)
@@ -317,18 +319,18 @@ def validate_graph_citations(
            JOIN kb.fragment f ON f.id=r.fragment_id AND f.source_id=r.source_id
            JOIN kb.source s ON s.id=r.source_id AND s.publication<>'withdrawn'
            JOIN kb.source_version v ON v.source_id=s.id AND v.id=r.source_version_id""",
-        (
-            [key[0] for key in keys],
-            [key[1] for key in keys],
-            [key[2] for key in keys],
-        ),
-    )
-    canonical = {}
-    for row in cur.fetchall():
-        key = (row["source_id"], row["source_version_id"], row["id"])
-        if key in canonical:
-            raise AccessDenied("forbidden")
-        canonical[key] = (row, _hash(row["text"]))
+            (
+                [key[0] for key in keys],
+                [key[1] for key in keys],
+                [key[2] for key in keys],
+            ),
+        )
+        canonical = {}
+        for row in cur.fetchall():
+            key = (row["source_id"], row["source_version_id"], row["id"])
+            if key in canonical:
+                raise AccessDenied("forbidden")
+            canonical[key] = (row, _hash(row["text"]))
     if set(canonical) != set(requests):
         raise AccessDenied("forbidden")
 
@@ -341,12 +343,13 @@ def validate_graph_citations(
     except (AttributeError, KeyError, StopIteration, TypeError) as exc:
         raise ValueError("invalid_citation") from exc
 
-    cur.execute(
-        """SELECT kb.can_read_manifest(item.manifest) AS allowed
+    with measure("manifest_checks"):
+        cur.execute(
+            """SELECT kb.can_read_manifest(item.manifest) AS allowed
            FROM jsonb_array_elements(%s::jsonb) AS item(manifest)""",
-        (Jsonb(list(unique_manifests.values())),),
-    )
-    checks = cur.fetchall()
+            (Jsonb(list(unique_manifests.values())),),
+        )
+        checks = cur.fetchall()
     try:
         allowed = [check["allowed"] if isinstance(check, dict) else check[0] for check in checks]
     except (IndexError, KeyError, TypeError) as exc:
