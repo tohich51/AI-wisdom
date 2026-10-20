@@ -448,7 +448,7 @@
             const emailField = field('Электронная почта участника (точное совпадение)', 'email', 'email');
             emailField.input.required = true; emailField.input.maxLength = 320; emailField.input.autocomplete = 'off';
             const resolve = el('button', 'Найти участника', {type: 'button'});
-            const recipientStatus = el('p', null, {role: 'status'});
+            const recipientStatus = el('p', 'Сначала найдите участника по точной почте.', {role: 'status'});
             form.append(emailField.wrap, resolve, recipientStatus);
             const role = roleField(form);
             const save = el('button', 'Сохранить прямую роль', {type: 'submit'});
@@ -525,8 +525,14 @@
                 if (!current()) return;
                 host.notify('Прямое разрешение сохранено.');
                 await mountAccess(root, host);
-              } catch (error) { if (current()) window.WisdomForms.formError(form, errorMessage(error)); }
-              finally { if (current()) save.disabled = recipientId === null; }
+              } catch (error) {
+                if (!current()) return;
+                if (window.WisdomData.generation() !== recipientGeneration) resetRecipient();
+                window.WisdomForms.formError(form, errorMessage(error));
+              } finally {
+                if (current()) save.disabled = recipientId === null
+                  || window.WisdomData.generation() !== recipientGeneration;
+              }
             });
             libraryCard.append(form);
           } else if (canManageAccess) libraryCard.append(el('p', 'Менять прямые разрешения может только менеджер этой библиотеки.', {class: 'muted'}));
