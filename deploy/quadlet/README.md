@@ -20,7 +20,7 @@ Install into `~/.config/containers/systemd/`:
 | `pkb-indexer.container` | `pkb-indexer.service` | the single index writer (published knowledge only) | none | `--memory=768m`, `--cpus=1`, pids 256 |
 
 Dependency order is declared in the units themselves: gateway after
-postgres+keycloak+openviking, worker after postgres+model-runner, indexer after
+postgres+keycloak, worker after postgres+model-runner, indexer after
 postgres+openviking. There is one index writer and one product generation; the
 current semantic path uses external OpenRouter qwen embeddings (4096-dim) — no
 Ollama or embedding sidecar. All four autostart via `WantedBy=default.target`.
