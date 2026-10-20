@@ -550,19 +550,24 @@ def submit_url(
     resolver: Resolver | None = None,
     max_bytes: int | None = None,
 ) -> SubmittedSource:
-    """Fetch a URL under the SSRF policy and register what came back.
+    """Replay a committed own attempt before fetching; new refusals reserve no row.
 
-    The fetch happens *before* the attempt is reserved, and that order is
-    deliberate. A refused URL — loopback, a metadata address, a redirect to one,
-    too many hops, a ``file:`` — leaves no trace at all: no attempt row, no
-    content hash, nothing a later reader could mistake for a failed ingest of
-    content that does not exist. A refusal is an error, and an error is not a row.
-
-    ``transport`` and ``resolver`` exist so the redirect and rebinding cases can
-    be driven deterministically over a real httpx client. In the product both are
-    None: the real resolver and the real transport are used.
+    New or interrupted submissions still fetch before reservation. The second
+    replay check after fetching handles a concurrent commit of the same key.
+    Process-owned transport/resolver seams never come from the request.
     """
     _require_contributor(conn, principal, spec.library_id)
+    # RLS scopes this read to the submitter; no reservation occurs before URL validation.
+    with transaction_identity(conn, principal), conn.cursor() as cur:
+        cur.execute(
+            "SELECT id, state, source_id FROM kb.ingest "
+            "WHERE library_id = %s AND idempotency_key = %s",
+            (spec.library_id, spec.idempotency_key),
+        )
+        committed = cur.fetchone()
+    if committed is not None and committed[1] == "committed" and committed[2] is not None:
+        return _replay(conn, principal, committed[0])
+
     fetched: FetchedObject = fetch_url(
         spec.url, policy or FetchPolicy(), transport=transport, resolver=resolver
     )

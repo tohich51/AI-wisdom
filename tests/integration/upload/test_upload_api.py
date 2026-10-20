@@ -638,3 +638,58 @@ def test_a_refused_url_is_a_400_and_leaves_no_row(make_api, people, world) -> No
     assert response.json()["detail"] == "address_not_allowed"
     assert world.sources_in(library) == []
     assert world.ingests_in(library) == [], "a refused fetch must leave no attempt behind"
+
+
+def test_a_retried_submission_after_revoke_is_refused_without_refetching(
+    make_api, people, world
+) -> None:
+    """Authorized replay needs no origin; revocation still refuses it."""
+    library = world.open_library(name="ref", who=people.owner, role="contributor")
+    body = b"%PDF-1.7 fetched once"
+    calls: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append(request)
+        if len(calls) > 1:
+            raise AssertionError(f"origin was contacted again: {request.url}")
+        return httpx.Response(200, content=body, headers={"Content-Type": "application/pdf"})
+
+    client = make_api(
+        people.owner,
+        source_transport=httpx.MockTransport(handler),
+        source_resolver=_public_resolver,
+    )
+    route = f"/libraries/{library}/sources/from-url"
+    submission = {"url": "https://public.test/a-book.pdf", "idempotency_key": "idem-url-0002"}
+
+    first = client.post(route, json=submission)
+    assert first.status_code == 201, first.text
+    stored = first.json()
+    assert len(calls) == 1, f"expected exactly one origin fetch, got {len(calls)}"
+    assert stored["source"]["content_hash"] == hashlib.sha256(body).hexdigest()
+    assert stored["source"]["id"]
+    assert stored["url"] == submission["url"] and stored["retrieved_at"] is not None
+    assert len(world.sources_in(library)) == 1
+
+    replay = client.post(route, json=submission)
+    assert replay.status_code == 200, replay.text
+    payload = replay.json()
+    assert payload["status"] == "replayed"
+    assert payload["source"]["id"] == stored["source"]["id"]
+    assert payload["source"]["content_hash"] == stored["source"]["content_hash"]
+    assert payload["url"] == stored["url"]
+    assert payload["retrieved_at"] == stored["retrieved_at"]
+    assert len(calls) == 1
+    assert (
+        len(world.sources_in(library))
+        == len(world.manifests_for(library))
+        == len(world.ingests_in(library))
+        == 1
+    )
+
+    world.revoke(library, people.owner)
+
+    revoked = client.post(route, json=submission)
+    assert revoked.status_code == 403, revoked.text
+    assert len(calls) == 1, "the refused retry must not reach the origin transport"
+    assert len(world.sources_in(library)) == 1, "no second source may be created"
