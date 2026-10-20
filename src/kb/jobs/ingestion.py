@@ -437,6 +437,20 @@ def run_job(dsn, job_id, principal, blob_root, runner_url=None, worker_token=Non
                             },
                         ),
                     )
+                    if response.status_code == 503:
+                        # The runner answers 503 model_unavailable when it cannot reach or
+                        # authenticate against the model: the parsed source and the completed
+                        # checkpoints stay resumable. Only the fixed machine detail is read;
+                        # no response body is logged or stored.
+                        try:
+                            body = response.json()
+                        except (ValueError, httpx.ResponseNotRead):
+                            body = None
+                        raise ParseRejected(
+                            "model_unavailable"
+                            if isinstance(body, dict) and body.get("detail") == "model_unavailable"
+                            else "invalid_model_output"
+                        )
                     if response.status_code != 200:
                         raise ParseRejected("invalid_model_output")
                     draft = GenerateResponse.model_validate(response.json())
@@ -498,7 +512,8 @@ def run_job(dsn, job_id, principal, blob_root, runner_url=None, worker_token=Non
                 if isinstance(exc, NeedsOCR)
                 else (
                     "failed"
-                    if isinstance(exc, ParseRejected) and code != "model_unavailable"
+                    if isinstance(exc, ParseRejected)
+                    and code not in {"model_unavailable", "model_unconfigured"}
                     else "partial"
                 )
             )
@@ -518,9 +533,9 @@ def run_job(dsn, job_id, principal, blob_root, runner_url=None, worker_token=Non
             except AccessDenied:
                 _finish_revoked(conn, job_id, principal, attempt)
                 return
-            if isinstance(exc, ProviderReviewRequired) or (
-                isinstance(exc, ParseRejected) and code != "model_unavailable"
-            ):
+            # A rejected model answer is a decided outcome, not a transient fault:
+            # return instead of letting the queue retry a known unavailable model.
+            if isinstance(exc, (ProviderReviewRequired, ParseRejected)):
                 return
             raise RuntimeError("ingestion_not_complete") from None
 

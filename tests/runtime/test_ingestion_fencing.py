@@ -403,3 +403,105 @@ def test_malicious_source_cannot_turn_provider_identity_into_authority(world, mo
             ).fetchall()
             == original_grants
         )
+
+
+class _UnavailableResponse:
+    """The fixed machine body a runner returns when the model is unavailable."""
+
+    status_code = 503
+
+    def json(self):
+        return {"detail": "model_unavailable"}
+
+
+def _controlled_runner(monkeypatch):
+    """Serve one chunk, then answer the next provider call with model_unavailable."""
+    posts = []
+
+    class Client:
+        def __init__(self, **_kwargs):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def post(self, url, *, headers, json):
+            assert url == "http://synthetic.invalid/generate"
+            assert headers == {"X-KB-Worker-Token": "synthetic-worker-token"}
+            posts.append(json["task_id"])
+            if len(posts) == 2:
+                return _UnavailableResponse()
+            return _SyntheticResponse(json, f"CHUNK {len(posts)}")
+
+    monkeypatch.setattr(ingestion.httpx, "Client", Client)
+    return posts
+
+
+def test_unavailable_model_pauses_with_source_and_completed_checkpoint(world, monkeypatch):
+    monkeypatch.setenv("KB_MAX_MODEL_CALLS_PER_JOB", "30")
+    posts = _controlled_runner(monkeypatch)
+    ident = source(world, "Synthetic material for the unavailable-model fixture. " * 400)
+    with psycopg.connect(world["dsn"]) as conn:
+        job = ingestion.submit_processing(
+            conn, world["principal"], ident, str(uuid4()), extract=True
+        )["job_id"]
+    _run(world, job)
+    paused = _snapshot(world, job)
+    assert paused[0][:2] == ("partial", "model_unavailable")
+    assert paused[0][4:6] == (1, 2)
+    assert paused[0][3] is None and paused[0][7] is not None
+    assert paused[1] == "partial"
+    assert len(paused[2]) == len(paused[3]) == len(paused[4]) == 1
+    assert paused[4][0][1] == 0
+    assert [str(item) for item in posts] == [str(job), str(job)]
+    # Re-delivery of the same job never re-issues the conservatively fenced operation.
+    _run(world, job)
+    held = _snapshot(world, job)
+    assert held[0][0] == "partial"
+    assert held[0][4:6] == (1, 2)
+    assert len(held[2]) == len(held[3]) == len(held[4]) == 1
+    assert len(posts) == 2
+    # An explicit new job key, with the model available again, finishes the rest only.
+    with psycopg.connect(world["dsn"]) as conn:
+        fresh = ingestion.submit_processing(
+            conn, world["principal"], ident, str(uuid4()), extract=True
+        )["job_id"]
+    _run(world, fresh)
+    done = _snapshot(world, fresh)
+    assert done[0][:2] == ("done", None)
+    assert done[0][4:6] == (2, 2)
+    assert len(done[4]) == 2
+    assert [row[0] for row in done[2]] == ["CHUNK 1", "CHUNK 3"]
+    assert [row[0] for row in done[3]] == ["CHUNK 1", "CHUNK 3"]
+    assert str(posts[2]) == str(fresh)
+
+
+def test_unconfigured_runner_pauses_without_calling_the_provider(world, monkeypatch):
+    monkeypatch.setenv("KB_MAX_MODEL_CALLS_PER_JOB", "30")
+
+    class Client:
+        def __init__(self, **_kwargs):
+            raise AssertionError("no provider call may be issued without a runner")
+
+    monkeypatch.setattr(ingestion.httpx, "Client", Client)
+    ident = source(world, "Synthetic material for the unconfigured-runner fixture. " * 400)
+    with psycopg.connect(world["dsn"]) as conn:
+        job = ingestion.submit_processing(
+            conn, world["principal"], ident, str(uuid4()), extract=True
+        )["job_id"]
+    ingestion.run_job(world["worker"], job, world["principal"], world["store"].root, None, None)
+    paused = _snapshot(world, job)
+    assert paused[0][:2] == ("partial", "model_unconfigured")
+    assert paused[0][3] is None and paused[0][7] is not None
+    assert paused[1] == "partial"
+    assert (len(paused[2]), len(paused[3]), len(paused[4])) == (0, 0, 0)
+    with psycopg.connect(world["admin"]) as conn:
+        fragments = conn.execute(
+            "SELECT count(*) FROM kb.fragment WHERE source_id="
+            "(SELECT source_id FROM kb.job WHERE id=%s)",
+            (job,),
+        ).fetchone()[0]
+    assert fragments > 0
