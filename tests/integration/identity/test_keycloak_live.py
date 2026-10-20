@@ -441,9 +441,8 @@ def test_two_personal_identities_receive_real_pkce_tokens_and_one_refreshes(
             nonce=nonce,
             code_verifier=code_verifier,
         )
-        assert "code_challenge_method=S256" in url and "code_challenge=" in url, (
-            "authorization request did not carry PKCE S256"
-        )
+        has_pkce = "code_challenge_method=S256" in url and "code_challenge=" in url
+        assert has_pkce, "authorization request did not carry PKCE S256"
         page = browser.get(url)
         response = post_form(
             browser,
