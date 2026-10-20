@@ -1,11 +1,11 @@
 {
   "schema_version": 1,
-  "recorded_date": "2026-10-12",
-  "mode": "planning_board_no_dispatch",
+  "recorded_date": "2026-10-20",
+  "mode": "source_evidence_reconciled_release_pending",
   "owner": "root Codex",
   "baseline_deployed_sha": "1fc0e5f6f38915165187849dd59a055ba2223680",
   "baseline_cloud_sha": "45c4af57eaed2d338c76a46569fa12ed117f96d5",
-  "warning": "Status is dated; verify SHA and live receipt before assigning. Executor may propose updates but only root writes shared acceptance. No claim whole v1 ready.",
+  "warning": "Independent source/evidence audit of42originalcards and161clauses; supported is scoped evidence, not automatic finalruntime/fullproduct acceptance. Currentproduction and candidates recorded separately.",
   "target_coding_wip": 3,
   "shared_xorek_heavy_jobs_max": 1,
   "features": [
@@ -17,10 +17,52 @@
       ],
       "depends_on": [],
       "implementation_status": "implemented",
-      "card_acceptance": "not_accepted_as_complete_card",
-      "remaining": "Функция есть в пилоте; отдельная полная card acceptance не приписывается автоматически.",
+      "card_acceptance": "source_evidence_supported",
+      "remaining": "Исходные пункты подтверждены в пределах указанных доказательств; итоговый выпуск кандидата отдельный.",
       "running_task": null,
-      "file_leases": []
+      "file_leases": [],
+      "original_acceptance": {
+        "audited_sha": "da879608c707b3f99d312d6414482f31c4ff531e",
+        "clauses": [
+          {
+            "number": 1,
+            "status": "supported",
+            "evidence": [
+              "docs/handoff/runtime-capabilities.json",
+              "W:RUNTIME-DOCS/sol-fix1/verdict.json"
+            ],
+            "note": "W denotes /home/kb-inspect/ai-wisdom-handoff/architecture-20261015/results/citation-load-wave-20261020; I denotes the sibling results/C16-incremental-20261019 directory. Historical cloud observations and current xorek observations are separated; unknown effort/context capacity remains explicit."
+          },
+          {
+            "number": 2,
+            "status": "supported",
+            "evidence": [
+              "docs/handoff/runtime-capabilities.json",
+              "requirements.json#owner_overrides"
+            ],
+            "note": "Historical no-SSH phase is preserved; subsequent owner authorization supersedes that restriction."
+          },
+          {
+            "number": 3,
+            "status": "supported",
+            "evidence": [
+              "docs/handoff/runtime-capabilities.json",
+              "docs/handoff/results/C00.json"
+            ],
+            "note": "Container absence is recorded separately from working filesystem/shell access."
+          },
+          {
+            "number": 4,
+            "status": "supported",
+            "evidence": [
+              "docs/handoff/runtime-capabilities.json#current_runtime",
+              "docs/handoff/ownership.json"
+            ],
+            "note": "Named executors and observed models are explicit; no silent substitution is asserted."
+          }
+        ],
+        "named_artifacts": "Capability report, historical checkpoint and ownership map exist. This audit independently confirmed the requested absolute workspace, exact HEAD and clean status."
+      }
     },
     {
       "id": "C01",
@@ -32,10 +74,43 @@
         "C00"
       ],
       "implementation_status": "implemented",
-      "card_acceptance": "not_accepted_as_complete_card",
-      "remaining": "Функция есть в пилоте; отдельная полная card acceptance не приписывается автоматически.",
+      "card_acceptance": "source_evidence_supported",
+      "remaining": "Исходные пункты подтверждены в пределах указанных доказательств; итоговый выпуск кандидата отдельный.",
       "running_task": null,
-      "file_leases": []
+      "file_leases": [],
+      "original_acceptance": {
+        "audited_sha": "da879608c707b3f99d312d6414482f31c4ff531e",
+        "clauses": [
+          {
+            "number": 1,
+            "status": "supported",
+            "evidence": [
+              "requirements.lock",
+              "containers/Containerfile"
+            ],
+            "note": "Hashed dependency locks and actual install entrypoints support reproducibility; no fresh installation was executed during this audit."
+          },
+          {
+            "number": 2,
+            "status": "supported",
+            "evidence": [
+              "justfile#verify-self",
+              "pyproject.toml#tool.ruff"
+            ],
+            "note": "The synthetic undefined-symbol/unused-import probe reaches enforced lint rules and requires a failing check."
+          },
+          {
+            "number": 3,
+            "status": "supported",
+            "evidence": [
+              "justfile#package",
+              "scripts/build_bundle.py"
+            ],
+            "note": "Packaging contains no deployment or publication action."
+          }
+        ],
+        "named_artifacts": "Python package, hashed locks, real just recipes and dependency/license inventories exist. Parser licenses are recorded separately in parser-provenance.md."
+      }
     },
     {
       "id": "C02",
@@ -48,10 +123,52 @@
         "C01"
       ],
       "implementation_status": "implemented",
-      "card_acceptance": "not_accepted_as_complete_card",
-      "remaining": "Функция есть в пилоте; отдельная полная card acceptance не приписывается автоматически.",
+      "card_acceptance": "source_evidence_supported",
+      "remaining": "Исходные пункты подтверждены в пределах указанных доказательств; итоговый выпуск кандидата отдельный.",
       "running_task": null,
-      "file_leases": []
+      "file_leases": [],
+      "original_acceptance": {
+        "audited_sha": "da879608c707b3f99d312d6414482f31c4ff531e",
+        "clauses": [
+          {
+            "number": 1,
+            "status": "supported",
+            "evidence": [
+              "src/kb/contracts/entities.py",
+              "tests/test_contracts.py"
+            ],
+            "note": "Nullable provenance and explicit locator kinds preserve unknown values."
+          },
+          {
+            "number": 2,
+            "status": "supported",
+            "evidence": [
+              "migrations/0006_runtime_safeguards.sql#use_exact_rule",
+              "tests/runtime/test_runtime.py#test_rule_version_and_explicit_experience"
+            ],
+            "note": "Experience/use records retain exact rule identity and version."
+          },
+          {
+            "number": 3,
+            "status": "supported",
+            "evidence": [
+              "src/kb/contracts/mcp_tools.py#FORBIDDEN_ARG_FIELDS",
+              "src/kb/runtime_identity.py#create_resolver"
+            ],
+            "note": "Transport identity supplies authority; request fields cannot replace it."
+          },
+          {
+            "number": 4,
+            "status": "supported",
+            "evidence": [
+              "src/kb/contracts/mcp_tools.py#MCP_TOOLS",
+              "src/kb/contracts/operations.py"
+            ],
+            "note": "All original ten tools remain, alongside additive tools."
+          }
+        ],
+        "named_artifacts": "Shared Pydantic contracts, lifecycle enums, operation registry and machine-error paths exist. Runtime SQL records supplement the entity schemas rather than replacing transport authority."
+      }
     },
     {
       "id": "C03",
@@ -64,10 +181,52 @@
         "C02"
       ],
       "implementation_status": "implemented",
-      "card_acceptance": "not_accepted_as_complete_card",
-      "remaining": "Функция есть в пилоте; отдельная полная card acceptance не приписывается автоматически.",
+      "card_acceptance": "evidence_missing",
+      "remaining": "Accepted two-person live audience proof and explicit refresh evidence are missing from the permitted evidence set.",
       "running_task": null,
-      "file_leases": []
+      "file_leases": [],
+      "original_acceptance": {
+        "audited_sha": "da879608c707b3f99d312d6414482f31c4ff531e",
+        "clauses": [
+          {
+            "number": 1,
+            "status": "unverified",
+            "evidence": [
+              "tests/integration/identity/test_keycloak_live.py",
+              "W:acceptance-matrix-current.json#A01"
+            ],
+            "note": "Live token/login evidence exists, but the accepted two-person intended/foreign-audience combination is not established."
+          },
+          {
+            "number": 2,
+            "status": "supported",
+            "evidence": [
+              "src/kb/mcp/server.py#call",
+              "src/kb/runtime_identity.py#resolve_token"
+            ],
+            "note": "Bearer identity and active membership are rechecked per request/tool call."
+          },
+          {
+            "number": 3,
+            "status": "supported",
+            "evidence": [
+              "src/kb/access/identity.py#VerifiedIdentity",
+              "src/kb/mcp/server.py#Verifier"
+            ],
+            "note": "Verified subject/principal identity replaces any shared user key."
+          },
+          {
+            "number": 4,
+            "status": "supported",
+            "evidence": [
+              "W:C07-AUTHLIB/live.json",
+              "tests/integration/identity/test_browser_flow.py"
+            ],
+            "note": "Actual Keycloak login and local OIDC doubles are distinguishable. Refresh is not claimed verified."
+          }
+        ],
+        "named_artifacts": "Reproducible SDK prototype and actual product transport exist. Compatibility information is distributed across pins, realm templates and runtime receipts rather than one current compatibility-matrix artifact."
+      }
     },
     {
       "id": "C04",
@@ -80,10 +239,52 @@
         "C02"
       ],
       "implementation_status": "implemented",
-      "card_acceptance": "not_accepted_as_complete_card",
-      "remaining": "Функция есть в пилоте; отдельная полная card acceptance не приписывается автоматически.",
+      "card_acceptance": "source_evidence_supported",
+      "remaining": "Исходные пункты подтверждены в пределах указанных доказательств; итоговый выпуск кандидата отдельный.",
       "running_task": null,
-      "file_leases": []
+      "file_leases": [],
+      "original_acceptance": {
+        "audited_sha": "da879608c707b3f99d312d6414482f31c4ff531e",
+        "clauses": [
+          {
+            "number": 1,
+            "status": "supported",
+            "evidence": [
+              "src/kb/retrieval/semantic_search.py#plans",
+              "W:acceptance-matrix-current.json#A02"
+            ],
+            "note": "Server-resolved library/account routing and canonical hydration enforce isolation."
+          },
+          {
+            "number": 2,
+            "status": "supported",
+            "evidence": [
+              "src/kb/adapters/vector_writer.py#canary",
+              "tests/integration/provisioning/test_search_no_generation.py"
+            ],
+            "note": "Ordinary find/search has no generative runner path."
+          },
+          {
+            "number": 3,
+            "status": "supported",
+            "evidence": [
+              "src/kb/retrieval/semantic_registry.py#begin",
+              "I:sol-runtime/native-result.json"
+            ],
+            "note": "Same-snapshot no-op and native incremental-copy behavior are recorded."
+          },
+          {
+            "number": 4,
+            "status": "supported",
+            "evidence": [
+              "I:sol-runtime/native-execution.json",
+              "W:FINAL-WAVE/release/final-runtime-readback.json"
+            ],
+            "note": "Actual OpenViking execution is distinguished from doubles and from this read-only audit."
+          }
+        ],
+        "named_artifacts": "Index adapters, pinned backend patch, native query/copy receipts and measured resource samples exist. Owner-approved external qwen embeddings at 4096 dimensions supersede CPU/1024/Ollama wording."
+      }
     },
     {
       "id": "C05",
@@ -97,10 +298,52 @@
         "C04"
       ],
       "implementation_status": "implemented",
-      "card_acceptance": "not_accepted_as_complete_card",
-      "remaining": "Функция есть в пилоте; отдельная полная card acceptance не приписывается автоматически.",
+      "card_acceptance": "source_evidence_supported",
+      "remaining": "Исходные пункты подтверждены в пределах указанных доказательств; итоговый выпуск кандидата отдельный.",
       "running_task": null,
-      "file_leases": []
+      "file_leases": [],
+      "original_acceptance": {
+        "audited_sha": "da879608c707b3f99d312d6414482f31c4ff531e",
+        "clauses": [
+          {
+            "number": 1,
+            "status": "supported",
+            "evidence": [
+              "scripts/bootstrap.py#bootstrap",
+              "W:S04/sol-review/verdict.json"
+            ],
+            "note": "Fresh content counts are measured; only explicit owner/system setup is performed."
+          },
+          {
+            "number": 2,
+            "status": "supported",
+            "evidence": [
+              "scripts/bootstrap.py#setup_owner",
+              "tests/runtime/test_clean_bootstrap.py"
+            ],
+            "note": "Repeat bootstrap preserves content and refuses replacement/reactivation of conflicting membership."
+          },
+          {
+            "number": 3,
+            "status": "supported",
+            "evidence": [
+              "migrations/0006_runtime_safeguards.sql",
+              "tests/integration/libraries/test_project_bindings.py"
+            ],
+            "note": "Composite identities and library/account constraints reject foreign bindings."
+          },
+          {
+            "number": 4,
+            "status": "supported",
+            "evidence": [
+              "scripts/bootstrap.py",
+              "src/kb/migrate.py"
+            ],
+            "note": "Explicit target and checksummed migrations perform no automatic discovery or deletion."
+          }
+        ],
+        "named_artifacts": "Ordered transactional SQL migrations with a checksum ledger replace the named Alembic schema. Empty bootstrap and disposable fixtures exist; this functional equivalence does not require an Alembic rewrite."
+      }
     },
     {
       "id": "C06",
@@ -112,10 +355,52 @@
         "C05"
       ],
       "implementation_status": "implemented",
-      "card_acceptance": "not_accepted_as_complete_card",
-      "remaining": "Функция есть в пилоте; отдельная полная card acceptance не приписывается автоматически.",
+      "card_acceptance": "source_evidence_supported",
+      "remaining": "Исходные пункты подтверждены в пределах указанных доказательств; итоговый выпуск кандидата отдельный.",
       "running_task": null,
-      "file_leases": []
+      "file_leases": [],
+      "original_acceptance": {
+        "audited_sha": "da879608c707b3f99d312d6414482f31c4ff531e",
+        "clauses": [
+          {
+            "number": 1,
+            "status": "supported",
+            "evidence": [
+              "migrations/0002_rls.sql#current_principal",
+              "tests/integration/rls/test_access_model.py#test_no_identity_means_no_rows"
+            ],
+            "note": "Missing identity yields no visible content."
+          },
+          {
+            "number": 2,
+            "status": "supported",
+            "evidence": [
+              "src/kb/access/policy.py#transaction_identity",
+              "W:acceptance-matrix-current.json#A05"
+            ],
+            "note": "Identity uses transaction-local settings; real pooled SQL coverage is accepted."
+          },
+          {
+            "number": 3,
+            "status": "supported",
+            "evidence": [
+              "src/kb/catalog/workspace.py#edit_knowledge",
+              "W:acceptance-matrix-current.json#A06"
+            ],
+            "note": "Ownership, immutable publication and scope constraints remain enforced."
+          },
+          {
+            "number": 4,
+            "status": "supported",
+            "evidence": [
+              "src/kb/access/bearer_policy.py#require_scope",
+              "W:acceptance-matrix-current.json#A03"
+            ],
+            "note": "Scope and current grant are independent admission requirements."
+          }
+        ],
+        "named_artifacts": "RLS/FORCE RLS policies, authorize helpers, policy revision and real PostgreSQL negative tests exist; runtime roles are tested as non-owner/non-BYPASSRLS."
+      }
     },
     {
       "id": "C07",
@@ -129,10 +414,52 @@
         "C06"
       ],
       "implementation_status": "implemented",
-      "card_acceptance": "not_accepted_as_complete_card",
-      "remaining": "Функция есть в пилоте; отдельная полная card acceptance не приписывается автоматически.",
+      "card_acceptance": "source_evidence_supported",
+      "remaining": "Production adoption of this candidate remains part of C36; focused/live source evidence is not a completed release.",
       "running_task": null,
-      "file_leases": []
+      "file_leases": [],
+      "original_acceptance": {
+        "audited_sha": "da879608c707b3f99d312d6414482f31c4ff531e",
+        "clauses": [
+          {
+            "number": 1,
+            "status": "supported",
+            "evidence": [
+              "src/kb/access/identity.py",
+              "W:acceptance-matrix-current.json#A04"
+            ],
+            "note": "PyJWT verifies pinned algorithm, issuer/audience and claims; identity headers cannot replace the session."
+          },
+          {
+            "number": 2,
+            "status": "supported",
+            "evidence": [
+              "src/kb/http/auth_routes.py#require_session",
+              "tests/integration/identity/test_browser_flow.py"
+            ],
+            "note": "Cookie/header CSRF matching protects writes."
+          },
+          {
+            "number": 3,
+            "status": "supported",
+            "evidence": [
+              "W:C07-AUTHLIB/live.json",
+              "tests/integration/identity/test_keycloak_live.py#test_candidate_authlib_flow_exchanges_a_real_code_and_shares_only_pg_state"
+            ],
+            "note": "Real code exchange starts on A, completes on B, loads from A and rejects replay."
+          },
+          {
+            "number": 4,
+            "status": "supported",
+            "evidence": [
+              "src/kb/http/auth_flow.py#_redeem",
+              "W:C07-AUTHLIB/sol-fix2/verdict.json"
+            ],
+            "note": "Fixed refusal codes and suppressed provider exception chaining preserve secret-safe responses/logs."
+          }
+        ],
+        "named_artifacts": "Pinned Authlib performs OAuth URL/PKCE/code exchange; PyJWT performs token verification; PostgreSQL stores one-use state and durable sessions. Secret-free realm templates and restart/cross-gateway tests exist. Reviewed auth_flow content is retained in this candidate."
+      }
     },
     {
       "id": "C08",
@@ -143,11 +470,44 @@
       "depends_on": [
         "C07"
       ],
-      "implementation_status": "partial",
-      "card_acceptance": "not_accepted_as_complete_card",
-      "remaining": "API есть; UI пользователей/групп/grants отсутствует, приглашения передаются вручную.",
+      "implementation_status": "implemented",
+      "card_acceptance": "source_evidence_supported",
+      "remaining": "Исходные пункты подтверждены в пределах указанных доказательств; итоговый выпуск кандидата отдельный.",
       "running_task": null,
-      "file_leases": []
+      "file_leases": [],
+      "original_acceptance": {
+        "audited_sha": "da879608c707b3f99d312d6414482f31c4ff531e",
+        "clauses": [
+          {
+            "number": 1,
+            "status": "supported",
+            "evidence": [
+              "src/kb/runtime_identity.py#assert_active_membership",
+              "W:acceptance-matrix-current.json#A16"
+            ],
+            "note": "Product membership closes access independently of JWT expiry or provider logout success."
+          },
+          {
+            "number": 2,
+            "status": "supported",
+            "evidence": [
+              "src/kb/static/completion.js#mountAccess",
+              "W:S04/sol-review/verdict.json#A08"
+            ],
+            "note": "Rendered group removal explains the retained direct grant."
+          },
+          {
+            "number": 3,
+            "status": "supported",
+            "evidence": [
+              "tests/integration/members/test_admin_scope.py#test_an_admin_sees_no_row_of_a_private_library",
+              "src/kb/access/membership.py"
+            ],
+            "note": "Organization administration does not silently confer content grants."
+          }
+        ],
+        "named_artifacts": "Membership/invitation/group APIs and append-only policy journal exist. Deactivation commits PostgreSQL denial before provider revocation; invitation UI records an operator task without sending mail."
+      }
     },
     {
       "id": "C09",
@@ -159,10 +519,43 @@
         "C06"
       ],
       "implementation_status": "implemented",
-      "card_acceptance": "not_accepted_as_complete_card",
-      "remaining": "Функция есть в пилоте; отдельная полная card acceptance не приписывается автоматически.",
+      "card_acceptance": "source_evidence_supported",
+      "remaining": "Исходные пункты подтверждены в пределах указанных доказательств; итоговый выпуск кандидата отдельный.",
       "running_task": null,
-      "file_leases": []
+      "file_leases": [],
+      "original_acceptance": {
+        "audited_sha": "da879608c707b3f99d312d6414482f31c4ff531e",
+        "clauses": [
+          {
+            "number": 1,
+            "status": "supported",
+            "evidence": [
+              "src/kb/catalog/libraries.py",
+              "tests/integration/libraries/test_libraries_api.py#test_kind_and_audience_are_independent_axes"
+            ],
+            "note": "Core kind, optional type binding and audience remain independent."
+          },
+          {
+            "number": 2,
+            "status": "supported",
+            "evidence": [
+              "src/kb/catalog/libraries.py#list_libraries",
+              "tests/integration/libraries/test_libraries_api.py#test_counts_and_pages_describe_only_what_the_caller_may_see"
+            ],
+            "note": "Counts and pages use the same authorized SQL scope."
+          },
+          {
+            "number": 3,
+            "status": "supported",
+            "evidence": [
+              "src/kb/catalog/projects.py#project_context",
+              "tests/integration/libraries/test_project_context.py#test_a_required_unavailable_library_makes_the_context_incomplete"
+            ],
+            "note": "Mandatory inaccessible links yield blocked/incomplete context."
+          }
+        ],
+        "named_artifacts": "Library/type/project APIs, exact rule pins, server filtering and redacted manifests exist. Project binding creates no grant."
+      }
     },
     {
       "id": "C10",
@@ -175,10 +568,52 @@
         "C09"
       ],
       "implementation_status": "implemented",
-      "card_acceptance": "not_accepted_as_complete_card",
-      "remaining": "Оригинал/metadata/dedup есть; полноценной замены издания/reingest нет.",
+      "card_acceptance": "source_evidence_supported",
+      "remaining": "Исходные пункты подтверждены в пределах указанных доказательств; итоговый выпуск кандидата отдельный.",
       "running_task": null,
-      "file_leases": []
+      "file_leases": [],
+      "original_acceptance": {
+        "audited_sha": "da879608c707b3f99d312d6414482f31c4ff531e",
+        "clauses": [
+          {
+            "number": 1,
+            "status": "supported",
+            "evidence": [
+              "src/kb/adapters/originals.py#LocalBlobStore.put",
+              "tests/integration/upload/test_interrupted_upload.py"
+            ],
+            "note": "Staging cleanup and atomic canonical registration prevent a readable partial source."
+          },
+          {
+            "number": 2,
+            "status": "supported",
+            "evidence": [
+              "src/kb/catalog/upload.py#_commit",
+              "W:acceptance-matrix-current.json#A20"
+            ],
+            "note": "Deduplication is restricted to the authorized library."
+          },
+          {
+            "number": 3,
+            "status": "supported",
+            "evidence": [
+              "src/kb/catalog/upload.py#open_original",
+              "tests/runtime/test_revoked_export_links.py"
+            ],
+            "note": "Each new original delivery rechecks current rights."
+          },
+          {
+            "number": 4,
+            "status": "supported",
+            "evidence": [
+              "src/kb/adapters/originals.py#LocalBlobStore",
+              "W:S04/sol-review/verdict.json"
+            ],
+            "note": "Accepted restart census preserves object hashes and canonical IDs."
+          }
+        ],
+        "named_artifacts": "Streaming immutable BlobStore, SHA-256 manifests, authorized original/Range delivery and source registration exist. Absolute storage paths are not API inputs."
+      }
     },
     {
       "id": "C11",
@@ -189,11 +624,53 @@
       "depends_on": [
         "C10"
       ],
-      "implementation_status": "partial",
-      "card_acceptance": "not_accepted_as_complete_card",
-      "remaining": "Текстовые PDF/EPUB есть; scans needs_ocr, OCR отсутствует.",
+      "implementation_status": "implemented",
+      "card_acceptance": "source_evidence_supported",
+      "remaining": "Исходные пункты подтверждены в пределах указанных доказательств; итоговый выпуск кандидата отдельный.",
       "running_task": null,
-      "file_leases": []
+      "file_leases": [],
+      "original_acceptance": {
+        "audited_sha": "da879608c707b3f99d312d6414482f31c4ff531e",
+        "clauses": [
+          {
+            "number": 1,
+            "status": "supported",
+            "evidence": [
+              "src/kb/catalog/content.py#read_source",
+              "W:C28/browser-fixture/pdf-locators.json"
+            ],
+            "note": "Canonical fragment targeting preserves actual file-page locations."
+          },
+          {
+            "number": 2,
+            "status": "supported",
+            "evidence": [
+              "src/kb/document_parser.py#parse_document",
+              "tests/runtime/test_parser_provenance.py#test_epub_repeated_heading_preserves_distinct_spine_items"
+            ],
+            "note": "EPUB keeps spine/chapter/paragraph and null pages."
+          },
+          {
+            "number": 3,
+            "status": "supported",
+            "evidence": [
+              "src/kb/document_parser.py#NeedsOCR",
+              "src/kb/jobs/ingestion.py#run_job"
+            ],
+            "note": "Empty scans, unsupported formats and parser failures produce visible processing states/errors."
+          },
+          {
+            "number": 4,
+            "status": "supported",
+            "evidence": [
+              "scripts/bootstrap.py",
+              "W:S04/sol-review/verdict.json"
+            ],
+            "note": "Fixtures are disposable; bootstrap inserts no demonstration content."
+          }
+        ],
+        "named_artifacts": "Normalized fragments preserve PDF page/printed-label distinctions and EPUB structure with installed parser provenance. Full OCR remains outside scope."
+      }
     },
     {
       "id": "C12A",
@@ -205,10 +682,52 @@
         "C10"
       ],
       "implementation_status": "implemented",
-      "card_acceptance": "not_accepted_as_complete_card",
-      "remaining": "Функция есть в пилоте; отдельная полная card acceptance не приписывается автоматически.",
+      "card_acceptance": "source_evidence_supported",
+      "remaining": "Исходные пункты подтверждены в пределах указанных доказательств; итоговый выпуск кандидата отдельный.",
       "running_task": null,
-      "file_leases": []
+      "file_leases": [],
+      "original_acceptance": {
+        "audited_sha": "da879608c707b3f99d312d6414482f31c4ff531e",
+        "clauses": [
+          {
+            "number": 1,
+            "status": "supported",
+            "evidence": [
+              "src/kb/document_parser.py#_docx_is_heading",
+              "tests/runtime/test_parser_provenance.py#test_docx_heading_inheritance_and_cell_addresses"
+            ],
+            "note": "Paragraphs, inherited heading styles and table/cell coordinates survive parsing."
+          },
+          {
+            "number": 2,
+            "status": "supported",
+            "evidence": [
+              "src/kb/document_parser.py#parse_document",
+              "tests/runtime/test_final_locator.py#test_docx_cell_survives_rule_and_project_manifest"
+            ],
+            "note": "DOCX pages remain null through rule/project readback."
+          },
+          {
+            "number": 3,
+            "status": "supported",
+            "evidence": [
+              "src/kb/document_parser.py#parse_document",
+              "tests/runtime/test_runtime.py#test_docx_table_locations_and_archive_rejection"
+            ],
+            "note": "File size, archive expansion, entry count and path limits are enforced."
+          },
+          {
+            "number": 4,
+            "status": "supported",
+            "evidence": [
+              "docs/decisions/parser-provenance.md",
+              "requirements.lock#python-docx"
+            ],
+            "note": "python-docx version and MIT license are recorded."
+          }
+        ],
+        "named_artifacts": "DOCX fragments and real PostgreSQL locator round-trip fixtures exist. No guessed page numbers or mandatory PDF conversion were introduced."
+      }
     },
     {
       "id": "C12B",
@@ -219,11 +738,53 @@
       "depends_on": [
         "C10"
       ],
-      "implementation_status": "implemented",
-      "card_acceptance": "not_accepted_as_complete_card",
-      "remaining": "Функция есть в пилоте; отдельная полная card acceptance не приписывается автоматически.",
-      "running_task": null,
-      "file_leases": []
+      "implementation_status": "partial",
+      "card_acceptance": "changes_required",
+      "remaining": "Connected address is checked too late.; Refetched content is not linked as a new logical source version.",
+      "running_task": "URL-PINNING (focusedpassed; internalMiniMax/Solpending); C12Blinkedversionhistoryseparate",
+      "file_leases": [],
+      "original_acceptance": {
+        "audited_sha": "da879608c707b3f99d312d6414482f31c4ff531e",
+        "clauses": [
+          {
+            "number": 1,
+            "status": "supported",
+            "evidence": [
+              "tests/integration/upload/test_url_ingestion.py",
+              "W:acceptance-matrix-current.json#A14"
+            ],
+            "note": "The accepted controlled-fixture A14 scope is preserved; it does not prove pre-request connection pinning."
+          },
+          {
+            "number": 2,
+            "status": "needs_work",
+            "evidence": [
+              "src/kb/catalog/upload_fetch.py#fetch_url",
+              "tests/integration/upload/test_url_stream.py#test_refusal_closes_without_reading_body"
+            ],
+            "note": "Peer validation occurs after GET is sent; a changed DNS answer can reach an internal service before refusal."
+          },
+          {
+            "number": 3,
+            "status": "needs_work",
+            "evidence": [
+              "src/kb/catalog/upload.py#_commit",
+              "src/kb/catalog/upload.py#submit_url"
+            ],
+            "note": "Changed bytes create an unrelated source with version 1; successive URL snapshots lack linked version history."
+          },
+          {
+            "number": 4,
+            "status": "supported",
+            "evidence": [
+              "src/kb/catalog/upload_fetch.py#parse_url",
+              "src/kb/adapters/originals.py#_resolve_in_root"
+            ],
+            "note": "URL schemes and object keys cannot select arbitrary server files."
+          }
+        ],
+        "named_artifacts": "URL ingest, retrieved_at, immutable raw snapshot and BeautifulSoup extractor provenance exist. Safe pre-request rebinding handling and understandable logical URL versions remain incomplete."
+      }
     },
     {
       "id": "C13",
@@ -236,10 +797,52 @@
         "C10"
       ],
       "implementation_status": "implemented",
-      "card_acceptance": "not_accepted_as_complete_card",
-      "remaining": "Функция есть в пилоте; отдельная полная card acceptance не приписывается автоматически.",
+      "card_acceptance": "source_evidence_supported",
+      "remaining": "Исходные пункты подтверждены в пределах указанных доказательств; итоговый выпуск кандидата отдельный.",
       "running_task": null,
-      "file_leases": []
+      "file_leases": [],
+      "original_acceptance": {
+        "audited_sha": "da879608c707b3f99d312d6414482f31c4ff531e",
+        "clauses": [
+          {
+            "number": 1,
+            "status": "supported",
+            "evidence": [
+              "src/kb/jobs/ingestion.py#run_job",
+              "tests/runtime/test_ingestion_fencing.py#test_expired_attempt_cannot_persist_or_overwrite_completed_replacement"
+            ],
+            "note": "Immutable originals, checkpoints and fenced attempts preserve completed work across retries/replacement."
+          },
+          {
+            "number": 2,
+            "status": "supported",
+            "evidence": [
+              "src/kb/jobs/ingestion.py#_claim_job",
+              "tests/runtime/test_ingestion_fencing.py#test_done_and_invalid_identity_redeliveries_do_not_mutate"
+            ],
+            "note": "Queue identity must match canonical submitted_by and current admission."
+          },
+          {
+            "number": 3,
+            "status": "supported",
+            "evidence": [
+              "src/kb/jobs/provider_admission.py#call_provider",
+              "src/kb/jobs/ingestion.py#run_job"
+            ],
+            "note": "Busy admission exits the attempt and schedules bounded retry; it does not hold a CPU slot while waiting."
+          },
+          {
+            "number": 4,
+            "status": "supported",
+            "evidence": [
+              "src/kb/catalog/content.py#search_knowledge",
+              "src/kb/retrieval/semantic_search.py#search"
+            ],
+            "note": "Reads use their own short SQL phases and do not await the ingestion queue."
+          }
+        ],
+        "named_artifacts": "Procrastinate worker, atomic same-connection enqueue, canonical jobs, chunk checkpoints and bounded retries exist. Parse/extract and independent embedding/index/maintenance services implement the stages without a new orchestration layer."
+      }
     },
     {
       "id": "C14",
@@ -251,11 +854,53 @@
       "depends_on": [
         "C13"
       ],
-      "implementation_status": "implemented_review_pending",
-      "card_acceptance": "not_accepted_as_complete_card",
-      "remaining": "Кандидат 2026-10-19: общий PostgreSQL provider admission, actor3/org10, fencing; focused проверки пройдены. Нужны отдельное MiniMax review, Sol6.1 и release gate.",
-      "running_task": "C14-20261019",
-      "file_leases": []
+      "implementation_status": "implemented",
+      "card_acceptance": "source_evidence_supported",
+      "remaining": "Исходные пункты подтверждены в пределах указанных доказательств; итоговый выпуск кандидата отдельный.",
+      "running_task": null,
+      "file_leases": [],
+      "original_acceptance": {
+        "audited_sha": "da879608c707b3f99d312d6414482f31c4ff531e",
+        "clauses": [
+          {
+            "number": 1,
+            "status": "supported",
+            "evidence": [
+              "src/kb/jobs/ingestion.py#_fence_attempt",
+              "tests/runtime/test_ingestion_fencing.py#test_expired_attempt_cannot_persist_or_overwrite_completed_replacement"
+            ],
+            "note": "A stale attempt cannot overwrite the replacement result."
+          },
+          {
+            "number": 2,
+            "status": "supported",
+            "evidence": [
+              "src/kb/jobs/provider_admission.py",
+              "tests/runtime/test_final_admission.py#test_research_counts_ingestion_and_keeps_duplicate_replay_at_actor_limit"
+            ],
+            "note": "Durable operation keys and shared actor/org admission prevent repeated quota effects."
+          },
+          {
+            "number": 3,
+            "status": "supported",
+            "evidence": [
+              "src/kb/jobs/ingestion.py#_fence_attempt",
+              "tests/runtime/test_ingestion_fencing.py#test_authority_revoked_during_provider_prevents_late_persistence"
+            ],
+            "note": "Policy/membership/source revocation blocks late persistence."
+          },
+          {
+            "number": 4,
+            "status": "supported",
+            "evidence": [
+              "src/kb/jobs/provider_admission.py#ProviderReviewRequired",
+              "tests/runtime/test_provider_admission.py#test_worker_loss_preserves_barrier_and_replay_needs_explicit_resolution"
+            ],
+            "note": "Unknown provider outcomes require review; external exactly-once delivery is not promised."
+          }
+        ],
+        "named_artifacts": "One provider-account slot, real multiprocess PostgreSQL admission, actor/org caps and conditional publication exist. Controlled-provider tests are explicitly synthetic."
+      }
     },
     {
       "id": "C15",
@@ -268,10 +913,52 @@
         "C09"
       ],
       "implementation_status": "implemented",
-      "card_acceptance": "not_accepted_as_complete_card",
-      "remaining": "Функция есть в пилоте; отдельная полная card acceptance не приписывается автоматически.",
+      "card_acceptance": "source_evidence_supported",
+      "remaining": "Исходные пункты подтверждены в пределах указанных доказательств; итоговый выпуск кандидата отдельный.",
       "running_task": null,
-      "file_leases": []
+      "file_leases": [],
+      "original_acceptance": {
+        "audited_sha": "da879608c707b3f99d312d6414482f31c4ff531e",
+        "clauses": [
+          {
+            "number": 1,
+            "status": "supported",
+            "evidence": [
+              "tests/integration/provisioning/test_boundaries.py#test_the_gateway_cannot_create_an_account_even_as_a_manager",
+              "src/kb/retrieval/provisioning.py"
+            ],
+            "note": "Account creation belongs to the separately authorized provisioner."
+          },
+          {
+            "number": 2,
+            "status": "supported",
+            "evidence": [
+              "deploy/maintenance/pkb-provision-index.container",
+              "deploy/quadlet/pkb-gateway.container"
+            ],
+            "note": "No container-runtime socket is mounted."
+          },
+          {
+            "number": 3,
+            "status": "supported",
+            "evidence": [
+              "tests/integration/provisioning/test_provisioning_resume.py#test_a_run_interrupted_at_the_acl_resumes_and_does_not_reissue_keys",
+              "src/kb/adapters/secrets.py"
+            ],
+            "note": "Step journals and private references support resumption without exposing key values."
+          },
+          {
+            "number": 4,
+            "status": "supported",
+            "evidence": [
+              "src/kb/retrieval/openviking_admin.py#_verify",
+              "I:sol-runtime/native-result.json"
+            ],
+            "note": "Restricted ACL verification requires exactly read/write service identities; native read-key copy is refused."
+          }
+        ],
+        "named_artifacts": "One-shot provisioning contract, PostgreSQL mapping and private runtime secret references exist. Root credentials are confined to provisioning, outside normal gateway/worker mounts."
+      }
     },
     {
       "id": "C16",
@@ -288,10 +975,52 @@
         "C15"
       ],
       "implementation_status": "implemented",
-      "card_acceptance": "not_accepted_as_complete_card",
-      "remaining": "Индексируются только опубликованные знания; semantic rules/experience не заявляются.",
+      "card_acceptance": "source_evidence_supported",
+      "remaining": "Исходные пункты подтверждены в пределах указанных доказательств; итоговый выпуск кандидата отдельный.",
       "running_task": null,
-      "file_leases": []
+      "file_leases": [],
+      "original_acceptance": {
+        "audited_sha": "da879608c707b3f99d312d6414482f31c4ff531e",
+        "clauses": [
+          {
+            "number": 1,
+            "status": "supported",
+            "evidence": [
+              "src/kb/retrieval/semantic_search.py#_finish",
+              "W:acceptance-matrix-current.json#A11"
+            ],
+            "note": "Fresh canonical publication, dependency, revision and manifest checks reject stale semantic content."
+          },
+          {
+            "number": 2,
+            "status": "supported",
+            "evidence": [
+              "src/kb/jobs/indexer.py#reindex",
+              "I:sol-runtime/native-result.json"
+            ],
+            "note": "Unchanged document vectors use native copy; metadata/query embeddings can still occur. Writer/profile and copy logic were compared with the accepted source; later rebuild/routing deltas are explicit."
+          },
+          {
+            "number": 3,
+            "status": "supported",
+            "evidence": [
+              "src/kb/retrieval/semantic_registry.py",
+              "W:acceptance-matrix-current.json#A02"
+            ],
+            "note": "Account/profile/generation routing is server-resolved, not caller-selected."
+          },
+          {
+            "number": 4,
+            "status": "supported",
+            "evidence": [
+              "src/kb/jobs/indexer.py#reindex",
+              "I:sol-runtime/native-execution.json"
+            ],
+            "note": "The installation-wide advisory writer lock and one existing OpenViking are retained."
+          }
+        ],
+        "named_artifacts": "Incremental adapter, profile-bound active manifest and verified native-copy receipt exist. This supports the original function without converting historical receipts into a claim of a newly executed provider check."
+      }
     },
     {
       "id": "C17",
@@ -303,10 +1032,52 @@
         "C16"
       ],
       "implementation_status": "partial",
-      "card_acceptance": "not_accepted_as_complete_card",
-      "remaining": "Semantic и PostgreSQL FTS есть; unified RRF fusion отсутствует.",
+      "card_acceptance": "changes_required",
+      "remaining": "No search continuation beyond limit.; Missing project/type search behavior and mandatory-project-context reporting.",
       "running_task": null,
-      "file_leases": []
+      "file_leases": [],
+      "original_acceptance": {
+        "audited_sha": "da879608c707b3f99d312d6414482f31c4ff531e",
+        "clauses": [
+          {
+            "number": 1,
+            "status": "supported",
+            "evidence": [
+              "src/kb/retrieval/semantic_search.py#_finish",
+              "W:acceptance-matrix-current.json#A01"
+            ],
+            "note": "Only authorized canonical content reaches snippets and provenance."
+          },
+          {
+            "number": 2,
+            "status": "needs_work",
+            "evidence": [
+              "src/kb/http/content.py#search",
+              "src/kb/catalog/projects.py#project_context"
+            ],
+            "note": "Project context reports blocked dependencies, but search neither accepts/resolves project context nor reports its mandatory missing libraries."
+          },
+          {
+            "number": 3,
+            "status": "supported",
+            "evidence": [
+              "src/kb/catalog/content.py#search_knowledge",
+              "tests/integration/provisioning/test_search_no_generation.py"
+            ],
+            "note": "Search has no model-runner dependency."
+          },
+          {
+            "number": 4,
+            "status": "supported",
+            "evidence": [
+              "src/kb/retrieval/semantic_search.py",
+              "src/kb/mcp/server.py#search_knowledge"
+            ],
+            "note": "Generative retrieval is explicitly refused; ordinary search only performs retrieval/embeddings."
+          }
+        ],
+        "named_artifacts": "Canonical evidence refs, PostgreSQL FTS and actual RRF exist. The named paginated Search API is only top-N: there is no offset/cursor. Library/source IDs are available, but project/type filters are not implemented as search semantics."
+      }
     },
     {
       "id": "C18",
@@ -320,11 +1091,53 @@
         "C12A",
         "C12B"
       ],
-      "implementation_status": "partial",
-      "card_acceptance": "not_accepted_as_complete_card",
-      "remaining": "Свой MiniMax extraction prompt; upstream book-to-skill не интегрирован.",
+      "implementation_status": "implemented",
+      "card_acceptance": "source_evidence_supported",
+      "remaining": "Исходные пункты подтверждены в пределах указанных доказательств; итоговый выпуск кандидата отдельный.",
       "running_task": null,
-      "file_leases": []
+      "file_leases": [],
+      "original_acceptance": {
+        "audited_sha": "da879608c707b3f99d312d6414482f31c4ff531e",
+        "clauses": [
+          {
+            "number": 1,
+            "status": "supported",
+            "evidence": [
+              "src/kb/jobs/model_runner.py#_strict_json_loads",
+              "tests/runtime/test_runtime.py#test_model_strict_output_and_real_cli_envelope"
+            ],
+            "note": "Strict schema and end_turn checks reject malformed/truncated output."
+          },
+          {
+            "number": 2,
+            "status": "supported",
+            "evidence": [
+              "src/kb/jobs/model_runner.py#_parse_draft",
+              "src/kb/jobs/ingestion.py#run_job"
+            ],
+            "note": "Fragment allowlists are checked at runner and persistence boundaries."
+          },
+          {
+            "number": 3,
+            "status": "supported",
+            "evidence": [
+              "src/kb/jobs/ingestion.py#_save_draft",
+              "src/kb/jobs/model_runner.py#RuleDraft"
+            ],
+            "note": "Generated rules require source fragment references and enter the draft lifecycle."
+          },
+          {
+            "number": 4,
+            "status": "supported",
+            "evidence": [
+              "src/kb/vendor/book_to_skill/UPSTREAM.json",
+              "src/kb/catalog/content.py#export_skill"
+            ],
+            "note": "Pinned MIT upstream validator is actually called; extracted code is never installed."
+          }
+        ],
+        "named_artifacts": "Version-controlled prompt/schema, chapter/spine/heading chunking, provenance allowlists and synthetic fixtures exist. Reuse is the pinned book-to-skill validator plus compatible extraction approaches, not a claim of importing the entire upstream pipeline."
+      }
     },
     {
       "id": "C19",
@@ -337,10 +1150,52 @@
         "C18"
       ],
       "implementation_status": "implemented",
-      "card_acceptance": "not_accepted_as_complete_card",
-      "remaining": "Функция есть в пилоте; отдельная полная card acceptance не приписывается автоматически.",
+      "card_acceptance": "source_evidence_supported",
+      "remaining": "Исходные пункты подтверждены в пределах указанных доказательств; итоговый выпуск кандидата отдельный.",
       "running_task": null,
-      "file_leases": []
+      "file_leases": [],
+      "original_acceptance": {
+        "audited_sha": "da879608c707b3f99d312d6414482f31c4ff531e",
+        "clauses": [
+          {
+            "number": 1,
+            "status": "supported",
+            "evidence": [
+              "src/kb/jobs/model_runner.py#_text_from_provider_output",
+              "tests/runtime/test_runtime.py#test_model_strict_output_and_real_cli_envelope"
+            ],
+            "note": "Exit zero alone is insufficient; configured model, nonempty text and end_turn are required."
+          },
+          {
+            "number": 2,
+            "status": "supported",
+            "evidence": [
+              "src/kb/jobs/model_runner.py#_strict_json_loads",
+              "src/kb/jobs/model_runner.py#_parse_draft"
+            ],
+            "note": "Nonfinite numbers, duplicate keys, schema violations and foreign references are refused."
+          },
+          {
+            "number": 3,
+            "status": "supported",
+            "evidence": [
+              "src/kb/jobs/model_runner.py#_run_cli",
+              "src/kb/catalog/upload_data.py#as_data_payload"
+            ],
+            "note": "Configured argv and framed source data cannot select a shell command or provider URL."
+          },
+          {
+            "number": 4,
+            "status": "supported",
+            "evidence": [
+              "src/kb/jobs/ingestion.py#_fence_attempt",
+              "tests/runtime/test_ingestion_fencing.py#test_authority_revoked_during_provider_prevents_late_persistence"
+            ],
+            "note": "Canonical policy is rechecked before late output is persisted."
+          }
+        ],
+        "named_artifacts": "Runner protocol, strict envelopes, bounded subprocess capture and development doubles exist. Canonical job authorization is performed by the trusted worker; the isolated runner does not independently query PostgreSQL. This is the existing composite boundary, not a new job-authority layer."
+      }
     },
     {
       "id": "C20",
@@ -352,11 +1207,53 @@
       "depends_on": [
         "C19"
       ],
-      "implementation_status": "implemented",
-      "card_acceptance": "not_accepted_as_complete_card",
-      "remaining": "Функция есть в пилоте; отдельная полная card acceptance не приписывается автоматически.",
+      "implementation_status": "partial",
+      "card_acceptance": "changes_required",
+      "remaining": "Authorization-unavailable state is incorrectly finalized as processing failure.; Thinking, subscription-only route and one-fragment real product execution remain unverified within the permitted evidence.",
       "running_task": null,
-      "file_leases": []
+      "file_leases": [],
+      "original_acceptance": {
+        "audited_sha": "da879608c707b3f99d312d6414482f31c4ff531e",
+        "clauses": [
+          {
+            "number": 1,
+            "status": "unverified",
+            "evidence": [
+              "src/kb/jobs/model_runner.py#_run_cli",
+              "src/kb/jobs/model_runner.py#_text_from_provider_output"
+            ],
+            "note": "The model is fixed, but ordinary extraction uses the nonstream path, which does not require thinking proof. No permitted accepted product-call receipt closes this."
+          },
+          {
+            "number": 2,
+            "status": "unverified",
+            "evidence": [
+              "src/kb/jobs/model_runner.py#_DEFAULT_LAUNCHER",
+              "deploy/quadlet/pkb-model-runner.container"
+            ],
+            "note": "The guarded subscription launcher is referenced, but its executable and a corresponding accepted product-route proof are outside the inspected evidence."
+          },
+          {
+            "number": 3,
+            "status": "needs_work",
+            "evidence": [
+              "src/kb/jobs/model_runner.py#generate",
+              "src/kb/jobs/ingestion.py#run_job"
+            ],
+            "note": "Unavailable/auth-failed launcher output becomes invalid_model_output and failed processing rather than paused generation; retrieval remains independent."
+          },
+          {
+            "number": 4,
+            "status": "unverified",
+            "evidence": [
+              "tests/runtime/test_runtime.py#test_model_strict_output_and_real_cli_envelope",
+              "W:FINAL-WAVE/native-readback.json"
+            ],
+            "note": "Envelope fixtures and native retrieval do not prove a completed one-fragment product generation over the authorized subscription route."
+          }
+        ],
+        "named_artifacts": "Configurable CLI adapter and private launcher mount exist. The requested verified/pending product-runner receipt is not established by coding-session entitlement or retrieval receipts."
+      }
     },
     {
       "id": "C21",
@@ -370,11 +1267,53 @@
         "C18",
         "C19"
       ],
-      "implementation_status": "partial",
-      "card_acceptance": "not_accepted_as_complete_card",
-      "remaining": "Draft/publication есть; редактирование knowledge, reject, batch-review и conflict workflow неполны.",
+      "implementation_status": "implemented",
+      "card_acceptance": "source_evidence_supported",
+      "remaining": "Исходные пункты подтверждены в пределах указанных доказательств; итоговый выпуск кандидата отдельный.",
       "running_task": null,
-      "file_leases": []
+      "file_leases": [],
+      "original_acceptance": {
+        "audited_sha": "da879608c707b3f99d312d6414482f31c4ff531e",
+        "clauses": [
+          {
+            "number": 1,
+            "status": "supported",
+            "evidence": [
+              "src/kb/catalog/workspace.py#review_batch",
+              "tests/runtime/test_workspace_completion.py#test_contributor_cannot_batch_publish_their_own_draft"
+            ],
+            "note": "Publishing requires curator authority; contributor ownership is insufficient."
+          },
+          {
+            "number": 2,
+            "status": "supported",
+            "evidence": [
+              "src/kb/catalog/writes.py#create_rule",
+              "tests/runtime/test_workspace_completion.py#test_batch_rejection_rolls_back_an_earlier_valid_publication"
+            ],
+            "note": "Evidence must be visible within the same authorized scope; mixed batches roll back atomically."
+          },
+          {
+            "number": 3,
+            "status": "supported",
+            "evidence": [
+              "src/kb/catalog/workspace.py#review_batch",
+              "tests/runtime/test_workspace_completion.py#test_batch_rejection_rolls_back_an_earlier_valid_publication"
+            ],
+            "note": "Repeated desired-state decisions have one effect."
+          },
+          {
+            "number": 4,
+            "status": "supported",
+            "evidence": [
+              "src/kb/jobs/ingestion.py#run_job",
+              "tests/runtime/test_ingestion_fencing.py"
+            ],
+            "note": "Invalid/error output cannot become published guidance."
+          }
+        ],
+        "named_artifacts": "Draft/review/published lifecycle, evidence inheritance, atomic batch review and existing index scheduling are implemented. Source assertions retain verification state rather than becoming established facts."
+      }
     },
     {
       "id": "C22",
@@ -387,11 +1326,44 @@
         "C09",
         "C21"
       ],
-      "implementation_status": "partial",
-      "card_acceptance": "not_accepted_as_complete_card",
-      "remaining": "Pins/required links есть; автоматический brand manifest неполон.",
+      "implementation_status": "implemented",
+      "card_acceptance": "source_evidence_supported",
+      "remaining": "Исходные пункты подтверждены в пределах указанных доказательств; итоговый выпуск кандидата отдельный.",
       "running_task": null,
-      "file_leases": []
+      "file_leases": [],
+      "original_acceptance": {
+        "audited_sha": "da879608c707b3f99d312d6414482f31c4ff531e",
+        "clauses": [
+          {
+            "number": 1,
+            "status": "supported",
+            "evidence": [
+              "src/kb/catalog/writes.py#create_rule",
+              "tests/runtime/test_final_project_manifest.py#test_conflicting_exact_pins_do_not_rewrite_original_use"
+            ],
+            "note": "Lineage/new versions preserve historical uses and pins."
+          },
+          {
+            "number": 2,
+            "status": "supported",
+            "evidence": [
+              "src/kb/catalog/projects.py#project_context",
+              "tests/runtime/test_final_project_manifest.py#test_project_roles_never_reveal_revoked_brand_pin"
+            ],
+            "note": "Revoked mandatory pins block completeness and redact hidden identities/content."
+          },
+          {
+            "number": 3,
+            "status": "supported",
+            "evidence": [
+              "src/kb/catalog/projects.py#ProjectContext",
+              "tests/runtime/test_final_project_manifest.py#test_manifest_preserves_complete_ordered_pinned_context"
+            ],
+            "note": "Brand/project/general layers retain dependencies, exact versions and deterministic hashes."
+          }
+        ],
+        "named_artifacts": "Immutable rule lineage/history and reproducible project manifests exist. Supersession uses lineage plus immutable version rows rather than a separately named supersedes field; priorities and conflicts are explicit."
+      }
     },
     {
       "id": "C23",
@@ -402,11 +1374,53 @@
       "depends_on": [
         "C22"
       ],
-      "implementation_status": "partial",
-      "card_acceptance": "not_accepted_as_complete_card",
-      "remaining": "Explicit exact-rule use/outcome и manual rating есть; автооценка каждого read и агрегаты отсутствуют.",
+      "implementation_status": "implemented",
+      "card_acceptance": "source_evidence_supported",
+      "remaining": "Исходные пункты подтверждены в пределах указанных доказательств; итоговый выпуск кандидата отдельный.",
       "running_task": null,
-      "file_leases": []
+      "file_leases": [],
+      "original_acceptance": {
+        "audited_sha": "da879608c707b3f99d312d6414482f31c4ff531e",
+        "clauses": [
+          {
+            "number": 1,
+            "status": "supported",
+            "evidence": [
+              "src/kb/catalog/workspace.py#experience_summary",
+              "W:acceptance-matrix-current.json#A09"
+            ],
+            "note": "Private experience, model inputs, cached candidates and aggregates remain principal-scoped."
+          },
+          {
+            "number": 2,
+            "status": "supported",
+            "evidence": [
+              "src/kb/catalog/writes.py#start_use",
+              "W:acceptance-matrix-current.json#A18"
+            ],
+            "note": "Idempotency keys bind the complete event payload."
+          },
+          {
+            "number": 3,
+            "status": "supported",
+            "evidence": [
+              "src/kb/catalog/writes.py#record_outcome",
+              "tests/runtime/test_experience_idempotency.py"
+            ],
+            "note": "Only the authenticated use owner can append an assessment."
+          },
+          {
+            "number": 4,
+            "status": "supported",
+            "evidence": [
+              "src/kb/contracts/mcp_tools.py#RecordOutcomeArgs",
+              "tests/runtime/test_final_experience.py"
+            ],
+            "note": "Agent/human/measurement assessor kinds and unknown achievement remain distinct."
+          }
+        ],
+        "named_artifacts": "Experience API, append-only corrections, retrieval audit and explicit project/experience publication exist. Success criteria are represented by expected_result plus rule verification; no separate structured success-criteria schema is claimed."
+      }
     },
     {
       "id": "C24",
@@ -417,11 +1431,53 @@
       "depends_on": [
         "C22"
       ],
-      "implementation_status": "implemented",
-      "card_acceptance": "not_accepted_as_complete_card",
-      "remaining": "Функция есть в пилоте; отдельная полная card acceptance не приписывается автоматически.",
-      "running_task": null,
-      "file_leases": []
+      "implementation_status": "partial",
+      "card_acceptance": "changes_required",
+      "remaining": "Named archive output is not delivered, and no explicit accepted equivalence covers the substitution.",
+      "running_task": "SKILL-ARCHIVE MiniMaxauthor",
+      "file_leases": [],
+      "original_acceptance": {
+        "audited_sha": "da879608c707b3f99d312d6414482f31c4ff531e",
+        "clauses": [
+          {
+            "number": 1,
+            "status": "supported",
+            "evidence": [
+              "src/kb/http/content.py#export",
+              "src/kb/static/app.js#downloadBlob"
+            ],
+            "note": "Artifact bytes are returned after authorization; only a short-lived local browser object URL is created."
+          },
+          {
+            "number": 2,
+            "status": "supported",
+            "evidence": [
+              "src/kb/catalog/content.py#export_skill",
+              "tests/runtime/test_revoked_export_links.py"
+            ],
+            "note": "Repeated export requests after source withdrawal or grant revocation are denied."
+          },
+          {
+            "number": 3,
+            "status": "supported",
+            "evidence": [
+              "tests/runtime/test_revoked_export_links.py",
+              "src/kb/http/content.py#export"
+            ],
+            "note": "Already delivered copies are explicitly outside revocation; no remote deletion is promised."
+          },
+          {
+            "number": 4,
+            "status": "supported",
+            "evidence": [
+              "src/kb/catalog/content.py#_build_skill_markdown",
+              "tests/runtime/test_runtime.py#test_metadata_patch_and_export_inert_provenance"
+            ],
+            "note": "Fixed artifact filename, escaped provenance and no installation/execution path preserve inertness."
+          }
+        ],
+        "named_artifacts": "SKILL.md, exact-rule/source manifest and checksums exist in the JSON response. The requested versioned archive is absent; the UI discards the manifest when downloading only SKILL.md."
+      }
     },
     {
       "id": "C25",
@@ -434,11 +1490,53 @@
         "C17",
         "C22"
       ],
-      "implementation_status": "partial",
-      "card_acceptance": "not_accepted_as_complete_card",
-      "remaining": "Native Codex принят; native MiniMax Cloud и второй device не приняты.",
+      "implementation_status": "implemented",
+      "card_acceptance": "source_evidence_supported",
+      "remaining": "Исходные пункты подтверждены в пределах указанных доказательств; итоговый выпуск кандидата отдельный.",
       "running_task": null,
-      "file_leases": []
+      "file_leases": [],
+      "original_acceptance": {
+        "audited_sha": "da879608c707b3f99d312d6414482f31c4ff531e",
+        "clauses": [
+          {
+            "number": 1,
+            "status": "supported",
+            "evidence": [
+              "src/kb/mcp/server.py",
+              "src/kb/http/content.py"
+            ],
+            "note": "Both transports invoke shared catalogue/domain operations under the same canonical policies."
+          },
+          {
+            "number": 2,
+            "status": "supported",
+            "evidence": [
+              "src/kb/access/identity.py#TokenVerifier",
+              "W:acceptance-matrix-current.json#A04"
+            ],
+            "note": "Foreign-service audience tokens are refused."
+          },
+          {
+            "number": 3,
+            "status": "supported",
+            "evidence": [
+              "src/kb/mcp/server.py#call",
+              "W:acceptance-matrix-current.json#S01"
+            ],
+            "note": "Per-call resolution avoids session identity sharing; S01's actual owner/service-client scope is retained."
+          },
+          {
+            "number": 4,
+            "status": "supported",
+            "evidence": [
+              "tests/unit/test_mcp_pagination_hints.py",
+              "src/kb/contracts/mcp_tools.py"
+            ],
+            "note": "Library/source pagination, bounded arguments and machine refusals exist. Missing search continuation is separately reported under C17."
+          }
+        ],
+        "named_artifacts": "All five original read tools use the official SDK and one /mcp endpoint. Compatibility/discovery fixtures exist; additive curator/research tools do not expose grant or organization administration."
+      }
     },
     {
       "id": "C26",
@@ -454,10 +1552,52 @@
         "C13"
       ],
       "implementation_status": "partial",
-      "card_acceptance": "not_accepted_as_complete_card",
-      "remaining": "10 MCP handlers есть; полная matrix/client/idempotency acceptance не завершена.",
-      "running_task": null,
-      "file_leases": []
+      "card_acceptance": "changes_required",
+      "remaining": "Inherited C12B pre-request DNS-rebinding gap; no separate MCP-only bypass was found.",
+      "running_task": "URL-PINNING (focusedpassed; internalMiniMax/Solpending); C12Blinkedversionhistoryseparate",
+      "file_leases": [],
+      "original_acceptance": {
+        "audited_sha": "da879608c707b3f99d312d6414482f31c4ff531e",
+        "clauses": [
+          {
+            "number": 1,
+            "status": "supported",
+            "evidence": [
+              "src/kb/mcp/server.py#start_use",
+              "W:acceptance-matrix-current.json#A18"
+            ],
+            "note": "Stable supplied idempotency keys preserve one event."
+          },
+          {
+            "number": 2,
+            "status": "supported",
+            "evidence": [
+              "src/kb/catalog/writes.py#job_status",
+              "tests/runtime/test_workspace_completion.py"
+            ],
+            "note": "Foreign jobs and mixed/foreign exports are refused under canonical policies."
+          },
+          {
+            "number": 3,
+            "status": "supported",
+            "evidence": [
+              "src/kb/mcp/server.py#submit_source",
+              "src/kb/catalog/upload.py#submit_url"
+            ],
+            "note": "MCP uses the same URL gate; this also inherits the C12B rebinding defect."
+          },
+          {
+            "number": 4,
+            "status": "supported",
+            "evidence": [
+              "src/kb/mcp/server.py#call",
+              "tests/unit/test_mcp_pagination_hints.py"
+            ],
+            "note": "Annotations are advisory; authenticated scope/grant checks still execute."
+          }
+        ],
+        "named_artifacts": "The remaining five tools, strict identity-free arguments, truthful annotations and negative tests exist. Safe URL submission is incomplete because its shared fetch dependency has the C12B defect."
+      }
     },
     {
       "id": "C27",
@@ -469,11 +1609,53 @@
         "C07",
         "C09"
       ],
-      "implementation_status": "partial",
-      "card_acceptance": "not_accepted_as_complete_card",
-      "remaining": "Функциональный static UI; planned React-admin/семь разделов отсутствуют.",
+      "implementation_status": "implemented",
+      "card_acceptance": "source_evidence_supported",
+      "remaining": "Исходные пункты подтверждены в пределах указанных доказательств; итоговый выпуск кандидата отдельный.",
       "running_task": null,
-      "file_leases": []
+      "file_leases": [],
+      "original_acceptance": {
+        "audited_sha": "da879608c707b3f99d312d6414482f31c4ff531e",
+        "clauses": [
+          {
+            "number": 1,
+            "status": "supported",
+            "evidence": [
+              "src/kb/static/index.html",
+              "requirements.json#owner_overrides"
+            ],
+            "note": "Owner-approved static Russian UI requires no paid RBAC framework."
+          },
+          {
+            "number": 2,
+            "status": "supported",
+            "evidence": [
+              "src/kb/static/app.js#pagedList",
+              "src/kb/http/content.py"
+            ],
+            "note": "Catalogue lists request bounded authorized server pages. Search's top-N limitation is separately recorded under C17."
+          },
+          {
+            "number": 3,
+            "status": "supported",
+            "evidence": [
+              "src/kb/static/index.html",
+              "W:S04/sol-review/verdict.json"
+            ],
+            "note": "Rendered empty-state creation and first upload are accepted."
+          },
+          {
+            "number": 4,
+            "status": "supported",
+            "evidence": [
+              "scripts/bootstrap.py",
+              "tests/runtime/test_clean_bootstrap.py"
+            ],
+            "note": "Production bootstrap contains no synthetic content seed."
+          }
+        ],
+        "named_artifacts": "Static Russian responsive frontend, all seven functional areas, browser entry and gateway packaging replace React-admin/build tooling under the explicit owner override. No React rewrite is required."
+      }
     },
     {
       "id": "C28",
@@ -487,11 +1669,53 @@
         "C21",
         "C27"
       ],
-      "implementation_status": "partial",
-      "card_acceptance": "not_accepted_as_complete_card",
-      "remaining": "Upload/fragment/read/publish есть; URL form/PDF.js/batch review отсутствуют.",
+      "implementation_status": "implemented",
+      "card_acceptance": "source_evidence_supported",
+      "remaining": "Исходные пункты подтверждены в пределах указанных доказательств; итоговый выпуск кандидата отдельный.",
       "running_task": null,
-      "file_leases": []
+      "file_leases": [],
+      "original_acceptance": {
+        "audited_sha": "da879608c707b3f99d312d6414482f31c4ff531e",
+        "clauses": [
+          {
+            "number": 1,
+            "status": "supported",
+            "evidence": [
+              "W:FINAL-WAVE/browser-evidence/c28-browser.json",
+              "W:C28/pdf-fixture.json"
+            ],
+            "note": "Actual UI upload used a synthetic two-page PDF, with no provider calls or production data mutation."
+          },
+          {
+            "number": 2,
+            "status": "supported",
+            "evidence": [
+              "src/kb/static/app.js#source viewer",
+              "W:C28/browser-fixture/pdf-locators.json"
+            ],
+            "note": "Actual page/fragment text and original hash are preserved; no PDF-canvas claim is made."
+          },
+          {
+            "number": 3,
+            "status": "supported",
+            "evidence": [
+              "src/kb/static/completion.js#mountJobs",
+              "src/kb/static/app.js#SOURCE_PROCESSING_LABELS"
+            ],
+            "note": "Partial/error status and retained source/original remain visible. The browser receipt does not exercise a real provider quota pause."
+          },
+          {
+            "number": 4,
+            "status": "supported",
+            "evidence": [
+              "src/kb/catalog/writes.py#update_metadata",
+              "W:FINAL-WAVE/browser-evidence/c28-browser.json"
+            ],
+            "note": "Initially unknown author/edition are explicitly edited and read back."
+          }
+        ],
+        "named_artifacts": "File/URL forms, progress/errors, fragment viewer, metadata edit and batch review implement the path. Browser proof covers actual upload/locators/metadata; the retained published-rule fixture is not presented as live LLM generation or UI-created rule evidence."
+      }
     },
     {
       "id": "C29",
@@ -507,10 +1731,43 @@
         "C27"
       ],
       "implementation_status": "partial",
-      "card_acceptance": "not_accepted_as_complete_card",
-      "remaining": "Минимальные library links есть; users/groups/grants/project pins screens отсутствуют.",
+      "card_acceptance": "changes_required",
+      "remaining": "Role-dependent access controls are incomplete.; Non-admin library managers cannot select other members through the existing direct-grant picker.",
       "running_task": null,
-      "file_leases": []
+      "file_leases": [],
+      "original_acceptance": {
+        "audited_sha": "da879608c707b3f99d312d6414482f31c4ff531e",
+        "clauses": [
+          {
+            "number": 1,
+            "status": "needs_work",
+            "evidence": [
+              "src/kb/static/completion.js#mountAccess",
+              "src/kb/access/membership.py#list_memberships"
+            ],
+            "note": "Library grant buttons are manager-guarded, but invitation/deactivation forms lack role gating. Non-admin managers also receive only their own membership as grant-recipient choices; server checks remain enforced."
+          },
+          {
+            "number": 2,
+            "status": "supported",
+            "evidence": [
+              "src/kb/static/project-context.js",
+              "tests/integration/libraries/test_project_context.py"
+            ],
+            "note": "Project bindings do not grant source-library access."
+          },
+          {
+            "number": 3,
+            "status": "supported",
+            "evidence": [
+              "src/kb/static/completion.js#mountAccess",
+              "W:S04/sol-review/verdict.json#A08"
+            ],
+            "note": "Accepted rendered group removal explains retained direct/group paths."
+          }
+        ],
+        "named_artifacts": "Type/library/project/access screens and product membership actions exist. The manager workflow is incomplete for a manager without organization-admin roster access, and unauthorized administrative forms are rendered."
+      }
     },
     {
       "id": "C30",
@@ -524,11 +1781,53 @@
         "C24",
         "C27"
       ],
-      "implementation_status": "partial",
-      "card_acceptance": "not_accepted_as_complete_card",
-      "remaining": "Ручные expectations/outcomes/export есть; аналитика и автоматический feedback неполны.",
+      "implementation_status": "implemented",
+      "card_acceptance": "source_evidence_supported",
+      "remaining": "Исходные пункты подтверждены в пределах указанных доказательств; итоговый выпуск кандидата отдельный.",
       "running_task": null,
-      "file_leases": []
+      "file_leases": [],
+      "original_acceptance": {
+        "audited_sha": "da879608c707b3f99d312d6414482f31c4ff531e",
+        "clauses": [
+          {
+            "number": 1,
+            "status": "supported",
+            "evidence": [
+              "src/kb/static/app.js#loadUses",
+              "tests/runtime/test_final_experience.py"
+            ],
+            "note": "Application and outcomes require explicit actions; retrieval creates no utility claim."
+          },
+          {
+            "number": 2,
+            "status": "supported",
+            "evidence": [
+              "migrations/0002_rls.sql#use_own",
+              "W:acceptance-matrix-current.json#A09"
+            ],
+            "note": "Another reader of the rule cannot see private experience."
+          },
+          {
+            "number": 3,
+            "status": "supported",
+            "evidence": [
+              "src/kb/catalog/writes.py#record_outcome",
+              "tests/runtime/test_runtime.py#test_rule_version_and_explicit_experience"
+            ],
+            "note": "Corrections append events and retain earlier outcomes."
+          },
+          {
+            "number": 4,
+            "status": "supported",
+            "evidence": [
+              "src/kb/static/app.js#loadUses",
+              "tests/runtime/test_final_project_manifest.py#test_conflicting_exact_pins_do_not_rewrite_original_use"
+            ],
+            "note": "Exact version remains visible and immutable after replacement."
+          }
+        ],
+        "named_artifacts": "Rule details, structured guidance/provenance, expected-result entry, later outcome/history and authorized export action exist. The export archive limitation belongs to C24."
+      }
     },
     {
       "id": "C31A",
@@ -545,10 +1844,52 @@
         "C30"
       ],
       "implementation_status": "implemented",
-      "card_acceptance": "not_accepted_as_complete_card",
-      "remaining": "Функция есть в пилоте; отдельная полная card acceptance не приписывается автоматически.",
+      "card_acceptance": "final_release_pending",
+      "remaining": "Exact-candidate build, image identity and source manifest await release preparation.",
       "running_task": null,
-      "file_leases": []
+      "file_leases": [],
+      "original_acceptance": {
+        "audited_sha": "da879608c707b3f99d312d6414482f31c4ff531e",
+        "clauses": [
+          {
+            "number": 1,
+            "status": "supported",
+            "evidence": [
+              "containers/Containerfile",
+              "requirements-runtime.lock"
+            ],
+            "note": "Runtime installation uses hashed locks; final-candidate build evidence is still pending."
+          },
+          {
+            "number": 2,
+            "status": "supported",
+            "evidence": [
+              "pyproject.toml#tool.hatch.build.targets.wheel",
+              "containers/Containerfile"
+            ],
+            "note": "The installed kb wheel includes the static frontend with gateway code."
+          },
+          {
+            "number": 3,
+            "status": "supported",
+            "evidence": [
+              "deploy/quadlet/README.md",
+              "W:FINAL-WAVE/postdeploy-sol/verdict.json"
+            ],
+            "note": "linux/amd64 is explicit; accepted previous-release image identity is distinguished from a new build."
+          },
+          {
+            "number": 4,
+            "status": "supported",
+            "evidence": [
+              "justfile#package",
+              "scripts/build_bundle.py"
+            ],
+            "note": "Packaging performs no external publication."
+          }
+        ],
+        "named_artifacts": "Containerfiles, pinned infrastructure images and manifest-producing workflows exist. App units intentionally retain __RELEASE_SHA__ until an accepted final build; this candidate has no completed image/source manifest receipt."
+      }
     },
     {
       "id": "C31B",
@@ -560,10 +1901,52 @@
         "C31A"
       ],
       "implementation_status": "implemented",
-      "card_acceptance": "not_accepted_as_complete_card",
-      "remaining": "Функция есть в пилоте; отдельная полная card acceptance не приписывается автоматически.",
+      "card_acceptance": "final_release_pending",
+      "remaining": "Updated unit templates await authorized installation and final runtime verification.",
       "running_task": null,
-      "file_leases": []
+      "file_leases": [],
+      "original_acceptance": {
+        "audited_sha": "da879608c707b3f99d312d6414482f31c4ff531e",
+        "clauses": [
+          {
+            "number": 1,
+            "status": "supported",
+            "evidence": [
+              "deploy/xorek/pkb-postgres.container",
+              "deploy/xorek/pkb-openviking.container"
+            ],
+            "note": "Database/runner are internal; published OV/identity/gateway ports bind loopback. External embeddings supersede the local sidecar."
+          },
+          {
+            "number": 2,
+            "status": "supported",
+            "evidence": [
+              "deploy/quadlet/pkb-model-runner.container",
+              "deploy/maintenance/pkb-provision-index.container"
+            ],
+            "note": "No socket or whole-home mount exists; only explicit runner OAuth/tool paths are mounted."
+          },
+          {
+            "number": 3,
+            "status": "supported",
+            "evidence": [
+              "scripts/bootstrap.py",
+              "deploy/xorek/README.md"
+            ],
+            "note": "Named project paths and explicit installation lists perform no foreign-volume discovery/cleanup."
+          },
+          {
+            "number": 4,
+            "status": "supported",
+            "evidence": [
+              "W:RUNTIME-DOCS/focused.json",
+              "W:RUNTIME-DOCS/sol-fix1/verdict.json"
+            ],
+            "note": "Actual generator dry-run covers eight containers/network/timer; no live unit mutation or new-host installation is claimed."
+          }
+        ],
+        "named_artifacts": "Seven permanent services plus one-shot provisioner/timer and owner setup/backup instructions exist. This is an explicit host-prerequisite delivery kit, not an automatic clean-host installer; schema/backup operations are documented separately."
+      }
     },
     {
       "id": "C32",
@@ -574,11 +1957,53 @@
       "depends_on": [
         "C31B"
       ],
-      "implementation_status": "partial",
-      "card_acceptance": "not_accepted_as_complete_card",
-      "remaining": "Encrypted off-host backup есть; полный текущий product restore не принят.",
+      "implementation_status": "implemented",
+      "card_acceptance": "source_evidence_supported",
+      "remaining": "Исходные пункты подтверждены в пределах указанных доказательств; итоговый выпуск кандидата отдельный.",
       "running_task": null,
-      "file_leases": []
+      "file_leases": [],
+      "original_acceptance": {
+        "audited_sha": "da879608c707b3f99d312d6414482f31c4ff531e",
+        "clauses": [
+          {
+            "number": 1,
+            "status": "supported",
+            "evidence": [
+              "W:C32/evidence-acceptance/verdict.json",
+              "W:C32/acceptance.json"
+            ],
+            "note": "Restored grants, roles, RLS, Keycloak hashes and disabled-user records matched the consistent backup."
+          },
+          {
+            "number": 2,
+            "status": "supported",
+            "evidence": [
+              "W:C32/evidence-acceptance/verdict.json",
+              "W:C32/resume1/management-cleanup-result.json"
+            ],
+            "note": "All 26 immutable originals matched recorded hashes."
+          },
+          {
+            "number": 3,
+            "status": "supported",
+            "evidence": [
+              "src/kb/jobs/indexer.py#reindex",
+              "W:C32/acceptance.json"
+            ],
+            "note": "A real 56-document index rebuild from restored SQL was accepted without LLM generation or automatic outbound-job execution."
+          },
+          {
+            "number": 4,
+            "status": "supported",
+            "evidence": [
+              "W:C32/evidence-acceptance/verdict.json",
+              "docs/runbooks/removable-backups.md"
+            ],
+            "note": "Four offhost objects were verified and a key copy exists outside the VDS."
+          }
+        ],
+        "named_artifacts": "Backup/restore workflow and composite accepted restore proof exist. Exactly four original clauses are assessed. The accepted a22 snapshot remains applicable through compatible code-only releases; a new backup, RPO or fresh-host auth/UI test is not invented."
+      }
     },
     {
       "id": "C33A",
@@ -591,11 +2016,44 @@
         "C26",
         "C29"
       ],
-      "implementation_status": "acceptance_pending",
-      "card_acceptance": "not_accepted_as_complete_card",
-      "remaining": "Матрица A01-A20 не принята целиком; реальные частичные evidence существуют.",
+      "implementation_status": "implemented",
+      "card_acceptance": "source_evidence_supported",
+      "remaining": "Исходные пункты подтверждены в пределах указанных доказательств; итоговый выпуск кандидата отдельный.",
       "running_task": null,
-      "file_leases": []
+      "file_leases": [],
+      "original_acceptance": {
+        "audited_sha": "da879608c707b3f99d312d6414482f31c4ff531e",
+        "clauses": [
+          {
+            "number": 1,
+            "status": "supported",
+            "evidence": [
+              "W:acceptance-matrix-current.json#A01-A06",
+              "W:acceptance-matrix-current.json#A08,A16"
+            ],
+            "note": "Relevant scenarios retain own-data positives and actual protected-path negatives."
+          },
+          {
+            "number": 2,
+            "status": "supported",
+            "evidence": [
+              "W:acceptance-matrix-current.json",
+              "W:FINAL-WAVE/release/gate-65a6eb9b-r2/receipt.json"
+            ],
+            "note": "Real PostgreSQL, live Keycloak legs and synthetic identity boundaries are explicitly distinguished."
+          },
+          {
+            "number": 3,
+            "status": "supported",
+            "evidence": [
+              "W:FINAL-WAVE/release/gate-65a6eb9b-r2/full-tests.xml",
+              "W:FINAL-WAVE/postdeploy-sol/verdict.json"
+            ],
+            "note": "The recorded previous-release run has 1554 tests and zero failures/errors/skips; none were run by this auditor."
+          }
+        ],
+        "named_artifacts": "Reproducible negative tests and command/exit/runtime receipts cover the original seven scenarios. Acceptance is scoped by assertions and evidence, not by the aggregate test count."
+      }
     },
     {
       "id": "C33B",
@@ -609,11 +2067,53 @@
         "C24",
         "C30"
       ],
-      "implementation_status": "acceptance_pending",
-      "card_acceptance": "not_accepted_as_complete_card",
-      "remaining": "Semantic/provenance/revoke проверены; вся lineage/routing matrix не принята.",
+      "implementation_status": "implemented",
+      "card_acceptance": "source_evidence_supported",
+      "remaining": "Исходные пункты подтверждены в пределах указанных доказательств; итоговый выпуск кандидата отдельный.",
       "running_task": null,
-      "file_leases": []
+      "file_leases": [],
+      "original_acceptance": {
+        "audited_sha": "da879608c707b3f99d312d6414482f31c4ff531e",
+        "clauses": [
+          {
+            "number": 1,
+            "status": "supported",
+            "evidence": [
+              "W:acceptance-matrix-current.json#A09",
+              "tests/runtime/test_final_project_manifest.py"
+            ],
+            "note": "Private experience and stored derivatives cannot union source audiences."
+          },
+          {
+            "number": 2,
+            "status": "supported",
+            "evidence": [
+              "src/kb/retrieval/semantic_search.py#_finish",
+              "W:acceptance-matrix-current.json#A11"
+            ],
+            "note": "Canonical freshness and dependency checks govern delivery independently of index freshness."
+          },
+          {
+            "number": 3,
+            "status": "supported",
+            "evidence": [
+              "W:acceptance-matrix-current.json#A20",
+              "src/kb/catalog/workspace.py#experience_summary"
+            ],
+            "note": "Metadata/counts/audit and aggregates remain authorized or principal-scoped."
+          },
+          {
+            "number": 4,
+            "status": "supported",
+            "evidence": [
+              "tests/runtime/test_revoked_export_links.py",
+              "W:acceptance-matrix-current.json#A02,A12"
+            ],
+            "note": "Repeated requests exercise actual routers/catalogue services and real SQL policies."
+          }
+        ],
+        "named_artifacts": "Canary coverage exists for A02/A09/A10/A11/A12/A20, including model-input captures, caches, metrics, snippets and exports. Provider/vector doubles remain labelled."
+      }
     },
     {
       "id": "C33C",
@@ -628,11 +2128,53 @@
         "C23",
         "C26"
       ],
-      "implementation_status": "acceptance_pending",
-      "card_acceptance": "not_accepted_as_complete_card",
-      "remaining": "Негативные regression tests есть; вся матрица не принята.",
-      "running_task": null,
-      "file_leases": []
+      "implementation_status": "partial",
+      "card_acceptance": "changes_required",
+      "remaining": "Inherited SSRF connection-validation defect; the four numbered race/identity clauses remain separately supported.",
+      "running_task": "URL-PINNING (focusedpassed; internalMiniMax/Solpending); C12Blinkedversionhistoryseparate",
+      "file_leases": [],
+      "original_acceptance": {
+        "audited_sha": "da879608c707b3f99d312d6414482f31c4ff531e",
+        "clauses": [
+          {
+            "number": 1,
+            "status": "supported",
+            "evidence": [
+              "tests/runtime/test_ingestion_fencing.py",
+              "tests/runtime/test_provider_admission.py"
+            ],
+            "note": "Events/barriers and real SQL locks establish ordering rather than sleep-only races."
+          },
+          {
+            "number": 2,
+            "status": "supported",
+            "evidence": [
+              "tests/runtime/test_ingestion_fencing.py#test_authority_revoked_during_provider_prevents_late_persistence",
+              "W:acceptance-matrix-current.json#A07"
+            ],
+            "note": "Late revoked/stale results cannot publish."
+          },
+          {
+            "number": 3,
+            "status": "supported",
+            "evidence": [
+              "W:acceptance-matrix-current.json#A13,A17",
+              "tests/runtime/test_ingestion_fencing.py"
+            ],
+            "note": "Controlled model/vector behavior is identified as synthetic, not live adversarial LLM evidence."
+          },
+          {
+            "number": 4,
+            "status": "supported",
+            "evidence": [
+              "src/kb/catalog/writes.py#record_outcome",
+              "W:acceptance-matrix-current.json#A18"
+            ],
+            "note": "Replay cannot change the assessment author or append a second keyed event."
+          }
+        ],
+        "named_artifacts": "Race/adversarial fixtures and event-order assertions exist. The accepted controlled A14 cases do not close the newly identified request-before-peer-check edge in C12B."
+      }
     },
     {
       "id": "C33D",
@@ -644,11 +2186,44 @@
         "C31B",
         "C32"
       ],
-      "implementation_status": "acceptance_pending",
-      "card_acceptance": "not_accepted_as_complete_card",
-      "remaining": "Full auth/UI/index restored runtime не принят.",
+      "implementation_status": "implemented",
+      "card_acceptance": "source_evidence_supported",
+      "remaining": "Исходные пункты подтверждены в пределах указанных доказательств; итоговый выпуск кандидата отдельный.",
       "running_task": null,
-      "file_leases": []
+      "file_leases": [],
+      "original_acceptance": {
+        "audited_sha": "da879608c707b3f99d312d6414482f31c4ff531e",
+        "clauses": [
+          {
+            "number": 1,
+            "status": "supported",
+            "evidence": [
+              "W:acceptance-matrix-current.json#A15",
+              "W:C32/evidence-acceptance/verdict.json"
+            ],
+            "note": "Actual external port observations and the subsequently accepted route allowlist supplement source/unit inspection."
+          },
+          {
+            "number": 2,
+            "status": "supported",
+            "evidence": [
+              "W:C32/acceptance.json",
+              "W:C32/evidence-acceptance/verdict.json"
+            ],
+            "note": "Restore used a new isolated PostgreSQL target, without overwriting production."
+          },
+          {
+            "number": 3,
+            "status": "supported",
+            "evidence": [
+              "W:C32/evidence-acceptance/verdict.json",
+              "docs/runbooks/removable-backups.md"
+            ],
+            "note": "Restored policies/default denial and unchanged provider/job hashes support access preservation and outbound pause."
+          }
+        ],
+        "named_artifacts": "Actual network/route and restore receipts exist. Fresh-host interactive auth/UI startup is explicitly outside this accepted original scope."
+      }
     },
     {
       "id": "C34",
@@ -661,11 +2236,53 @@
         "C25",
         "C31B"
       ],
-      "implementation_status": "acceptance_pending",
-      "card_acceptance": "not_accepted_as_complete_card",
-      "remaining": "Canary есть; 50-query hit@5 и целевой load/P95 отсутствуют.",
+      "implementation_status": "implemented",
+      "card_acceptance": "source_evidence_supported",
+      "remaining": "The separate first-native-MCP 1–2-second owner target remains open; this does not alter C34's four original clauses.",
       "running_task": null,
-      "file_leases": []
+      "file_leases": [],
+      "original_acceptance": {
+        "audited_sha": "da879608c707b3f99d312d6414482f31c4ff531e",
+        "clauses": [
+          {
+            "number": 1,
+            "status": "supported",
+            "evidence": [
+              "W:C34/routing-run/live-result.json",
+              "W:C34/routing-run/live-resource-metrics.json"
+            ],
+            "note": "Three fixed prompts produce 19 searches plus one upload across cold-session, warm, three-client and burst-10 phases. Windows, heuristic quality, p50/p95, RSS/CPU/IO and queue samples are recorded."
+          },
+          {
+            "number": 2,
+            "status": "supported",
+            "evidence": [
+              "scripts/benchmark_mcp.py",
+              "W:C34/resource-interpretation.json"
+            ],
+            "note": "No agent-speedup claim is inferred from the finite search benchmark."
+          },
+          {
+            "number": 3,
+            "status": "supported",
+            "evidence": [
+              "W:C34/routing-run/live-result.json",
+              "W:C34/routing-run/live-resource-metrics.json"
+            ],
+            "note": "The environment is identified as xorek/a22; cold means fresh harness session, not flushed provider/OS/database caches."
+          },
+          {
+            "number": 4,
+            "status": "supported",
+            "evidence": [
+              "scripts/benchmark_mcp.py#measured_search",
+              "W:C34/routing-run/live-result.json"
+            ],
+            "note": "Generation and upload processing were disabled; no paid generation was requested for load."
+          }
+        ],
+        "named_artifacts": "Fixed dataset, bounded runner and actual passing rerun/resource receipts exist. The initial failed burst is not counted as a pass. Neither 50 unique queries nor an hour run is an original requirement."
+      }
     },
     {
       "id": "C35",
@@ -678,11 +2295,53 @@
         "C25",
         "C31B"
       ],
-      "implementation_status": "partial",
-      "card_acceptance": "not_accepted_as_complete_card",
-      "remaining": "Clean catalogue/restart проверены; полная S01-S04 не принята.",
+      "implementation_status": "implemented",
+      "card_acceptance": "source_evidence_supported",
+      "remaining": "Исходные пункты подтверждены в пределах указанных доказательств; итоговый выпуск кандидата отдельный.",
       "running_task": null,
-      "file_leases": []
+      "file_leases": [],
+      "original_acceptance": {
+        "audited_sha": "da879608c707b3f99d312d6414482f31c4ff531e",
+        "clauses": [
+          {
+            "number": 1,
+            "status": "supported",
+            "evidence": [
+              "scripts/bootstrap.py",
+              "W:S04/sol-review/verdict.json"
+            ],
+            "note": "Disposable fresh installation begins with zero content and explicit owner/system setup."
+          },
+          {
+            "number": 2,
+            "status": "supported",
+            "evidence": [
+              "W:acceptance-matrix-current.json#S04",
+              "W:FINAL-WAVE/postdeploy-sol/verdict.json"
+            ],
+            "note": "Actual restart retains upload, source/fragment/rule IDs, hashes and rights."
+          },
+          {
+            "number": 3,
+            "status": "supported",
+            "evidence": [
+              "W:acceptance-matrix-current.json#S01",
+              "W:C07-AUTHLIB/live.json"
+            ],
+            "note": "Actual gateway replicas and shared PostgreSQL session/state evidence support no process affinity."
+          },
+          {
+            "number": 4,
+            "status": "supported",
+            "evidence": [
+              "tests/runtime/test_provider_admission.py#test_two_processes_share_one_provider_slot_without_open_io_transaction",
+              "W:acceptance-matrix-current.json#S03"
+            ],
+            "note": "Separate real processes/connections share one provider slot; S02 separately proves publication fencing."
+          }
+        ],
+        "named_artifacts": "S01–S04 composite evidence and first-use instructions exist. Actual replica/browser/restart evidence is distinguished from threaded fencing and multiprocess controlled-provider tests; no HA or S3 claim follows."
+      }
     },
     {
       "id": "C36",
@@ -700,11 +2359,53 @@
         "C34",
         "C35"
       ],
-      "implementation_status": "partial",
-      "card_acceptance": "not_accepted_as_complete_card",
-      "remaining": "Bundle/handoff есть; full acceptance и colleague/two-device путь не принят. GitHub не pushed.",
+      "implementation_status": "implemented",
+      "card_acceptance": "final_release_pending",
+      "remaining": "Final-candidate full gate, source bundle/checksums, image build and live postrelease verification remain pending.; Source audit acceptance cannot establish full product completion.",
       "running_task": null,
-      "file_leases": []
+      "file_leases": [],
+      "original_acceptance": {
+        "audited_sha": "da879608c707b3f99d312d6414482f31c4ff531e",
+        "clauses": [
+          {
+            "number": 1,
+            "status": "awaiting_release",
+            "evidence": [
+              "scripts/build_bundle.py",
+              "docs/handoff/results/C36.json"
+            ],
+            "note": "The packager and historical archive receipt exist, but no unpacked/scrubbed bundle for da879608 is established."
+          },
+          {
+            "number": 2,
+            "status": "awaiting_release",
+            "evidence": [
+              "W:FINAL-WAVE/release/gate-65a6eb9b-r2/receipt.json",
+              "W:C07-AUTHLIB/sdk-green.json"
+            ],
+            "note": "Prior full gate and candidate-focused checks retain command/exit/runtime evidence, but the final integrated candidate gate is pending."
+          },
+          {
+            "number": 3,
+            "status": "supported",
+            "evidence": [
+              "docs/workflow/FAST-DEVELOPMENT.md#11",
+              "W:FINAL-WAVE/release/final-runtime-readback.json"
+            ],
+            "note": "Full release evidence remains bound to 65a6eb9b. Focused evidence is carried only over unchanged relevant source/dependencies/schema/environment."
+          },
+          {
+            "number": 4,
+            "status": "supported",
+            "evidence": [
+              "docs/workflow/TEST-MATRIX.md",
+              "deploy/quadlet/README.md"
+            ],
+            "note": "Next step: resolve source/evidence findings, then perform the exact final gate, bundle/image manifest and separately authorized rollout/readback. This audit ran no tests, network/provider/auth or production commands and made no writes."
+          }
+        ],
+        "named_artifacts": "Source packager, checksum generation, checkpoint/report equivalents and E01–E05 owner-gate documentation exist. Historical TASK-RESULT/archive artifacts are not silently relabelled as final-candidate delivery."
+      }
     }
   ],
   "execution_policy": {
@@ -726,5 +2427,22 @@
     "release_owners_max": 1,
     "observed_capacity_evidence": "docs/workflow/parallel-capacity-2026-10-15.json",
     "provider_limit_scope": "current provider/account/host/workload; lower only constrained resource"
+  },
+  "current_reconciliation": {
+    "audited_sha": "da879608c707b3f99d312d6414482f31c4ff531e",
+    "sol_thread_id": "01a156e0-2b83-7163-8b19-3ff1727c63f6",
+    "counts": {
+      "supported": 31,
+      "unverified": 1,
+      "needs_work": 7,
+      "awaiting_release": 3
+    },
+    "numbered_clauses": 161,
+    "operator_receipt": "/home/kb-inspect/ai-wisdom-handoff/architecture-20261015/results/original-plan-reconciliation-20261020/CARDS-42/sol-audit/verdict.json",
+    "production_sha": "65a6eb9b22c27f7c6bcfce8a235d3c53235b7e2e",
+    "source_candidate_not_deployed": true,
+    "full_product_complete": false,
+    "first_native_mcp_target_closed": false,
+    "verified_at": "2026-10-20T01:38:38.868760+00:00"
   }
 }
