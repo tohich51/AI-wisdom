@@ -520,8 +520,10 @@ def lexical_search_knowledge(
     """Perform deterministic lexical retrieval over RLS-visible knowledge.
 
     ``offset`` skips that many ranked rows before the ``limit`` window is
-    applied. It is bounded like the public limit is, and the default of zero
-    keeps the result set identical to the unpaged call.
+    applied. It is a nonnegative integer; the default of zero keeps the result
+    set identical to the unpaged call. It is a plain SQL OFFSET, so a deep page
+    stays correct but gets slower as PostgreSQL scans and discards the skipped
+    rows; paging is not capped.
 
     ``_include_extra`` fetches one row beyond ``limit`` so a caller that owns
     pagination can report ``has_more`` without a second query. It never widens
@@ -533,7 +535,7 @@ def lexical_search_knowledge(
     scoped_library_ids = _normalise_uuids(library_ids, "library_ids", deny_none=False)
     sources = _normalise_uuids(source_ids, "source_ids", deny_none=False)
     limit = _bounded_integer(limit, "limit", minimum=1, maximum=50)
-    offset = _bounded_integer(offset, "offset", minimum=0, maximum=10000)
+    offset = _bounded_integer(offset, "offset", minimum=0)
     fetch_limit = limit + 1 if _include_extra else limit
 
     with transaction_identity(conn, principal), conn.cursor(row_factory=dict_row) as cursor:
@@ -635,10 +637,13 @@ def search_knowledge(
     paged = offset is not None
     # A supplied offset is validated and used exactly as given; only its
     # absence is normalised to zero, so a paged search never restarts at the top.
-    offset = _bounded_integer(offset, "offset", minimum=0, maximum=10000) if paged else 0
-    # Pagination cannot be pushed into the provider, so a paged semantic search
-    # ranks one fixed candidate window and every page is cut from that same
-    # ranking: page 0 and page 10 issue identical backend work.
+    offset = _bounded_integer(offset, "offset", minimum=0) if paged else 0
+    # Pagination cannot be pushed into the provider, so a paged semantic
+    # search ranks one fixed candidate budget, the same width on every page.
+    # Each page is a fresh read of the candidates rather than a cut from a
+    # stored ranking, so the ranking can shift between pages if the data, the
+    # caller's permissions, or the index generation changed; page 0 and page 10
+    # issue identical backend work.
     paged_semantic = paged and semantic is not None
     backend_limit = SEMANTIC_CANDIDATE_WINDOW if paged_semantic else limit
     if semantic is not None:
@@ -680,7 +685,10 @@ def search_knowledge(
             )
     if paged:
         # Trim before the audit phase below, so the lookahead row and every
-        # discarded candidate are never recorded as retrievals.
+        # discarded candidate are never recorded as retrievals. For a paged
+        # semantic search, ``truncated`` reports that the candidate set reached the
+        # candidate budget, and ``ranking_scope`` says that ranking is bounded
+        # candidates rather than an exhaustive one.
         candidates = result["hits"]
         window = min(backend_limit, len(candidates))
         page_hits = candidates[offset : offset + limit] if paged_semantic else candidates[:limit]
