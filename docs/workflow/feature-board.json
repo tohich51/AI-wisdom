@@ -746,8 +746,8 @@
         "C10"
       ],
       "implementation_status": "partial",
-      "card_acceptance": "changes_required",
-      "remaining": "Linked understandable URL snapshot history remains missing; first-approved-IP fetch has no multi-address fallback.",
+      "card_acceptance": "source_evidence_supported",
+      "remaining": "Снимки одного записанного URL в одной библиотеке связаны предыдущим/следующим; исходные версии, оригиналы и хэши неизменны. Кандидат ожидает общего выпуска.",
       "running_task": null,
       "file_leases": [],
       "original_acceptance": {
@@ -803,6 +803,12 @@
         "scope": "Preconnect DNS-rebinding, anonymous cookie isolation and same-key no-refetch fixed; URL snapshot history not yet implemented",
         "source_status": "partial",
         "deployed": false
+      },
+      "current_resolution": {
+        "module": "C12-URL-HISTORY",
+        "source_sha": "117cfc4bfebad4791fa14089fd8fbfb5bf09698c",
+        "evidence": "W:C12-URL-HISTORY/{candidate,green,http-green,sol-review/verdict}.json",
+        "limits": "ExactstoredfinalURLfamily, no physicalversionrenumbering. RealPG+controlledorigin/auth; liveUIruntimepending."
       }
     },
     {
@@ -1227,9 +1233,9 @@
         "C19"
       ],
       "implementation_status": "partial",
-      "card_acceptance": "changes_required",
-      "remaining": "Authorization-unavailable state is incorrectly finalized as processing failure.; Thinking, subscription-only route and one-fragment real product execution remain unverified within the permitted evidence.",
-      "running_task": "C20-PAUSE next-wave MiniMax source artifact returned; root review pending; actual product thinking/subscription proof still separate",
+      "card_acceptance": "source_evidence_supported",
+      "remaining": "Недоступная модель/конфигурация сохраняет partial и checkpoints. Принят реальный однофрагментный вызов продуктового обработчика по подписке с thinking; общий выпуск отдельно.",
+      "running_task": null,
       "file_leases": [],
       "original_acceptance": {
         "audited_sha": "da879608c707b3f99d312d6414482f31c4ff531e",
@@ -1272,6 +1278,12 @@
           }
         ],
         "named_artifacts": "Configurable CLI adapter and private launcher mount exist. The requested verified/pending product-runner receipt is not established by coding-session entitlement or retrieval receipts."
+      },
+      "current_resolution": {
+        "module": "C20-PAUSE",
+        "source_sha": "7bf5accbf61e55660db8b7eff78fb4bf64362824",
+        "evidence": "W:C20-PAUSE/{candidate,green,sol-review/verdict,sol-provider-evidence/verdict}.json;W:C20-PRODUCT-CANARY/receipt.json",
+        "limits": "Real provider installed-image route/TestClient; notlive network/persisted ingestion E2E. Persistence/retry/revoke separately realPG+controlledHTTP."
       }
     },
     {
@@ -1763,7 +1775,7 @@
       ],
       "implementation_status": "partial",
       "card_acceptance": "changes_required",
-      "remaining": "Role-dependent access controls are incomplete.; Non-admin library managers cannot select other members through the existing direct-grant picker.",
+      "remaining": "Ролевые элементы управления и двойное условие для групп приняты в source. Открыт выбор получателя для менеджера библиотеки без роли администратора организации.",
       "running_task": null,
       "file_leases": [],
       "original_acceptance": {
@@ -1798,6 +1810,12 @@
           }
         ],
         "named_artifacts": "Type/library/project/access screens and product membership actions exist. The manager workflow is incomplete for a manager without organization-admin roster access, and unauthorized administrative forms are rendered."
+      },
+      "current_resolution": {
+        "module": "C29-ROLE-CONTROLS",
+        "source_sha": "b8530e55a3b545c6bc4ecc0383c9bfcf1595acb1",
+        "evidence": "W:C29-ROLE-CONTROLS/{candidate,green,sol-review/verdict}.json",
+        "limits": "Sourceacceptednotdeployed; nonadminmanagerrecipientpicker remains."
       }
     },
     {
@@ -1876,7 +1894,7 @@
       ],
       "implementation_status": "implemented",
       "card_acceptance": "final_release_pending",
-      "remaining": "Exact-candidate build, image identity and source manifest await release preparation.",
+      "remaining": "Предыдущий def090 выпуск принят. Новый кандидат требует собственного gate/build/runtime readback.",
       "running_task": null,
       "file_leases": [],
       "original_acceptance": {
@@ -1933,7 +1951,7 @@
       ],
       "implementation_status": "implemented",
       "card_acceptance": "final_release_pending",
-      "remaining": "Updated unit templates await authorized installation and final runtime verification.",
+      "remaining": "Предыдущий def090 выпуск принят. Новый кандидат требует собственного gate/build/runtime readback.",
       "running_task": null,
       "file_leases": [],
       "original_acceptance": {
@@ -2398,7 +2416,7 @@
       ],
       "implementation_status": "implemented",
       "card_acceptance": "final_release_pending",
-      "remaining": "Final-candidate full gate, source bundle/checksums, image build and live postrelease verification remain pending.; Source audit acceptance cannot establish full product completion.",
+      "remaining": "Предыдущий def090 выпуск принят. Новый кандидат требует собственного gate/build/runtime readback.",
       "running_task": null,
       "file_leases": [],
       "original_acceptance": {
@@ -2476,22 +2494,25 @@
     },
     "numbered_clauses": 161,
     "operator_receipt": "/home/kb-inspect/ai-wisdom-handoff/architecture-20261015/results/original-plan-reconciliation-20261020/CARDS-42/sol-audit/verdict.json",
-    "production_sha": "65a6eb9b22c27f7c6bcfce8a235d3c53235b7e2e",
+    "production_sha": "def090520064c5712b7df2bfcade300882fc64c4",
     "source_candidate_not_deployed": true,
     "full_product_complete": false,
     "first_native_mcp_target_closed": false,
-    "verified_at": "2026-10-20T01:38:38.868760+00:00",
+    "verified_at": "2026-10-20T03:08:30.521858+00:00",
     "post_audit_resolutions": {
       "C03": "36a03007840b87b2c0fb91ccc6a7b3b4094c9aa0",
       "C24": "c4eec7a94ef544183907aa389e57d647a3061edf",
       "C26": "2cd32c9fc87a07fb00d67d290665524196b72185",
-      "C33C": "2cd32c9fc87a07fb00d67d290665524196b72185"
+      "C33C": "2cd32c9fc87a07fb00d67d290665524196b72185",
+      "C12B": "117cfc4bfebad4791fa14089fd8fbfb5bf09698c",
+      "C20": "7bf5accbf61e55660db8b7eff78fb4bf64362824",
+      "C29_partial": "b8530e55a3b545c6bc4ecc0383c9bfcf1595acb1"
     },
     "current_source_counts": {
-      "source_evidence_supported": 35,
-      "changes_required": 4,
+      "source_evidence_supported": 37,
+      "changes_required": 2,
       "final_release_pending": 3
     },
-    "warning": "Counts are source/evidence scope. C31A/C31B/C36 runtime acceptance is recorded outside immutable source in operator CURRENT/receipts after release; do not infer another rollout is needed from this dated source snapshot."
+    "warning": "Datedsourcecounts;lateroperatorCURRENT/runtime establishactualdeployedcandidate. C17/C29recipientandnativefirsttargetremain."
   }
 }
