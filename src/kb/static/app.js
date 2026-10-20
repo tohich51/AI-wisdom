@@ -619,6 +619,7 @@ async function loadLibraries() {
         throw new DOMException('Чтение списка библиотек устарело.', 'AbortError');
       libraries = page.libraries.slice();
       if (selected) rememberLibrary(selected);
+      syncSearchProjects();
       return page;
     },
     renderItem: lib => button(lib.name + ' · ' + libraryKindLabel(lib, 'Тип не указан'), () => openLibrary(lib)),
