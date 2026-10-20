@@ -164,7 +164,19 @@
       const isOrgAdmin = profile.is_org_admin === true;
       const content = el('div', null, {class: 'completion-grid'});
       const libraries = host.libraries().filter(item => item?.id);
+      const libraryPolicies = new Map();
+      await Promise.all(libraries.map(async library => {
+        try {
+          libraryPolicies.set(library.id, {policy: await host.api('/api/libraries/' + encodeURIComponent(library.id) + '/policy', {noCache: true, cache: 'no-store'}), error: null});
+        } catch (error) {
+          libraryPolicies.set(library.id, {policy: null, error: error});
+        }
+      }));
+      if(!current() || dataGeneration !== window.WisdomData.generation())return;
+      const managedLibraries = libraries.filter(library => libraryPolicies.get(library.id)?.policy?.effective_role === 'manager');
+      const managedLibraryIds = new Set(managedLibraries.map(library => library.id));
       const activeMembers = members.filter(member => member.status === 'active' && member.principal_id);
+      const addableMembers = activeMembers.filter(member => member.principal_id !== principalId);
       const addOptions = (select, items, id, label) => {
         select.append(el('option', 'Выберите…', {value: ''}));
         for (const item of items) select.append(el('option', label(item), {value: item[id]}));
@@ -251,7 +263,7 @@
       for (const group of groups) {
         const groupCard = card(group.name);
         const membershipForm = el('form', null, {class: 'completion-form'});
-        const memberSelect = selectField(membershipForm, 'Участник для добавления в группу', 'principal_id', activeMembers, 'principal_id', member => [member.display_name, member.email].filter(Boolean).join(' · ') || member.principal_id);
+        const memberSelect = selectField(membershipForm, 'Участник для добавления в группу', 'principal_id', addableMembers, 'principal_id', member => [member.display_name, member.email].filter(Boolean).join(' · ') || member.principal_id);
         memberSelect.required = true;
         memberSelect.addEventListener('change', () => window.WisdomForms.clearErrors(membershipForm, [memberSelect]));
         const add = el('button', 'Добавить участника', {type: 'submit'}); membershipForm.append(add);
@@ -345,13 +357,13 @@
                 await mountAccess(root, host);
               } catch (error) { if (actionCurrent()) throw error; }
             }, 'secondary', current);
-            if (isOrgAdmin) row.append(document.createTextNode(' · '), revoke); groupCard.append(row);
+            if (isOrgAdmin && managedLibraryIds.has(grant.library_id)) row.append(document.createTextNode(' · '), revoke); groupCard.append(row);
           }
         } catch (error) { if (current() && grantsGeneration === window.WisdomData.generation()) groupCard.append(el('p', error.message, {role: 'alert', class: 'completion-error'})); }
-        if (isOrgAdmin && libraries.length) {
+        if (isOrgAdmin && managedLibraries.length) {
           const grantForm = el('form', null, {class: 'completion-form'});
-          const librarySelect = selectField(grantForm, 'Библиотека для группы', 'library_id', libraries, 'id', item => item.name || item.id);
-          host.attachLibraryChooser(librarySelect, {pool:libraries});
+          const librarySelect = selectField(grantForm, 'Библиотека для группы', 'library_id', managedLibraries, 'id', item => item.name || item.id);
+          host.attachLibraryChooser(librarySelect, {pool:managedLibraries, accept:item => managedLibraryIds.has(item.id)});
           librarySelect.required = true;
           const role = roleField(grantForm); const save = el('button', 'Назначить роль группе', {type: 'submit'}); grantForm.append(save);
           window.WisdomForms.submit(grantForm, async event => {
@@ -366,7 +378,7 @@
             finally { save.disabled = false; }
           });
           groupCard.append(grantForm);
-        }
+        } else if (isOrgAdmin && libraries.length) groupCard.append(el('p', 'Назначить роль группе можно только для библиотек, где ваша действующая роль — менеджер.', {class: 'muted'}));
         groupCards.push(groupCard);
       }
       const groupList = window.WisdomList && groupCards.length ? window.WisdomList.create(host, {label: 'Страницы списка групп', library: null, renderItem: built => built}) : null;
@@ -398,10 +410,10 @@
         let policyGeneration=null;
         try {
           policyGeneration=window.WisdomData.generation();
-          const [policy, grants] = await Promise.all([
-            host.api('/api/libraries/' + encodeURIComponent(library.id) + '/policy'),
-            host.api('/api/libraries/' + encodeURIComponent(library.id) + '/grants')
-          ]);
+          const cachedPolicy = libraryPolicies.get(library.id) || {policy: null, error: null};
+          if (cachedPolicy.error) throw cachedPolicy.error;
+          const policy = cachedPolicy.policy || {};
+          const grants = await host.api('/api/libraries/' + encodeURIComponent(library.id) + '/grants');
           if(!current() || policyGeneration !== window.WisdomData.generation())return;
           const manager = policy.effective_role === 'manager';
           if (!grants.length) empty(libraryCard, 'Видимых прямых разрешений нет.');
