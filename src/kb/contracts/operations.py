@@ -36,7 +36,7 @@ from typing import Final
 #: Contract revision for the operation declarations below. Bump the patch part
 #: for a wording or docstring edit, the minor part when a declaration is added,
 #: and never silently change an existing (method, path, scope) triple.
-CONTRACT_REVISION: Final[str] = "architecture-20261015-v3"
+CONTRACT_REVISION: Final[str] = "architecture-20261015-v4"
 
 #: The canonical prefix. New clients use it; the schema is served from it.
 API_VERSION: Final[str] = "v1"
@@ -656,6 +656,14 @@ OPERATIONS: Final[tuple[Operation, ...]] = (
         _WRITE,
         "kb:admin",
         "Revoke one principal's grant on a library.",
+    ),
+    _op(
+        "libraries.resolve_grant_recipient",
+        "POST",
+        "/libraries/{library_id}/grant-recipients/resolve",
+        _WRITE,
+        "kb:admin",
+        "Resolve one exact email address to a grant recipient; writes no grant.",
     ),
     _op(
         "library_types.list",

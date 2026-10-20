@@ -460,6 +460,16 @@ class SetGrant(_Model):
     role: LibraryRole
 
 
+class ResolveGrantRecipient(_Model):
+    """One exact address, resolved into at most one grant recipient.
+
+    ``extra="forbid"`` (inherited) refuses a body carrying ``principal_id`` or
+    ``role`` with 422; the bounds are this API's own, matching ``Membership.email``.
+    """
+
+    email: str = Field(min_length=3, max_length=320)
+
+
 def list_grants(conn: psycopg.Connection, principal: Principal, library_id: UUID) -> list[Grant]:
     """Grants on one library, subject to the same RLS as everything else.
 
@@ -503,6 +513,34 @@ def set_grant(
         if cur.rowcount == 0:  # pragma: no cover - a successful INSERT reports 1
             raise AccessDenied("forbidden")
     return Grant(library_id=library_id, principal_id=spec.principal_id, role=spec.role)
+
+
+def resolve_grant_recipient(
+    conn: psycopg.Connection, principal: Principal, library_id: UUID, spec: ResolveGrantRecipient
+) -> dict[str, Any]:
+    """Resolve one exact address to a grant recipient, or to nothing.
+
+    A targeted address-existence oracle, on purpose: it names the principal behind
+    one whole address inside this organisation, for a caller who already grants
+    here, and offers no roster, prefix, count or walkable ordering. Zero rows and two
+    rows (unknown, ambiguous, inactive-only) collapse to ``{"recipient": None}``;
+    the refusals are the function's own flat 42501.
+    """
+    with transaction_identity(conn, principal), conn.cursor() as cur:
+        cur.execute(
+            "SELECT principal_id, display_name, email FROM kb.resolve_grant_recipient(%s, %s)",
+            (library_id, spec.email),
+        )
+        rows = cur.fetchall()
+    if len(rows) != 1:
+        return {"recipient": None}
+    return {
+        "recipient": {
+            "principal_id": rows[0][0],
+            "display_name": rows[0][1],
+            "email": rows[0][2],
+        }
+    }
 
 
 def revoke_grant(

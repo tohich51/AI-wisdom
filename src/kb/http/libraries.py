@@ -19,7 +19,7 @@ from __future__ import annotations
 
 import contextlib
 from collections.abc import Iterator
-from typing import Annotated
+from typing import Annotated, Any
 from uuid import UUID
 
 import psycopg
@@ -223,6 +223,22 @@ def put_grant(library_id: UUID, body: catalog.SetGrant, conn: Db, me: Me) -> cat
     """
     with mapped_errors():
         return catalog.set_grant(conn, me, library_id, body)
+
+
+@router.post("/libraries/{library_id}/grant-recipients/resolve")
+def resolve_grant_recipient(
+    library_id: UUID, body: catalog.ResolveGrantRecipient, conn: Db, me: Me
+) -> dict[str, Any]:
+    """Exact-email lookup for the grant dialog; writes no grant.
+
+    ``{"recipient": null}`` or ``{"recipient": {...}}``; an address nobody holds,
+    that two active members hold, or that only a deactivated member holds is the
+    first of those. Refusals are a flat 403 from ``mapped_errors``. Declared
+    ``write``, so it keeps the CSRF and write-path preconditions every other
+    write already inherits. Identity comes from the verified ``me``.
+    """
+    with mapped_errors():
+        return catalog.resolve_grant_recipient(conn, me, library_id, body)
 
 
 @router.delete("/libraries/{library_id}/grants/{principal_id}", status_code=204)
