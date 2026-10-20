@@ -18,10 +18,9 @@ So this module does five things and refuses loudly on all of them:
 4. **Every redirect hop.** ``follow_redirects`` is OFF. Each ``Location`` is
    re-parsed and re-checked from step 1, the hop count is capped, and a hop to
    a non-http(s) scheme is refused rather than followed.
-5. **The address actually connected to.** After the response, the peer address
-   is compared with the addresses that were approved. This is what catches DNS
-   rebinding, where the name passed the check and the connection landed
-   somewhere else.
+5. **The address actually connected to.** The default transport receives an
+   approved numeric IP, with the original Host and TLS verification name.
+   Environment proxies are disabled. The response peer is checked as well.
 
 The check is a *precondition of the connection*, not a post-hoc filter. The
 ``test_a_loopback_url_is_refused_before_any_socket_is_opened`` case proves the
@@ -329,9 +328,8 @@ def _peer_address(response: httpx.Response) -> str | None:
 def _verify_peer(response: httpx.Response, approved: Sequence[str]) -> None:
     """Refuse a response that came from an address nobody approved.
 
-    This is the DNS-rebinding half of A14. The name was checked before the
-    request; this checks that the connection agreed. The two together mean a
-    hostile resolver cannot win by answering twice.
+    The default transport is already pinned to an approved IP before GET.
+    This additional check refuses a transport that reports a different peer.
     """
     if not approved:
         return
@@ -370,6 +368,7 @@ def fetch_url(
         limits=limits,
         timeout=timeout,
         headers=OUTBOUND_HEADERS,
+        trust_env=False,
     ) as client:
         current = url
         approved: Sequence[str] = ()
@@ -377,7 +376,18 @@ def fetch_url(
             _scheme, host, port, _path = check_url(current, policy, resolver=resolver)
             approved = _approved(host, port, policy, resolver)
             try:
-                with client.stream("GET", current) as response:
+                target = httpx.URL(current)
+                outgoing: httpx.URL = target
+                headers: dict[str, str] | None = None
+                extensions: dict[str, str] | None = None
+                if transport is None and approved:
+                    # Pin routing; preserve the original authority for HTTP and TLS.
+                    outgoing = target.copy_with(host=approved[0])
+                    headers = {"Host": target.netloc.decode("ascii")}
+                    extensions = {"sni_hostname": target.raw_host.decode("ascii")}
+                with client.stream(
+                    "GET", outgoing, headers=headers, extensions=extensions
+                ) as response:
                     _verify_peer(response, approved)
 
                     if response.is_redirect:
