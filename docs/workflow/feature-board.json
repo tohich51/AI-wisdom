@@ -806,8 +806,8 @@
       },
       "current_resolution": {
         "module": "C12-URL-HISTORY",
-        "source_sha": "117cfc4bfebad4791fa14089fd8fbfb5bf09698c",
-        "evidence": "W:C12-URL-HISTORY/{candidate,green,http-green,sol-review/verdict}.json",
+        "source_sha": "83d751849b7c9e51d59a04bd0bb9f50b496e382e",
+        "evidence": "W:C12-URL-HISTORY/{candidate,green,http-green,sol-review/verdict}.json;W:C12-URL-HISTORY/{compat-green,sol-compat/verdict}.json",
         "limits": "ExactstoredfinalURLfamily, no physicalversionrenumbering. RealPG+controlledorigin/auth; liveUIruntimepending."
       }
     },
@@ -2504,7 +2504,7 @@
       "C24": "c4eec7a94ef544183907aa389e57d647a3061edf",
       "C26": "2cd32c9fc87a07fb00d67d290665524196b72185",
       "C33C": "2cd32c9fc87a07fb00d67d290665524196b72185",
-      "C12B": "117cfc4bfebad4791fa14089fd8fbfb5bf09698c",
+      "C12B": "83d751849b7c9e51d59a04bd0bb9f50b496e382e",
       "C20": "7bf5accbf61e55660db8b7eff78fb4bf64362824",
       "C29_partial": "b8530e55a3b545c6bc4ecc0383c9bfcf1595acb1"
     },
