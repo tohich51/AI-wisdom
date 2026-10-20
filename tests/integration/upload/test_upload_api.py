@@ -28,6 +28,7 @@ import pytest
 
 from kb.access.policy import AccessDenied, Principal
 from kb.catalog import content
+from kb.http import content as content_http
 
 pytestmark = pytest.mark.integration
 
@@ -718,6 +719,7 @@ def test_one_url_walked_twice_keeps_the_chain_readable_from_both_ends(
         source_transport=httpx.MockTransport(handler),
         source_resolver=_public_resolver,
     )
+    client._client.app.include_router(content_http.router)
     route = f"/libraries/{library}/sources/from-url"
     url = "https://public.test/a-book.pdf"
 
@@ -730,6 +732,11 @@ def test_one_url_walked_twice_keeps_the_chain_readable_from_both_ends(
     new_id = UUID(second.json()["source"]["id"])
     assert old_id != new_id, "different bytes must not collapse onto one source"
     assert len(hits) == 2
+    old_http = client.get(f"/sources/{old_id}")
+    new_http = client.get(f"/sources/{new_id}")
+    assert old_http.status_code == new_http.status_code == 200
+    assert old_http.json()["url_history"]["next"]["id"] == str(new_id)
+    assert new_http.json()["url_history"]["previous"]["id"] == str(old_id)
 
     who = Principal(people.owner, world.organisation())
     with db_pool.connection() as conn:

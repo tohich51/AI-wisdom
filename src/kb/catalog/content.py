@@ -331,9 +331,8 @@ def read_source(
 
     When the authorized source carries a stored ``origin_url``, ``url_history``
     reports the nearest earlier and later source in the same library that shares
-    that exact stored URL. The stored URL is the only identity used: no
-    canonicalization, normalization, or renumbering is applied, and the two
-    nearest neighbors are returned. Local files report ``None``.
+    that exact stored URL, ordered by (created_at, id). No
+    canonicalization or renumbering is applied. Local files report ``None``.
 
     When ``fragment_id`` is supplied, source authorization is checked first and
     the target must be a visible fragment of that source. ``fragment_id`` takes
