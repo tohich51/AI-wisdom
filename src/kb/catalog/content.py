@@ -39,6 +39,11 @@ __all__ = [
     "search_knowledge",
 ]
 
+# Every paginated semantic request is ranked inside this fixed internal
+# candidate window, independent of the requested page, so pagination never turns
+# into an unbounded corpus scan.
+SEMANTIC_CANDIDATE_WINDOW = 200
+
 
 def _require_principal(principal: Principal | None) -> None:
     if principal is None:
@@ -509,14 +514,27 @@ def lexical_search_knowledge(
     limit: int = 10,
     *,
     source_ids: Sequence[UUID] | None = None,
+    offset: int = 0,
+    _include_extra: bool = False,
 ) -> dict[str, Any]:
-    """Perform deterministic lexical retrieval over RLS-visible knowledge."""
+    """Perform deterministic lexical retrieval over RLS-visible knowledge.
+
+    ``offset`` skips that many ranked rows before the ``limit`` window is
+    applied. It is bounded like the public limit is, and the default of zero
+    keeps the result set identical to the unpaged call.
+
+    ``_include_extra`` fetches one row beyond ``limit`` so a caller that owns
+    pagination can report ``has_more`` without a second query. It never widens
+    the public result: callers are responsible for trimming the lookahead row.
+    """
     _require_principal(principal)
     if not isinstance(query, str) or not query.strip():
         raise ValueError("query must not be empty")
     scoped_library_ids = _normalise_uuids(library_ids, "library_ids", deny_none=False)
     sources = _normalise_uuids(source_ids, "source_ids", deny_none=False)
     limit = _bounded_integer(limit, "limit", minimum=1, maximum=50)
+    offset = _bounded_integer(offset, "offset", minimum=0, maximum=10000)
+    fetch_limit = limit + 1 if _include_extra else limit
 
     with transaction_identity(conn, principal), conn.cursor(row_factory=dict_row) as cursor:
         cursor.execute(
@@ -546,7 +564,7 @@ def lexical_search_knowledge(
                   WHERE p.knowledge_id=k.id AND s.id=ANY(%s::uuid[])
               ))
             ORDER BY score DESC, k.created_at DESC, k.id
-            LIMIT %s
+            LIMIT %s OFFSET %s
             """,
             (
                 query,
@@ -554,7 +572,8 @@ def lexical_search_knowledge(
                 list(scoped_library_ids) if scoped_library_ids is not None else None,
                 list(sources) if sources is not None else None,
                 list(sources) if sources is not None else None,
-                limit,
+                fetch_limit,
+                offset,
             ),
         )
         hits = [dict(row) for row in cursor.fetchall()]
@@ -576,6 +595,7 @@ def search_knowledge(
     library_ids=None,
     limit=10,
     *,
+    offset=None,
     semantic=None,
     source_ids=None,
     connections=None,
@@ -591,6 +611,12 @@ def search_knowledge(
     takes its own short SQL phases and holds nothing while the provider is
     being called, and the retrieval audit below opens its own short phase
     rather than extending a lease the transport is still holding.
+
+    ``offset`` is optional on purpose. Left as ``None`` the search is exactly
+    what it always was: same backend call, same candidate budget, same result
+    shape, and no ``page`` key at all. Supplying it opts the request into
+    pagination, which is a bounded slice of a ranked candidate universe rather
+    than a scan of the whole corpus.
     """
     _require_principal(principal)
     if not isinstance(query, str) or not query.strip() or len(query) > 2000:
@@ -606,27 +632,69 @@ def search_knowledge(
     scopes = _normalise_uuids(library_ids, "library_ids", deny_none=False)
     sources = _normalise_uuids(source_ids, "source_ids", deny_none=False)
     limit = _bounded_integer(limit, "limit", minimum=1, maximum=50)
+    paged = offset is not None
+    # A supplied offset is validated and used exactly as given; only its
+    # absence is normalised to zero, so a paged search never restarts at the top.
+    offset = _bounded_integer(offset, "offset", minimum=0, maximum=10000) if paged else 0
+    # Pagination cannot be pushed into the provider, so a paged semantic search
+    # ranks one fixed candidate window and every page is cut from that same
+    # ranking: page 0 and page 10 issue identical backend work.
+    paged_semantic = paged and semantic is not None
+    backend_limit = SEMANTIC_CANDIDATE_WINDOW if paged_semantic else limit
     if semantic is not None:
         result = semantic.search(
             conn,
             principal,
             query,
             scopes,
-            limit,
+            backend_limit,
             source_ids=sources,
             connections=connections,
             deadline=deadline,
         )
     else:
+        # PostgreSQL skips the rows itself, and the single lookahead row lets
+        # the slice below report has_more without a second query.
         if conn is None:
             with identity_connection(factory, principal) as lexical_conn:
                 result = lexical_search_knowledge(
-                    lexical_conn, principal, query, scopes, limit, source_ids=sources
+                    lexical_conn,
+                    principal,
+                    query,
+                    scopes,
+                    limit,
+                    source_ids=sources,
+                    offset=offset,
+                    _include_extra=paged,
                 )
         else:
             result = lexical_search_knowledge(
-                conn, principal, query, scopes, limit, source_ids=sources
+                conn,
+                principal,
+                query,
+                scopes,
+                limit,
+                source_ids=sources,
+                offset=offset,
+                _include_extra=paged,
             )
+    if paged:
+        # Trim before the audit phase below, so the lookahead row and every
+        # discarded candidate are never recorded as retrievals.
+        candidates = result["hits"]
+        window = min(backend_limit, len(candidates))
+        page_hits = candidates[offset : offset + limit] if paged_semantic else candidates[:limit]
+        has_more = offset + len(page_hits) < window if paged_semantic else len(candidates) > limit
+        result["hits"] = page_hits
+        result["page"] = {
+            "offset": offset,
+            "limit": limit,
+            "has_more": has_more,
+            "next_offset": offset + limit if has_more else None,
+            "candidate_window": SEMANTIC_CANDIDATE_WINDOW if paged_semantic else None,
+            "ranking_scope": "bounded_candidates" if paged_semantic else "all_lexical_matches",
+            "truncated": len(candidates) >= backend_limit if paged_semantic else False,
+        }
     # The audit is the last thing that happens and it is its own short phase.
     if conn is not None:
         with (
