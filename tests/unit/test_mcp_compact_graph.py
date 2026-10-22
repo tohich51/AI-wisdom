@@ -238,3 +238,35 @@ def test_opt_in_indexes_checked_citations_through_registered_handler() -> None:
         "evidence_index": {"e0": row},
     }
     assert fixture["nodes"][0]["evidence"] == [row, row]
+
+
+@pytest.mark.parametrize("compact", [False, True])
+def test_wire_header_is_opt_in_after_admission(compact):
+    from types import SimpleNamespace
+
+    from kb.mcp.graph_wire import WIRE_VERSION, decode_text
+
+    server = FakeServer()
+    fixture = _synthetic_graph(LIBRARY_ID, 200)
+    ctx = SimpleNamespace(
+        request_context=SimpleNamespace(
+            request=SimpleNamespace(headers={"x-kb-mcp-wire": WIRE_VERSION})
+        )
+    )
+    admitted = []
+
+    def shared_call(*args):
+        admitted.append(args)
+        return fixture
+
+    install_tools(server, shared_call)
+    result = server.tools["get_semantic_network"](library_id=LIBRARY_ID, ctx=ctx, compact=compact)
+    assert len(admitted) == 1
+    text = result.content[0].text
+    if compact:
+        assert "_kb_wire" in json.loads(text)
+        from kb.mcp.graph_payload import compact_network
+
+        assert json.loads(decode_text(text)) == compact_network(fixture)
+    else:
+        assert json.loads(text) == fixture

@@ -13,6 +13,7 @@ _STAGE_NAMES = (
     "handler",
     "jsonable_encode",
     "graph_json_dump",
+    "graph_wire_encode",
     "network_concepts",
     "network_relations",
     "similarity_ready",
