@@ -419,7 +419,7 @@ def test_graph_does_not_reuse_access_across_requests_after_revoke(world, monkeyp
             semantic.get_concept(second_conn, world["other"], world["lib"], concept_id)
 
 
-def test_manifest_registry_deduplicates_and_missing_fact_fails_closed(world):
+def test_manifest_registry_deduplicates_and_missing_fact_revalidates(world):
     source_id = _parsed(world, "Unicode 🎯 provenance remains canonical.")
     snapshot = _capture(world, [source_id])
     first_id = _insert_concept(world, "Registry first", snapshot["manifest"], [])
@@ -442,7 +442,7 @@ def test_manifest_registry_deduplicates_and_missing_fact_fails_closed(world):
                 )
         assert semantic.get_concept(conn, world["principal"], world["lib"], first_id)
 
-    # Derived registry loss denies instead of falling back to stale authorization.
+    # Registry loss uses the original live authority, never a stale permission.
     # Rebuild only these fixture facts; canonical manifests never change.
     with psycopg.connect(world["admin"]) as admin:
         assert (
@@ -453,9 +453,17 @@ def test_manifest_registry_deduplicates_and_missing_fact_fails_closed(world):
         )
     assert _manifest_readable(world, world["principal"], snapshot["manifest"])
     with psycopg.connect(world["dsn"]) as conn:
+        assert semantic.get_concept(conn, world["principal"], world["lib"], first_id)
+    with psycopg.connect(world["admin"]) as admin:
+        previous = admin.execute(
+            "SELECT publication FROM kb.source WHERE id=%s", (source_id,)
+        ).fetchone()[0]
+        admin.execute("UPDATE kb.source SET publication='withdrawn' WHERE id=%s", (source_id,))
+    with psycopg.connect(world["dsn"]) as conn:
         with pytest.raises(AccessDenied):
             semantic.get_concept(conn, world["principal"], world["lib"], first_id)
     with psycopg.connect(world["admin"]) as admin:
+        admin.execute("UPDATE kb.source SET publication=%s WHERE id=%s", (previous, source_id))
         admin.execute(
             "INSERT INTO kb.semantic_manifest(library_id,manifest) "
             "SELECT DISTINCT library_id,manifest FROM kb.semantic_concept "

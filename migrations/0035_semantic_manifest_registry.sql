@@ -56,26 +56,24 @@ ANALYZE kb.semantic_manifest;
 
 -- 5. Replace the existing restrictive policies in place (no new policies on the original tables).
 ALTER POLICY concept_dependencies ON kb.semantic_concept
-  USING (manifest IS NULL
-     OR (library_id, manifest) IN (
-          SELECT m.library_id, m.manifest FROM kb.semantic_manifest m));
+  USING (CASE
+    WHEN manifest IS NULL THEN true
+    WHEN (library_id, manifest) IN (SELECT m.library_id, m.manifest FROM kb.semantic_manifest m) THEN true
+    ELSE kb.can_read_manifest(manifest)
+  END);
 
 ALTER POLICY relation_dependencies ON kb.semantic_relation
-  USING (
-    (manifest IS NULL
-     OR (library_id, manifest) IN (
-          SELECT m.library_id, m.manifest FROM kb.semantic_manifest m))
-    AND EXISTS (SELECT 1
-                  FROM kb.semantic_concept c
-                 WHERE c.id = semantic_relation.from_concept
-                   AND c.publication <> 'withdrawn'::text
-                   AND c.library_id = semantic_relation.library_id)
-    AND EXISTS (SELECT 1
-                  FROM kb.semantic_concept c
-                 WHERE c.id = semantic_relation.to_concept
-                   AND c.publication <> 'withdrawn'::text
-                   AND c.library_id = semantic_relation.library_id)
-  );
+  USING ((CASE
+    WHEN manifest IS NULL THEN true
+    WHEN (library_id, manifest) IN (SELECT m.library_id, m.manifest FROM kb.semantic_manifest m) THEN true
+    ELSE kb.can_read_manifest(manifest)
+  END)
+    AND (EXISTS ( SELECT 1
+   FROM kb.semantic_concept c
+  WHERE ((c.id = semantic_relation.from_concept) AND (c.publication <> 'withdrawn'::text) AND (c.library_id = semantic_relation.library_id))))
+    AND (EXISTS ( SELECT 1
+   FROM kb.semantic_concept c
+  WHERE ((c.id = semantic_relation.to_concept) AND (c.publication <> 'withdrawn'::text) AND (c.library_id = semantic_relation.library_id)))));
 
 -- 6. Register manifests on write. SECURITY INVOKER, fixed search_path, fully qualified.
 CREATE FUNCTION kb.semantic_manifest_register()
