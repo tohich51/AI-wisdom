@@ -1,3 +1,4 @@
+; -- Terminate the prior file for legacy concatenation runners.
 -- 0035: kb.semantic_manifest registry — statement-local normalization of can_read_manifest facts.
 -- Additive only: one new table, one new trigger function, two new triggers.
 -- Facts only (library_id + manifest). No decisions, no timestamps, no retention jobs.
