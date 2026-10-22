@@ -1,7 +1,7 @@
 import base64
-import gzip
 import hashlib
 import json
+import lzma
 
 import pytest
 
@@ -16,13 +16,22 @@ from kb.mcp.graph_wire import (
     requested_wire_version,
 )
 
+_COMPRESS_FILTERS = [
+    {"id": lzma.FILTER_LZMA2, "preset": 6, "dict_size": 256 * 1024},
+]
+
+
+def _compress(raw: bytes) -> bytes:
+    """Return the same xz stream shape the server encoder produces."""
+    return lzma.compress(raw, format=lzma.FORMAT_XZ, filters=_COMPRESS_FILTERS)
+
 
 def _wrap(raw: bytes, *, size=None, digest=None, payload=None) -> str:
-    body = payload if payload is not None else gzip.compress(raw, compresslevel=3, mtime=0)
+    body = payload if payload is not None else _compress(raw)
     envelope = {
         WIRE_KEY: {
             "version": WIRE_VERSION,
-            "encoding": "gzip+base64",
+            "encoding": "xz+base64",
             "size": len(raw) if size is None else size,
             "sha256": hashlib.sha256(raw).hexdigest() if digest is None else digest,
             "data": base64.b64encode(body).decode("ascii"),
@@ -102,11 +111,11 @@ def test_hash_mismatch_is_rejected() -> None:
 
 def test_trailing_data_and_truncated_stream_are_rejected() -> None:
     raw = b'{"nodes": []}'
-    payload = gzip.compress(raw, compresslevel=3, mtime=0)
+    payload = _compress(raw)
     with pytest.raises(WireError, match="trailing"):
         decode_text(_wrap(raw, payload=payload + b"junk"))
     with pytest.raises(WireError, match="incomplete"):
-        decode_text(_wrap(raw, payload=payload[:-4]))
+        decode_text(_wrap(raw, payload=payload[:-8]))
 
 
 def test_invalid_utf8_and_malformed_fields_are_rejected() -> None:
@@ -116,7 +125,7 @@ def test_invalid_utf8_and_malformed_fields_are_rejected() -> None:
         {
             WIRE_KEY: {
                 "version": WIRE_VERSION,
-                "encoding": "gzip+base64",
+                "encoding": "xz+base64",
                 "size": True,
                 "sha256": "0" * 64,
                 "data": "!!!!",

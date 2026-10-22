@@ -1,17 +1,17 @@
-"""Versioned gzip+base64 wire envelope for the compact semantic-network text.
+"""Versioned xz+base64 wire envelope for the semantic-network text.
 
 This module is intentionally dependency free and import-path agnostic: the
 same file is used by the MCP server as ``kb.mcp.graph_wire`` and by the owner
 local native client (copied byte-identically as ``graph_wire.py`` next to
 ``native_backend.py``).  Only the Python standard library may be used here.
 
-The envelope (``gzip-base64-v1``) looks like this::
+The envelope (``xz-base64-v1``) looks like this::
 
-    {"_kb_wire": {"version": "gzip-base64-v1",
-                  "encoding": "gzip+base64",
+    {"_kb_wire": {"version": "xz-base64-v1",
+                  "encoding": "xz+base64",
                   "size": 1234,
                   "sha256": "<hex digest of the uncompressed utf-8 bytes>",
-                  "data": "<base64 of the gzip stream>"}}
+                  "data": "<base64 of the xz stream>"}}
 
 The envelope is only produced when it is strictly smaller than the plain
 JSON text it replaces, so the transport never grows and the historical
@@ -22,18 +22,20 @@ from __future__ import annotations
 
 import base64
 import binascii
-import gzip
 import hashlib
 import json
+import lzma
 import re
-import zlib
 
 WIRE_KEY = "_kb_wire"
-WIRE_VERSION = "gzip-base64-v1"
-WIRE_ENCODING = "gzip+base64"
+WIRE_VERSION = "xz-base64-v1"
+WIRE_ENCODING = "xz+base64"
 WIRE_HEADER = "x-kb-mcp-wire"
 MAX_DECODED_BYTES = 8 * 1024 * 1024
-COMPRESS_LEVEL = 3
+DECODE_MEM_LIMIT = 16 * 1024 * 1024
+COMPRESS_PRESET = 6
+DICT_SIZE = 256 * 1024
+COMPRESS_FILTERS = ({"id": lzma.FILTER_LZMA2, "preset": COMPRESS_PRESET, "dict_size": DICT_SIZE},)
 
 _HEX64 = re.compile(r"\A[0-9a-f]{64}\Z")
 
@@ -73,7 +75,7 @@ def encode_text(text):
     if not isinstance(text, str):
         raise WireError("wire payload must be text")
     raw = text.encode("utf-8")
-    compressed = gzip.compress(raw, compresslevel=COMPRESS_LEVEL, mtime=0)
+    compressed = lzma.compress(raw, format=lzma.FORMAT_XZ, filters=COMPRESS_FILTERS)
     envelope = {
         WIRE_KEY: {
             "version": WIRE_VERSION,
@@ -147,7 +149,7 @@ def decode_text(text):
         compressed = base64.b64decode(data.encode("ascii"), validate=True)
     except (binascii.Error, UnicodeEncodeError) as exc:
         raise WireError("malformed wire envelope data") from exc
-    raw = _inflate(compressed)
+    raw = _decompress(compressed)
     if len(raw) != size:
         raise WireError("wire envelope size mismatch")
     if hashlib.sha256(raw).hexdigest() != digest:
@@ -158,19 +160,19 @@ def decode_text(text):
         raise WireError("wire envelope is not valid utf-8") from exc
 
 
-def _inflate(compressed):
-    """Return the gzip payload bytes, bounded by the decode limit."""
-    decompressor = zlib.decompressobj(wbits=31)
+def _decompress(compressed):
+    """Return the xz payload bytes, bounded by the decode limit."""
+    decompressor = lzma.LZMADecompressor(format=lzma.FORMAT_XZ, memlimit=DECODE_MEM_LIMIT)
     try:
         raw = decompressor.decompress(compressed, MAX_DECODED_BYTES + 1)
-    except zlib.error as exc:
-        raise WireError("malformed gzip stream") from exc
-    if len(raw) > MAX_DECODED_BYTES or decompressor.unconsumed_tail:
+    except lzma.LZMAError as exc:
+        raise WireError("malformed xz stream") from exc
+    if len(raw) > MAX_DECODED_BYTES:
         raise WireError("wire envelope exceeds the decode limit")
     if not decompressor.eof:
-        raise WireError("incomplete gzip stream")
+        raise WireError("incomplete xz stream")
     if decompressor.unused_data:
-        raise WireError("trailing data after the gzip stream")
+        raise WireError("trailing data after the xz stream")
     return raw
 
 

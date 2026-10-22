@@ -10,7 +10,7 @@ from mcp.types import CallToolResult, TextContent, ToolAnnotations
 from kb.catalog import graphs
 from kb.mcp.graph_payload import compact_network
 from kb.mcp.graph_wire import WIRE_VERSION, encode_text, requested_wire_version
-from kb.mcp.timing import measure
+from kb.mcp.timing import measure, record_graph_wire
 from kb.research import notes, rule_handoff, runs, semantic, similarity
 from kb.research.generation import Kind, Predicate
 
@@ -96,10 +96,14 @@ def install_tools(server, call):
             data = compact_network(data)
         with measure("graph_json_dump"):
             text = json.dumps(data, ensure_ascii=False, separators=(",", ":"), allow_nan=False)
-        if compact and requested_wire_version(ctx) == WIRE_VERSION:
-            # Opt-in wire format; the plain JSON text stays the default.
+        plain_bytes = text.encode("utf-8")
+        if requested_wire_version(ctx) == WIRE_VERSION:
+            # Opt-in wire format for every graph response; the plain JSON
+            # text stays the default for every caller without the header.
             with measure("graph_wire_encode"):
                 text = encode_text(text)
+        wire_bytes = text.encode("utf-8")
+        record_graph_wire(len(plain_bytes), len(wire_bytes))
         return CallToolResult(content=[TextContent(type="text", text=text)])
 
     @server.tool()

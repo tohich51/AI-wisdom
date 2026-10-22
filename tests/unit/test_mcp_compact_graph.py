@@ -244,6 +244,7 @@ def test_opt_in_indexes_checked_citations_through_registered_handler() -> None:
 def test_wire_header_is_opt_in_after_admission(compact):
     from types import SimpleNamespace
 
+    from kb.mcp.graph_payload import compact_network
     from kb.mcp.graph_wire import WIRE_VERSION, decode_text
 
     server = FakeServer()
@@ -263,10 +264,10 @@ def test_wire_header_is_opt_in_after_admission(compact):
     result = server.tools["get_semantic_network"](library_id=LIBRARY_ID, ctx=ctx, compact=compact)
     assert len(admitted) == 1
     text = result.content[0].text
-    if compact:
-        assert "_kb_wire" in json.loads(text)
-        from kb.mcp.graph_payload import compact_network
-
-        assert json.loads(decode_text(text)) == compact_network(fixture)
-    else:
-        assert json.loads(text) == fixture
+    # The opt-in header covers every graph response, compact or not.
+    assert "_kb_wire" in json.loads(text)
+    expected = compact_network(fixture) if compact else fixture
+    plain = json.dumps(expected, ensure_ascii=False, separators=(",", ":"), allow_nan=False)
+    decoded = decode_text(text)
+    assert json.loads(decoded) == expected
+    assert decoded.encode("utf-8") == plain.encode("utf-8")

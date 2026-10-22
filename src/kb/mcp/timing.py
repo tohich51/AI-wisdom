@@ -4,7 +4,7 @@ from contextlib import contextmanager
 from contextvars import ContextVar
 from time import perf_counter
 
-__all__ = ["MCPTimingMiddleware", "measure"]
+__all__ = ["MCPTimingMiddleware", "measure", "record_graph_wire"]
 
 _STAGE_NAMES = (
     "transport_auth",
@@ -40,6 +40,20 @@ def measure(fixed_stage: str):
         record["stages"][fixed_stage] += (perf_counter() - started) * 1000.0
 
 
+def record_graph_wire(plain_size: int, wire_size: int) -> None:
+    """Record the plain and wire text sizes of one graph response.
+
+    Only byte counts are stored: no identifiers and no payload text ever
+    reach the timing record.  The counters describe the produced text and
+    never claim a number of bytes seen on the network.
+    """
+    record = _request_record.get()
+    if record is None:
+        return
+    record["graph_plain_text_bytes"] += plain_size
+    record["graph_wire_text_bytes"] += wire_size
+
+
 def _emit(record):
     try:
         _logger.info(json.dumps(record, separators=(",", ":")))
@@ -67,6 +81,8 @@ class MCPTimingMiddleware:
             "first_nonempty_body_handoff_ms": 0.0,
             "terminal_body_handoff_ms": 0.0,
             "response_body_bytes": 0,
+            "graph_plain_text_bytes": 0,
+            "graph_wire_text_bytes": 0,
             "stages": {name: 0.0 for name in _STAGE_NAMES},
         }
         saw_nonempty_body = False
