@@ -417,3 +417,51 @@ def test_graph_does_not_reuse_access_across_requests_after_revoke(world, monkeyp
         assert all(node["entity_id"] != concept_id for node in second_graph["nodes"])
         with pytest.raises(AccessDenied):
             semantic.get_concept(second_conn, world["other"], world["lib"], concept_id)
+
+
+def test_manifest_registry_deduplicates_and_missing_fact_fails_closed(world):
+    source_id = _parsed(world, "Unicode 🎯 provenance remains canonical.")
+    snapshot = _capture(world, [source_id])
+    first_id = _insert_concept(world, "Registry first", snapshot["manifest"], [])
+    _insert_concept(world, "Registry duplicate", snapshot["manifest"], [])
+    with psycopg.connect(world["dsn"]) as conn:
+        with transaction_identity(conn, world["principal"]):
+            assert conn.execute(
+                "SELECT count(*) FROM kb.semantic_manifest WHERE library_id=%s",
+                (world["lib"],),
+            ).fetchone() == (1,)
+            assert conn.execute(
+                "SELECT has_table_privilege(current_user,'kb.semantic_manifest','UPDATE'),"
+                "has_table_privilege(current_user,'kb.semantic_manifest','DELETE')"
+            ).fetchone() == (False, False)
+            with pytest.raises(psycopg.errors.InsufficientPrivilege), conn.transaction():
+                forged = {**snapshot["manifest"], "sources": []}
+                conn.execute(
+                    "INSERT INTO kb.semantic_manifest(library_id,manifest) VALUES(%s,%s)",
+                    (world["lib"], Jsonb(forged)),
+                )
+        assert semantic.get_concept(conn, world["principal"], world["lib"], first_id)
+
+    # Derived registry loss denies instead of falling back to stale authorization.
+    # Rebuild only these fixture facts; canonical manifests never change.
+    with psycopg.connect(world["admin"]) as admin:
+        assert (
+            admin.execute(
+                "DELETE FROM kb.semantic_manifest WHERE library_id=%s", (world["lib"],)
+            ).rowcount
+            == 1
+        )
+    assert _manifest_readable(world, world["principal"], snapshot["manifest"])
+    with psycopg.connect(world["dsn"]) as conn:
+        with pytest.raises(AccessDenied):
+            semantic.get_concept(conn, world["principal"], world["lib"], first_id)
+    with psycopg.connect(world["admin"]) as admin:
+        admin.execute(
+            "INSERT INTO kb.semantic_manifest(library_id,manifest) "
+            "SELECT DISTINCT library_id,manifest FROM kb.semantic_concept "
+            "WHERE library_id=%s AND manifest IS NOT NULL "
+            "ON CONFLICT(library_id,manifest_hash) DO NOTHING",
+            (world["lib"],),
+        )
+    with psycopg.connect(world["dsn"]) as conn:
+        assert semantic.get_concept(conn, world["principal"], world["lib"], first_id)
