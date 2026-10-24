@@ -232,3 +232,45 @@ def test_current_ingestion_preserves_epub_container_text_and_provenance(tmp_path
     assert all(r["locator_kind"] == "epub_paragraph" for r in rows)
     assert all(r["file_page"] is None and r["printed_label"] is None for r in rows)
     assert all(r["parser_name"] == "ebooklib" and r["parser_version"] for r in rows)
+
+
+@pytest.mark.parametrize(
+    ("routed_addresses", "reason"),
+    [
+        (["127.0.0.1"], "address_not_allowed"),
+        (["::1"], "address_not_allowed"),
+        (["93.184.216.34", "10.0.0.1"], "address_not_allowed"),
+        (["not-an-ip"], "address_not_allowed"),
+        ([], "dns_failure"),
+        (OSError("private resolver detail"), "dns_failure"),
+    ],
+)
+def test_snapshot_revalidates_actual_routed_addresses(monkeypatch, routed_addresses, reason):
+    from kb.catalog.upload_fetch import UrlRefused
+
+    answers = iter([["93.184.216.34"], ["93.184.216.34"], routed_addresses])
+    resolved = []
+    sent = []
+
+    def resolve(host, port):
+        resolved.append((host, port))
+        answer = next(answers)
+        if isinstance(answer, OSError):
+            raise answer
+        return answer
+
+    def handle(self, request):
+        sent.append(request)
+        return httpx.Response(
+            200, headers={"content-type": "text/html"}, content=b"<p>Synthetic</p>", request=request
+        )
+
+    # Real httpx Client and default HTTPTransport path; only socket I/O is
+    # replaced. No private host is contacted even if this regression fails.
+    monkeypatch.setattr(httpx.HTTPTransport, "handle_request", handle)
+    with pytest.raises(UrlRefused) as refusal:
+        fetch_html_snapshot("https://example.test/", resolver=resolve)
+    assert refusal.value.reason == reason
+    assert "private resolver detail" not in str(refusal.value)
+    assert len(resolved) == 3
+    assert sent == []

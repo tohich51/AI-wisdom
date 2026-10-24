@@ -1,4 +1,10 @@
-"""C13 — the worker entrypoint.
+"""C13 — deprecated historical library-stage compatibility worker.
+
+Not a deployed worker entrypoint; use the authoritative ``kb.jobs.ingestion``.
+The legacy parse stage changes status only. Embed/extract/index/maintain
+checkpoints do not produce embeddings, extracted rules, indexes or maintenance
+outputs: COMMITTED here must not be interpreted as delivery of those outputs.
+Retained for historical API compatibility, not for production registration.
 
 The rule this module exists to enforce: **the queue payload is not a source of
 identity.** Every task function takes exactly one argument, ``job_id``, and

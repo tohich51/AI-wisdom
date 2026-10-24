@@ -1,4 +1,9 @@
-"""C12B — recording one HTML snapshot in the catalogue as an immutable source.
+"""C12B — legacy compatibility snapshot persistence API.
+
+Retained for historical callers, outside current deployed routes and features.
+Current ingestion and immutable rule versions remain authoritative. This API
+retains historical snapshot/version limitations; it is not a replacement for
+the current ingestion pipeline.
 
 The fetch (:mod:`kb.catalog.fetch_html`) decides whether a URL may be read; the
 extraction (:mod:`kb.catalog.parsers.html_extract`) decides what the page says;

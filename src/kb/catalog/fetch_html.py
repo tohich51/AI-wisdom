@@ -1,4 +1,8 @@
-"""C12B — fetching one HTML page, safely, and recording what came back.
+"""C12B — legacy compatibility HTML snapshot fetcher.
+
+Retained for historical callers, not a deployed ingestion route or worker.
+Current URL ingestion remains authoritative; this API does not enable a new
+product feature.
 
 PRODUCT-SPEC, in the sentence that matters for this card: "URL ingestion
 проверяет SSRF/redirect/IP". ACCESS-MODEL A14 is the scenario — localhost,
@@ -18,9 +22,9 @@ the *ordering* around them, and ordering is the whole of SSRF defence:
        rather than followed;
     3. the hop count is capped, and the cap is a bound on work, not only on the
        error — the test counts the requests the transport actually received;
-    4. after every response the address the client actually connected to is
-       compared with the set that was approved for that hop, which is what
-       catches a resolver that answers twice;
+    4. the actual routing DNS answer is validated before sending; the default
+       transport is pinned to a validated IP, without hostname fallback. The
+       response peer is also checked against the approved set;
     5. the body is bounded by a deadline that covers the whole chain, not by
        one timeout per request, so a slow-redirecting host cannot hold a worker
        for ``hops x timeout`` seconds.
@@ -267,19 +271,24 @@ def check_snapshot_url(
 def _approved_addresses(
     host: str, port: int, policy: SnapshotPolicy, resolver: Resolver | None
 ) -> Sequence[str]:
-    """The addresses this hop was approved for, re-resolved for this hop only.
+    """Resolve and validate the exact addresses used for this hop's routing.
 
-    Recomputed per hop on purpose. A resolver that answers ``93.184.216.34`` the
-    first time and ``127.0.0.1`` the second time is the DNS rebinding case, and
-    a cached answer would hide it.
+    Earlier URL checks cannot authorize a later DNS answer. Fail closed before
+    any request on empty, failed, non-IP or non-public routing answers.
     """
-    if _is_literal(host):
-        return [host]
     resolve = resolver or _system_resolver
     try:
-        return list(resolve(host, port))
-    except OSError:  # pragma: no cover - check_snapshot_url already resolved it
-        return ()
+        addresses = [host] if _is_literal(host) else list(resolve(host, port))
+    except OSError as exc:
+        raise UrlRefused("dns_failure", "the host could not be resolved") from exc
+    if not addresses:
+        raise UrlRefused("dns_failure", "the host resolved to no address")
+    for address in addresses:
+        if is_blocked_address(address):
+            raise UrlRefused(
+                "address_not_allowed", "the host resolves to an address that is not public"
+            )
+    return addresses
 
 
 def _system_resolver(host: str, port: int) -> Sequence[str]:
@@ -458,7 +467,7 @@ def fetch_html_snapshot(
                 outgoing = target
                 headers = {}
                 extensions = {"snapshot_url": current}
-                if transport is None and approved:
+                if transport is None:
                     outgoing = target.copy_with(host=approved[0])
                     headers = {"Host": target.netloc.decode("ascii")}
                     extensions["sni_hostname"] = target.raw_host.decode("ascii")
