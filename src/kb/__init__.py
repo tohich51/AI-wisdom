@@ -7,4 +7,4 @@ A retrieved result is *served*, not *applied* and not *used*. Outcomes exist
 only after a user, an agent, or a metric reports one.
 """
 
-__version__ = "0.1.0"
+__version__ = "0.1.0b1"

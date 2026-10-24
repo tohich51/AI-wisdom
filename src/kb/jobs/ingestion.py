@@ -18,6 +18,7 @@ from kb.adapters.originals import LocalBlobStore, _resolve_in_root
 from kb.document_parser import NeedsOCR, ParseRejected, parse_document
 from kb.jobs.model_runner import GenerateResponse
 from kb.jobs.provider_admission import PROVIDER_QUEUE_LOCK, ProviderReviewRequired, call_provider
+from kb.processing.jobs import is_terminal, parse_status
 
 MODEL = "MiniMax-M3.1-Flash-Preview"
 _LEASE_SECONDS = 480
@@ -285,7 +286,11 @@ def _claim_job(conn, job_id, principal):
         "SELECT *,lease_until>now() AS lease_active FROM kb.job WHERE id=%s FOR UPDATE",
         (job_id,),
     ).fetchone()
-    if not job or job["submitted_by"] != principal.principal_id or job["status"] == "done":
+    if (
+        not job
+        or job["submitted_by"] != principal.principal_id
+        or is_terminal(parse_status(job["status"]))
+    ):
         return None
     if job["status"] == "running" and job["lease_active"]:
         raise AttemptInProgress("ingestion_attempt_in_progress")

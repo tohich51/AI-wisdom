@@ -1,6 +1,6 @@
 [project]
 name = "kb"
-version = "0.1.0"
+version = "0.1.0b1"
 description = "Project knowledge base — provenance, knowledge, versioned rules, experience"
 requires-python = ">=3.11,<3.13"
 license = { text = "MIT" }

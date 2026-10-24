@@ -1,17 +1,17 @@
 {
   "schema_version": "1.0",
-  "updated_at": "2026-10-10T03:33:55+00:00",
+  "updated_at": "2026-10-11T05:16:30+00:00",
   "workspace_absolute": "/workspace/knowledge-hub",
   "workspace_absolute_resolved": null,
   "handoff_manifest_sha256": "913d2efe54e55520a68e2ce17cdabbfe4e04c8ff2e0db875bfbc87ca0417c91d",
   "source_identity": {
-    "git_sha": "4eef711894184cf96c6daf52517d117b0c122e27",
-    "manifest_sha256": "b041da01779e2ee60672caf73a7bb24809e77ddcccd1aa161119735c8c4c2624"
+    "git_sha": "e1bbd5ee0d9c320b785045a96df6e755ffe06408",
+    "manifest_sha256": "6aab2c1cc06ea40533512789d5a21466f4f7ad6dc6297825d42fa9e9f12cb0b9"
   },
   "requested_model": "MiniMax-M3.1-Flash-Preview",
   "observed_model": "MiniMax-M3.1-Flash-Preview",
   "observed_thinking": "max",
-  "current_task_id": "C15",
+  "current_task_id": "C13",
   "task_states": {
     "C00": "implemented_checked",
     "C01": "implemented_checked",
@@ -25,7 +25,11 @@
     "C09": "implemented_checked",
     "C08": "implemented_checked",
     "C10": "implemented_checked",
-    "C15": "implemented_unverified"
+    "C15": "implemented_unverified",
+    "C11": "implemented_checked",
+    "C12A": "implemented_checked",
+    "C12B": "implemented_checked",
+    "C13": "implemented_checked"
   },
   "file_owners": [],
   "pending_checks": [],
@@ -37,6 +41,6 @@
     "E05"
   ],
   "unknown_external_operations": [],
-  "next_task_id": "C16",
+  "next_task_id": "C14",
   "resume_instructions": "Verify the real files and source_identity before continuing. C00 probed this environment: no podman, no systemd, real PostgreSQL 16.2 via pgserver, RLS verified. Keycloak absent. Do not re-probe what C00 recorded; do not re-run any successful external call."
 }

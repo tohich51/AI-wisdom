@@ -1,0 +1,96 @@
+%PDF-1.7
+%‚„œ”
+1 0 obj
+<< /Type /Catalog /Pages 2 0 R /PageLabels << /Nums [0 << /S /r /St 1 /P () >> 2 << /S /D /St 1 /P () >>] >> >>
+endobj
+2 0 obj
+<< /Type /Pages /Count 4 /Kids [5 0 R 7 0 R 9 0 R 11 0 R] >>
+endobj
+3 0 obj
+<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>
+endobj
+4 0 obj
+<< /Title (A Synthetic Book About Locators) /Producer (kb-c11-fixture) >>
+endobj
+5 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Resources << /Font << /F1 3 0 R >> >> /Contents 6 0 R >>
+endobj
+6 0 obj
+<< /Length 102 >>
+stream
+BT
+/F1 12 Tf
+14 TL
+20 160 Td
+(Title page of a synthetic book) Tj
+T*
+(no author is written here) Tj
+ET
+endstream
+endobj
+7 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Resources << /Font << /F1 3 0 R >> >> /Contents 8 0 R >>
+endobj
+8 0 obj
+<< /Length 74 >>
+stream
+BT
+/F1 12 Tf
+14 TL
+20 160 Td
+(Contents) Tj
+T*
+(Introduction .... 1) Tj
+ET
+endstream
+endobj
+9 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Resources << /Font << /F1 3 0 R >> >> /Contents 10 0 R >>
+endobj
+10 0 obj
+<< /Length 101 >>
+stream
+BT
+/F1 12 Tf
+14 TL
+20 160 Td
+(Chapter one begins on the page printed as 1) Tj
+T*
+(second line) Tj
+ET
+endstream
+endobj
+11 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Resources << /Font << /F1 3 0 R >> >> /Contents 12 0 R >>
+endobj
+12 0 obj
+<< /Length 84 >>
+stream
+BT
+/F1 12 Tf
+14 TL
+20 160 Td
+(Chapter one continues on the page printed as 2) Tj
+ET
+endstream
+endobj
+xref
+0 13
+0000000000 65535 f 
+0000000015 00000 n 
+0000000142 00000 n 
+0000000218 00000 n 
+0000000288 00000 n 
+0000000377 00000 n 
+0000000503 00000 n 
+0000000655 00000 n 
+0000000781 00000 n 
+0000000904 00000 n 
+0000001031 00000 n 
+0000001183 00000 n 
+0000001311 00000 n 
+trailer
+<< /Size 13 /Root 1 0 R /Info 4 0 R >>
+startxref
+1445
+%%EOF

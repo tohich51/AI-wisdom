@@ -1,0 +1,169 @@
+"""Synthetic regressions for the public-main/current-runtime merge boundary."""
+
+from uuid import uuid4
+
+import httpx
+import pytest
+from docx import Document
+from docx.oxml import OxmlElement
+from ebooklib import epub
+
+from kb.catalog.fetch_html import fetch_html_snapshot
+from kb.document_parser import parse_document
+from kb.jobs.ingestion import _claim_job
+
+
+def test_current_ingestion_reads_inserted_docx_text_and_unique_merged_cells(tmp_path):
+    document = Document()
+    p = document.add_paragraph("Before ")
+    insertion = OxmlElement("w:ins")
+    run = OxmlElement("w:r")
+    text = OxmlElement("w:t")
+    text.text = "visible insertion"
+    run.append(text)
+    insertion.append(run)
+    p._p.append(insertion)
+    table = document.add_table(rows=2, cols=2)
+    table.cell(0, 0).merge(table.cell(1, 0)).text = "One origin"
+    table.cell(0, 1).text = "Upper"
+    table.cell(1, 1).text = "Lower"
+    path = tmp_path / "synthetic.docx"
+    document.save(path)
+    rows = parse_document(path, "application/octet-stream")
+    assert rows[0]["text"] == "Before visible insertion"
+    cells = [r for r in rows if r["locator_kind"] == "docx_cell"]
+    assert [(r["cell_row"], r["cell_column"], r["text"]) for r in cells] == [
+        (1, 1, "One origin"),
+        (1, 2, "Upper"),
+        (2, 2, "Lower"),
+    ]
+    assert all(r["file_page"] is None for r in rows)
+
+
+def test_current_ingestion_keeps_inline_epub_text_in_one_structural_block(tmp_path):
+    book = epub.EpubBook()
+    book.set_identifier("synthetic-inline")
+    book.set_title("Synthetic")
+    book.set_language("en")
+    chapter = epub.EpubHtml(title="Chapter", file_name="one.xhtml", uid="one")
+    chapter.content = "<h1>Chapter</h1><p>Before <b>bold</b> after.</p>"
+    book.add_item(chapter)
+    book.spine = [chapter]
+    book.toc = [chapter]
+    book.add_item(epub.EpubNcx())
+    book.add_item(epub.EpubNav())
+    path = tmp_path / "synthetic.epub"
+    epub.write_epub(str(path), book)
+    rows = parse_document(path, "application/epub+zip")
+    assert [r["text"] for r in rows] == ["Chapter", "Before bold after."]
+    assert [(r["spine"], r["paragraph"]) for r in rows] == [("one", 1), ("one", 2)]
+
+
+def test_snapshot_default_transport_is_pinned_and_has_no_redirect_cookies(monkeypatch):
+    seen = []
+
+    def handle(self, request):
+        seen.append(request)
+        if len(seen) == 1:
+            return httpx.Response(
+                302,
+                headers={"location": "/next", "set-cookie": "canary=1"},
+                content=b"",
+                request=request,
+            )
+        return httpx.Response(
+            200, headers={"content-type": "text/html"}, content=b"<p>Synthetic</p>", request=request
+        )
+
+    monkeypatch.setattr(httpx.HTTPTransport, "handle_request", handle)
+    monkeypatch.setenv("HTTPS_PROXY", "http://127.0.0.1:9")
+    result = fetch_html_snapshot(
+        "https://example.test/first", resolver=lambda host, port: ["93.184.216.34"]
+    )
+    assert [r.url.host for r in seen] == ["93.184.216.34"] * 2
+    assert all(r.headers["host"] == "example.test" for r in seen)
+    assert all(r.extensions["sni_hostname"] == "example.test" for r in seen)
+    assert all("cookie" not in r.headers for r in seen)
+    assert result.requested_urls == ("https://example.test/first", "https://example.test/next")
+    assert result.final_url == "https://example.test/next"
+
+
+def test_snapshot_stops_stream_before_consuming_oversized_body():
+    from kb.catalog.fetch_html import SnapshotPolicy
+    from kb.catalog.upload_fetch import FetchTooLarge
+
+    consumed = []
+
+    class Stream(httpx.SyncByteStream):
+        def __iter__(self):
+            for chunk in (b"<p>", b"1234567890", b"must not be read"):
+                consumed.append(chunk)
+                yield chunk
+
+    transport = httpx.MockTransport(
+        lambda req: httpx.Response(
+            200, headers={"content-type": "text/html"}, stream=Stream(), request=req
+        )
+    )
+    with pytest.raises(FetchTooLarge):
+        fetch_html_snapshot(
+            "https://example.test/",
+            SnapshotPolicy(max_bytes=5),
+            transport=transport,
+            resolver=lambda host, port: ["93.184.216.34"],
+        )
+    assert consumed == [b"<p>", b"1234567890"]
+
+
+def test_current_worker_does_not_reclaim_needs_ocr():
+    from kb.access.policy import Principal
+
+    actor = uuid4()
+
+    class Connection:
+        def execute(self, *_args):
+            return self
+
+        def fetchone(self):
+            return {"submitted_by": actor, "status": "needs_ocr"}
+
+    assert _claim_job(Connection(), uuid4(), Principal(actor, uuid4())) is None
+
+
+def test_beta_version_is_consistent():
+    import tomllib
+    from pathlib import Path
+
+    import kb
+
+    project = tomllib.loads((Path(__file__).resolve().parents[1] / "pyproject.toml").read_text())
+    assert project["project"]["version"] == kb.__version__ == "0.1.0b1"
+
+
+def test_snapshot_stream_failure_is_sanitized_and_closed():
+    from kb.catalog.upload_fetch import UrlRefused
+
+    closed = []
+
+    class Stream(httpx.SyncByteStream):
+        def __iter__(self):
+            yield b"<p>"
+            raise httpx.ReadError("private peer detail")
+
+        def close(self):
+            closed.append(True)
+
+    transport = httpx.MockTransport(
+        lambda req: httpx.Response(
+            200, headers={"content-type": "text/html"}, stream=Stream(), request=req
+        )
+    )
+    with pytest.raises(UrlRefused) as refusal:
+        fetch_html_snapshot(
+            "https://example.test/",
+            transport=transport,
+            resolver=lambda host, port: ["93.184.216.34"],
+        )
+    assert refusal.value.reason == "fetch_failed"
+    assert "private peer detail" not in str(refusal.value)
+    assert closed == [True]

@@ -3,16 +3,19 @@
 import importlib.metadata
 import platform
 from pathlib import Path
-from typing import Any, cast
+from typing import Any
 from zipfile import ZipFile
 
 from bs4 import BeautifulSoup
 from docx import Document
-from docx.table import Table
 from docx.text.paragraph import Paragraph
 from ebooklib import epub
 from pypdf import PdfReader
-from pypdf.generic import DictionaryObject
+
+from kb.catalog.parsers.docx_grid import build_grid, own_paragraphs
+from kb.catalog.parsers.docx_parser import paragraph_text
+from kb.catalog.parsers.epub import text_blocks
+from kb.catalog.parsers.pdf import _declared_labels, _normalise
 
 _DOCX_HEADING_NAMES = {
     "Heading 1",
@@ -103,14 +106,13 @@ def parse_document(path: Path, media_type: str):
                 raise ParseRejected("encrypted_document")
             if len(pdf.pages) > 1000:
                 raise ParseRejected("too_many_pages")
-            actual_labels = "/PageLabels" in cast(DictionaryObject, pdf.trailer["/Root"])
-            labels = pdf.page_labels if actual_labels else []
+            labels = _declared_labels(pdf, len(pdf.pages))
             for number, page in enumerate(pdf.pages):
                 add(
-                    page.extract_text() or "",
+                    _normalise(page.extract_text() or ""),
                     "pdf_file_page",
                     file_page=number + 1,
-                    printed_label=labels[number] if actual_labels else None,
+                    printed_label=labels[number],
                 )
             if not rows:
                 raise NeedsOCR()
@@ -136,7 +138,7 @@ def parse_document(path: Path, media_type: str):
                     if node.tag.endswith("}p"):
                         pindex += 1
                         docx_paragraph = Paragraph(node, document)
-                        text = docx_paragraph.text
+                        text, _flags = paragraph_text(node)
                         if text.strip() and _docx_is_heading(docx_paragraph):
                             current_heading = text[:1000]
                         add(
@@ -147,16 +149,23 @@ def parse_document(path: Path, media_type: str):
                         )
                     elif node.tag.endswith("}tbl"):
                         tindex += 1
-                        for rindex, row in enumerate(Table(node, document).rows, start=1):
-                            for cindex, cell in enumerate(row.cells, start=1):
-                                add(
-                                    cell.text,
-                                    "docx_cell",
-                                    table_index=tindex,
-                                    cell_row=rindex,
-                                    cell_column=cindex,
-                                    heading=current_heading,
-                                )
+                        grid, _notes = build_grid(node)
+                        emitted = set()
+                        for box in grid.cells:
+                            # A vertical continuation is not another cell at the anchor.
+                            if box.position in emitted:
+                                continue
+                            emitted.add(box.position)
+                            add(
+                                "\n".join(
+                                    paragraph_text(p)[0] for p in own_paragraphs(box.element)
+                                ),
+                                "docx_cell",
+                                table_index=tindex,
+                                cell_row=box.row + 1,
+                                cell_column=box.col + 1,
+                                heading=current_heading,
+                            )
             elif "META-INF/container.xml" in names:
                 parser_name = "ebooklib"
                 parser_version = importlib.metadata.version("ebooklib")
@@ -165,7 +174,10 @@ def parse_document(path: Path, media_type: str):
                     item = book.get_item_with_id(ident)
                     if item:
                         text, chapter = _html(item.get_content())
-                        for number, paragraph in enumerate(text.split("\n"), start=1):
+                        for number, paragraph in enumerate(
+                            text_blocks(item.get_content().decode("utf-8", errors="replace")),
+                            start=1,
+                        ):
                             add(
                                 paragraph,
                                 "epub_paragraph",

@@ -1,0 +1,4 @@
+# Binary document fixtures contain byte-offset tables; never normalize or text-merge.
+*.pdf binary
+*.epub binary
+*.docx binary
