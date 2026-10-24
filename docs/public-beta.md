@@ -381,17 +381,12 @@ its connection to bootstrap and forbids native startup inside that route. It
 checks empty counts, migrations/queue, repeat binding, no-identity no-writes,
 and deactivation refusal. It is not a seven-service acceptance substitute.
 
-### Release-owner verification receipt
+### Published verification record
 
-The release owner fills this receipt for the assembled candidate; blank/pending
-fields are not successful checks:
-
-- Exact commit and package version: pending root verification.
-- Clean-clone package/CLI/check/wheel/source-bundle results: pending.
-- Focused tests and existing real-PostgreSQL regressions: pending root run.
-- Seven-service/OIDC/provider/persistence/restore acceptance: pending.
-- External CLI usage/redistribution permission decision: pending.
-- Independent review and release/tag publication record: pending.
-
-No tag, publication, service activation or production deployment is established
-by this document. Root owns the final receipt and release decision.
+The immutable source revision, check results and artifact checksums for this tag
+are attached as `verification.json` and `SHA256SUMS` to the
+[beta release](https://github.com/tohich51/AI-wisdom/releases/tag/v0.1.0-beta.1).
+Read their coverage and limitations: package installation, a disposable database,
+and synthetic provider checks do not establish a new seven-service deployment
+with your identity and provider accounts. The published source does not activate
+or change an existing deployment.

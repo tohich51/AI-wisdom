@@ -13,9 +13,7 @@ import pytest
 pytestmark = [pytest.mark.integration]
 
 
-def test_fresh_dsn_queue_owner_repeat_and_no_identity_writes(
-    tmp_path, monkeypatch, capsys
-):
+def test_fresh_dsn_queue_owner_repeat_and_no_identity_writes(tmp_path, monkeypatch, capsys):
     path = Path(__file__).resolve().parents[2] / "scripts/bootstrap.py"
     spec = importlib.util.spec_from_file_location("dsn_bootstrap", path)
     module = importlib.util.module_from_spec(spec)
@@ -37,10 +35,7 @@ def test_fresh_dsn_queue_owner_repeat_and_no_identity_writes(
     with psycopg.connect(dsn) as conn:
         assert conn.execute("SELECT to_regnamespace('kb')").fetchone()[0] is None
         assert (
-            conn.execute(
-                "SELECT to_regclass('public.pkb_schema_migration')"
-            ).fetchone()[0]
-            is None
+            conn.execute("SELECT to_regclass('public.pkb_schema_migration')").fetchone()[0] is None
         )
     owner = str(uuid4())
     args = [
@@ -62,13 +57,8 @@ def test_fresh_dsn_queue_owner_repeat_and_no_identity_writes(
     assert first["empty_after_bootstrap"] is True
     assert first["migrations_applied"]
     with psycopg.connect(dsn) as conn:
-        assert (
-            conn.execute("SELECT count(*) FROM public.pkb_queue_schema").fetchone()[0]
-            == 1
-        )
-        assert conn.execute(
-            "SELECT to_regclass('public.procrastinate_jobs')"
-        ).fetchone()[0]
+        assert conn.execute("SELECT count(*) FROM public.pkb_queue_schema").fetchone()[0] == 1
+        assert conn.execute("SELECT to_regclass('public.procrastinate_jobs')").fetchone()[0]
     assert module.main() == 0
     repeated = json.loads(capsys.readouterr().out)
     assert repeated["organisation_id"] == first["organisation_id"]
@@ -76,10 +66,7 @@ def test_fresh_dsn_queue_owner_repeat_and_no_identity_writes(
     assert repeated["owner_membership"] == "existing"
     with psycopg.connect(dsn) as conn:
         assert conn.execute("SELECT count(*) FROM kb.membership").fetchone()[0] == 1
-        assert (
-            conn.execute("SELECT count(*) FROM kb.organisation_admin").fetchone()[0]
-            == 1
-        )
+        assert conn.execute("SELECT count(*) FROM kb.organisation_admin").fetchone()[0] == 1
         conn.execute(
             "UPDATE kb.membership SET status='deactivated', deactivated_at=now(),"
             " deactivated_by=%s WHERE principal_id=%s",
@@ -88,7 +75,4 @@ def test_fresh_dsn_queue_owner_repeat_and_no_identity_writes(
     assert module.main() == 1
     assert dsn not in capsys.readouterr().err
     with psycopg.connect(dsn) as conn:
-        assert (
-            conn.execute("SELECT status FROM kb.membership").fetchone()[0]
-            == "deactivated"
-        )
+        assert conn.execute("SELECT status FROM kb.membership").fetchone()[0] == "deactivated"

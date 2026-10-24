@@ -47,9 +47,7 @@ IDENTITY = ["--owner-issuer", "https://idp.example.com", "--owner-subject", "syn
         ["--owner-subject", "synthetic"],
     ],
 )
-def test_invalid_identity_or_route_does_no_database_work(
-    bootstrap_module, monkeypatch, args
-):
+def test_invalid_identity_or_route_does_no_database_work(bootstrap_module, monkeypatch, args):
     module = bootstrap_module
     connect = prepare(module, monkeypatch, args)
     migrate, queue = MagicMock(), MagicMock()
@@ -66,9 +64,7 @@ def test_invalid_identity_or_route_does_no_database_work(
 @pytest.mark.parametrize("value", [None, "", "   "])
 def test_missing_environment_does_no_work(bootstrap_module, monkeypatch, value):
     module = bootstrap_module
-    connect = prepare(
-        module, monkeypatch, ["--dsn-env", "BOOTSTRAP_TEST_DSN", *IDENTITY]
-    )
+    connect = prepare(module, monkeypatch, ["--dsn-env", "BOOTSTRAP_TEST_DSN", *IDENTITY])
     monkeypatch.delenv("BOOTSTRAP_TEST_DSN", raising=False)
     if value is not None:
         monkeypatch.setenv("BOOTSTRAP_TEST_DSN", value)
@@ -80,9 +76,7 @@ def test_missing_environment_does_no_work(bootstrap_module, monkeypatch, value):
     connect.assert_not_called()
 
 
-def test_dsn_orders_migrations_queue_owner_and_redacts(
-    bootstrap_module, monkeypatch, capsys
-):
+def test_dsn_orders_migrations_queue_owner_and_redacts(bootstrap_module, monkeypatch, capsys):
     module = bootstrap_module
     prepare(module, monkeypatch, ["--dsn-env", "BOOTSTRAP_TEST_DSN", *IDENTITY])
     sentinel = "postgresql://synthetic:DO_NOT_PRINT@invalid/db"
@@ -102,9 +96,7 @@ def test_dsn_orders_migrations_queue_owner_and_redacts(
         assert srv.get_uri() == sentinel
         assert kwargs["owner_subject"] == "synthetic"
         calls.append("owner")
-        return dict.fromkeys(
-            ["libraries", "sources", "knowledge", "rules", "fragments"], 0
-        )
+        return dict.fromkeys(["libraries", "sources", "knowledge", "rules", "fragments"], 0)
 
     monkeypatch.setattr(module, "apply_migrations", migrations)
     monkeypatch.setattr(module, "install_queue", queue)
@@ -123,9 +115,7 @@ def test_cli_errors_hide_dsn(bootstrap_module, monkeypatch, capsys, stage):
     monkeypatch.setenv("BOOTSTRAP_TEST_DSN", "SECRET_DSN")
     monkeypatch.setattr(module, "apply_migrations", MagicMock(return_value=[]))
     monkeypatch.setattr(module, "install_queue", MagicMock())
-    monkeypatch.setattr(
-        module, stage, MagicMock(side_effect=RuntimeError("SECRET_DSN"))
-    )
+    monkeypatch.setattr(module, stage, MagicMock(side_effect=RuntimeError("SECRET_DSN")))
     assert module.main() == 1
     captured = capsys.readouterr()
     assert "SECRET_DSN" not in captured.out + captured.err

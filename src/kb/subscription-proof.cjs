@@ -1,6 +1,21 @@
 // Observe protocol completion metadata; never log text, thinking or credentials.
 // Coding-process-only timeout adapter. Keep CLI OAuth, TLS and AbortSignal unchanged.
-const { Agent, setGlobalDispatcher } = require('/home/kb-inspect/.local/share/ai-wisdom-tools/mmx-1.0.25/node_modules/undici');
+const { createRequire } = require('node:module');
+const { isAbsolute } = require('node:path');
+const { realpathSync, statSync } = require('node:fs');
+const runtime = process.env.MMX_RUNTIME;
+if (!runtime || !isAbsolute(runtime)) throw new Error('MMX_RUNTIME_MISSING');
+let runtimeRequire;
+try {
+  const resolved = realpathSync(runtime);
+  if (!statSync(resolved).isFile()) throw new Error();
+  runtimeRequire = createRequire(resolved);
+} catch { throw new Error('MMX_RUNTIME_INVALID'); }
+// Operator-trusted pinned CLI installation; never consult an owner fallback.
+// This preload runs in the wrapper and its auth subprocesses as well as the CLI.
+let Agent, setGlobalDispatcher;
+try { ({ Agent, setGlobalDispatcher } = runtimeRequire('undici')); }
+catch { throw new Error('MMX_RUNTIME_UNDICI_UNAVAILABLE'); }
 class BoundedCodingAgent extends Agent {
   dispatch(options, handler) {
     return super.dispatch({ ...options, headersTimeout: 920000, bodyTimeout: 920000 }, handler);

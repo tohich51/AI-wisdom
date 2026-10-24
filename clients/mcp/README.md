@@ -4,7 +4,7 @@ This directory is an OPTIONAL client, not an application requirement or a live a
 
 ## Supported environment
 
-Use CPython 3.12 (locally checked: 3.12.14 on macOS arm64). The application-compatible range is >=3.11,<3.13; 3.11 is not exercised in this handoff. macOS and Linux/Unix with AF_UNIX, fcntl, POSIX permissions and signal handlers are the intended scope; Windows is not supported. Linux execution is not verified here.
+Use CPython 3.12 (producer checks: 3.12.14 on macOS arm64; independent root checks: 3.12.3 on Linux). The application-compatible range is >=3.11,<3.13; 3.11 is not exercised in this handoff. macOS and Linux/Unix with AF_UNIX, fcntl, POSIX permissions and signal handlers are the intended scope; Windows is not supported. Root independently verified a fresh Linux client environment with `pip check` and synthetic suites: 104 SDK checks, 14 refresh-overlap tests and 6 portability tests, all passing. These are packaging/offline checks, not live-server certification.
 
 From this directory, create a dedicated environment (do not install into the main app or global Python):
 
@@ -15,7 +15,7 @@ python3.12 -m venv .venv
 .venv/bin/python ai_wisdom_mcp.py --help
 ```
 
-The exact MCP SDK is mcp==2.3.0. Its transport is httpx2==2.13.1, NOT httpx. Pydantic and AnyIO are explicit runtime dependencies; the SDK installs its remaining dependencies, including mcp-types==2.3.0. `checks/test-environment.txt` records the successfully exercised dependency set; it is evidence, not a copied virtual environment or a claim about every future resolver result. Use a Python with SSL and lzma support. All application modules are next to the launcher; no external PYTHONPATH is needed.
+The exact MCP SDK is mcp==2.3.0. Its transport is httpx2==2.13.1, NOT httpx. Pydantic and AnyIO are explicit runtime dependencies; the SDK installs its remaining dependencies, including mcp-types==2.3.0. Dependency-environment records are private acceptance evidence and are not shipped in this source package; no virtual environment is copied, and the recorded checks do not guarantee every future resolver result. Use a Python with SSL and lzma support. All application modules are next to the launcher; no external PYTHONPATH is needed.
 
 ## Configure your own server and OAuth client
 

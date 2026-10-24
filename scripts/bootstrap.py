@@ -139,9 +139,7 @@ def setup_owner(
                     (org, principal, issuer, subject),
                 )
             except psycopg.errors.UniqueViolation:
-                raise BootstrapError(
-                    "membership changed under this bootstrap"
-                ) from None
+                raise BootstrapError("membership changed under this bootstrap") from None
             membership = "created"
         else:
             if (row[0], row[1]) != (issuer, subject):
@@ -274,9 +272,7 @@ def main() -> int:
     else:
         import pgserver
 
-        srv = pgserver.get_server(
-            pgdata=a.pgdata or "/tmp/kb-bootstrap-pg", cleanup_mode=None
-        )
+        srv = pgserver.get_server(pgdata=a.pgdata or "/tmp/kb-bootstrap-pg", cleanup_mode=None)
     try:
         applied = apply_schema(srv)
         install_queue(srv.get_uri())
@@ -297,10 +293,7 @@ def main() -> int:
         # Type only: no connection string, no issuer, no subject.
         print(f"bootstrap failed ({type(error).__name__})", file=sys.stderr)
         return 1
-    counts = {
-        key: info[key]
-        for key in ("libraries", "sources", "knowledge", "rules", "fragments")
-    }
+    counts = {key: info[key] for key in ("libraries", "sources", "knowledge", "rules", "fragments")}
     result = {
         **info,
         "content_counts": counts,
@@ -314,8 +307,7 @@ def main() -> int:
         # owner's data and says so; refusing to report success is what turned
         # "preserve the upload" into "delete the upload or fail".
         print(
-            "existing content kept: "
-            + ", ".join(f"{k}={v}" for k, v in counts.items()),
+            "existing content kept: " + ", ".join(f"{k}={v}" for k, v in counts.items()),
             file=sys.stderr,
         )
     return 0
