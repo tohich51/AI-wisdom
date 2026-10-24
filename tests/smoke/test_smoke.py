@@ -6,7 +6,7 @@ import kb
 
 
 def test_package_imports():
-    assert kb.__version__ == "0.1.0"
+    assert kb.__version__ == "0.1.0b1"
 
 
 def test_tier_order_is_declared():
