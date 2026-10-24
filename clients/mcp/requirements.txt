@@ -1,0 +1,5 @@
+# Optional client only; do not add these to the application's main environment.
+mcp==2.3.0
+httpx2==2.13.1
+pydantic>=2.12,<3
+anyio>=4.9,<5
