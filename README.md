@@ -1,36 +1,44 @@
 # AI-wisdom
 
-A self-hosted knowledge library for an owner and invited colleagues: keep source
-provenance, retrieve published knowledge, curate versioned rules, and record
-explicit use and outcomes. The browser UI and authenticated MCP endpoint share
-the same catalog and access rules. You supply the content; no books, accounts,
-credentials, or populated databases are included.
+### От источников — к знаниям, правилам и опыту применения
 
-**Public beta:** Python distribution version `0.1.0b1`, release tag
-`v0.1.0-beta.1`. These are release identifiers, not a verification receipt.
-The seven-service stack uses rootless Podman + Quadlet. It is not a portable,
-one-command installer or a production-stability guarantee. See the
-[beta installation guide](docs/public-beta.md) for operator setup and checks.
+[![Статус: public beta](https://img.shields.io/badge/status-public_beta-E56545)](https://github.com/tohich51/AI-wisdom/releases/tag/v0.1.0-beta.1)
+[![Лицензия: MIT](https://img.shields.io/badge/license-MIT-17212B)](LICENSE)
+[![Telegram: ИИдея](https://img.shields.io/badge/Telegram-ИИдея-2F69D9)](https://t.me/aisaassolution)
 
-## What the beta does
+[Релиз](#релиз) · [Установка](#установка) · [Архитектура](#архитектура-и-доступ) · [MCP](#mcp) · [English](README.en.md)
 
-- Ingest PDF, EPUB, DOCX, HTML, and text originals with provenance. Scanned PDFs
-  report `needs_ocr`; this is not an OCR service.
-- Extract draft knowledge and rules through an explicitly requested model job.
-  Generated results require curator approval before publication.
-- Retrieve published material using lexical and vector search, without a
-  generative model call. Unavailable or invalid vector projections are disclosed
-  as lexical fallback.
-- Keep published rule versions immutable; corrections create new versions.
-  Exporting `SKILL.md` neither installs nor runs it.
-- Record application and outcomes explicitly. Retrieval means “served,” not
-  “used,” “successful,” or “proven.” Unknown metadata stays unknown.
+AI-wisdom — библиотека знаний на собственной инфраструктуре для владельца и приглашённых коллег. Она помогает сохранять происхождение материалов, находить опубликованные знания, вести версии правил и отдельно фиксировать их применение и результаты. Браузерный интерфейс и защищённый MCP работают с одним каталогом и одинаковыми правилами доступа.
 
-Typed semantic relationships and embedding similarity are different views:
-similarity is not a verified relationship. Global entity merging and clustering
-are not implemented. Audio, video, and slide generation are not implemented.
+Проект **ИИдея** — авторская разработка, исследования ИИ, прототипы и практические продукты. Разработка AI-wisdom велась через Hermes. [Сайт студии](https://aisaassolution.com) · [Telegram @aisaassolution](https://t.me/aisaassolution).
 
-## Architecture and trust
+В публичном репозитории — только исходный код: без пользовательских книг, данных, учётных записей, секретов и наполненных баз. Материалы добавляете вы.
+
+## Что умеет beta
+
+- **Принимать источники с происхождением:** PDF, EPUB, DOCX, HTML и текст. Для сканированных PDF возвращается `needs_ocr`; встроенного OCR-сервиса нет.
+- **Готовить черновики знаний и правил:** модельная задача запускается явно; результат требует одобрения куратора перед публикацией.
+- **Искать опубликованное:** лексический и векторный поиск без вызова генеративной модели. Если векторная проекция недоступна или некорректна, переход к лексическому поиску явно обозначается.
+- **Хранить неизменяемые опубликованные версии правил:** исправление создаёт новую версию. Экспорт `SKILL.md` не устанавливает и не запускает навык.
+- **Фиксировать применение и результаты:** выдача в поиске означает «показано», а не «использовано», «успешно» или «доказано». Неизвестные метаданные остаются неизвестными.
+
+```mermaid
+flowchart LR
+    S["Источники и происхождение"] --> K["Знания с опорой на источники"]
+    K --> R["Версионные правила / SKILL.md"]
+    R --> E["Опыт: применение и результат"]
+    E -. "ссылка на конкретную версию" .-> R
+```
+
+Это смысловой путь, а не автоматическая публикация: происхождение и ссылки на источники сохраняются, повторно используемые правила версионируются, а опыт относится к конкретной версии. Типизированные смысловые связи и близость эмбеддингов — разные представления; сходство не доказывает связь.
+
+## Релиз
+
+**Public beta:** версия Python-пакета `0.1.0b1`, тег [`v0.1.0-beta.1`](https://github.com/tohich51/AI-wisdom/releases/tag/v0.1.0-beta.1). Это идентификаторы выпуска, а не свидетельство прохождения проверок.
+
+Полный стек — **семь сервисов на rootless Podman + Quadlet**. Это не переносимый установщик «одной командой» и не гарантия промышленной стабильности. Порядок настройки и проверок: [руководство public beta](docs/public-beta.md).
+
+## Архитектура и доступ
 
 ```text
 Browser / MCP client -> gateway -> PostgreSQL (authoritative rights and records)
@@ -43,25 +51,18 @@ Browser / MCP client -> gateway -> PostgreSQL (authoritative rights and records)
 Keycloak OIDC -> authenticated identity at the gateway
 ```
 
-PostgreSQL is the authority for library rights, provenance, published versions,
-and experience. Runtime roles are non-superuser, have no `BYPASSRLS`, and use row
-level security; missing identity is denied. Library kind and audience are
-independent, and project membership does not grant access to linked libraries.
+- **Gateway + PostgreSQL:** PostgreSQL — источник истины для прав на библиотеки, происхождения, опубликованных версий и опыта. Runtime-роли не являются суперпользователями, не имеют `BYPASSRLS` и используют row-level security (RLS). Без идентичности доступ запрещён. Тип библиотеки и аудитория независимы; участие в проекте не даёт доступа к связанным библиотекам.
+- **Keycloak:** OIDC-аутентификация на gateway. Настройка OIDC и scopes — по [руководству установки](docs/public-beta.md); правила доступа одинаковы для браузера и MCP.
+- **OpenViking:** перестраиваемая проекция `vectors_only`, не база авторизации. Единственный indexer; профиль эмбеддингов OpenRouter — `qwen/qwen3-embedding-8b`, размерность **4096**.
+- **Worker + отдельный model runner:** генерация через подписочный MiniMax runner с `MiniMax-M3.1-Flash-Preview`. Автоматического перехода на API key или pay-as-you-go нет.
 
-Keycloak provides OIDC authentication. OpenViking is a rebuildable `vectors_only`
-projection, not an authorization database. The embedding profile is OpenRouter
-`qwen/qwen3-embedding-8b`, 4096 dimensions. Product generation uses a separate
-MiniMax subscription runner with `MiniMax-M3.1-Flash-Preview`, not an automatic
-API-key or pay-as-you-go fallback. Bring your own authorized provider accounts
-and credentials; subscription limits still apply. The external CLI's licensing
-boundary is documented in the installation guide; it is not bundled here.
+Нужны собственные разрешённые учётные записи и credentials провайдеров; лимиты подписок действуют. Инференс, кредиты и подписки не включены. Внешний CLI не поставляется в репозитории; границы его лицензии описаны в руководстве установки.
 
-## Clean-clone package and CLI checks
+## Установка
 
-Use Linux x86_64, Python **3.11 or 3.12** with `venv` and pip, Git, Bash, and
-[`just`](https://github.com/casey/just). Network access to the Python package
-index is required. These commands install the package and development checks;
-they do **not** start the full stack or configure authentication.
+### Пакет и CLI из чистого клона
+
+Требуются Linux x86_64, **Python 3.11 или 3.12** с `venv` и pip, Git, Bash, [`just`](https://github.com/casey/just) и доступ к индексу Python-пакетов. Команды устанавливают пакет и средства проверки разработки; они **не запускают полный стек и не настраивают аутентификацию**.
 
 ```sh
 git clone https://github.com/tohich51/AI-wisdom.git
@@ -80,38 +81,34 @@ just check
 just package
 ```
 
-An unavailable tag is an error, not permission to silently validate a different
-branch. Release-owner pre-publication checks use the exact assembled candidate
-commit instead. `requirements.lock` is the dependency pin set; the Hatchling
-build backend is not claimed to be bit-for-bit reproducible. `just package`
-builds a source delivery bundle, not a running deployment.
+Недоступный тег — ошибка, а не разрешение незаметно проверить другую ветку. Предпубликационные проверки владельца выпуска используют точный собранный commit-кандидат. `requirements.lock` фиксирует зависимости; побитовая воспроизводимость build backend Hatchling не заявляется. `just package` собирает комплект исходников, а не работающий deployment.
 
-`just integration` requires real PostgreSQL. `just acceptance` requires its real
-service prerequisites and runtime evidence; neither is implied by `just check`.
-Mandatory gates must fail closed when they cannot run. Do not turn missing
-services, skipped checks, or absent owner receipts into a passing release claim.
+`just integration` требует настоящего PostgreSQL. `just acceptance` требует реальных сервисов и runtime evidence; ни одна из этих проверок не подразумевается результатом `just check`. Если обязательную проверку нельзя выполнить, gate должен закрыться с ошибкой. Отсутствие сервисов, пропущенные проверки или отсутствие подтверждения владельца не означают успешный выпуск.
 
-## Install the real stack
+### Полный стек
 
-Read [public beta setup](docs/public-beta.md) before activation. It covers the
-seven services, local image builds, existing-database migration/queue/first-owner
-bootstrap, subscription launcher, OIDC/provider credentials and template mapping.
+Перед активацией прочитайте [public beta setup](docs/public-beta.md): семь сервисов, локальная сборка образов, миграции существующей базы, очередь, создание первого владельца, подписочный launcher, OIDC, credentials провайдеров и соответствие шаблонов вашей установке.
 
-- [Product Quadlets](deploy/quadlet/README.md): gateway, worker, model runner, indexer.
-- [Infrastructure Quadlets](deploy/xorek/README.md): PostgreSQL, Keycloak, OpenViking.
-- [Runtime runbook](docs/runbooks/runtime.md): migration and operational safeguards.
-- [Optional SDK MCP client](clients/mcp/README.md): separate client setup and checks.
+| Компоненты | Документация |
+| --- | --- |
+| Gateway, worker, model runner, indexer | [Product Quadlets](deploy/quadlet/README.md) |
+| PostgreSQL, Keycloak, OpenViking | [Infrastructure Quadlets](deploy/xorek/README.md) |
+| Миграции и эксплуатационные меры защиты | [Runtime runbook](docs/runbooks/runtime.md) |
 
-Deployment/runbook examples can retain installation-specific paths. Use the
-portable mappings in the beta guide; never copy another operator's secrets.
+Примеры deployment и runbook могут содержать пути конкретной установки. Используйте переносимые соответствия из beta-руководства; не копируйте секреты другого оператора.
 
-## Limits and license
+## MCP
 
-This beta has no established production-stability or hour-long load-test claim.
-There is no 1–2 second cold-latency guarantee. Review the
-[limitations and release checks](docs/public-beta.md#limitations-and-release-checks)
-before relying on it.
+Аутентифицированный MCP endpoint предоставляет доступ к тому же каталогу и под теми же правами, что и браузер. Поиск сохраняет опору на источники; выдача не считается применением правила. Дополнительный [SDK MCP client](clients/mcp/README.md) имеет отдельные инструкции установки и проверок.
 
-AI-wisdom is [MIT licensed](LICENSE). That license does not relicense external
-CLI packages or include inference, credits, subscriptions, or rights to uploaded
-content. You are responsible for those accounts, terms and rights.
+## Ограничения beta
+
+Глобальное объединение сущностей и кластеризация не реализованы. Генерации аудио, видео и слайдов нет. Сканированные PDF требуют отдельного OCR.
+
+Нет подтверждённого заявления о промышленной стабильности или часовом нагрузочном тесте. **Холодный ответ за 1–2 секунды не гарантируется.** Перед использованием изучите [ограничения и проверки выпуска](docs/public-beta.md#limitations-and-release-checks).
+
+## Лицензия и ИИдея
+
+Собственный код AI-wisdom распространяется по [лицензии MIT](LICENSE). Она не меняет лицензии внешних CLI-пакетов и не включает инференс, кредиты, подписки или права на загружаемый контент. За учётные записи, условия использования и права на материалы отвечает оператор.
+
+**ИИдея** — исследования ИИ и авторские продукты. [aisaassolution.com](https://aisaassolution.com) · [Telegram](https://t.me/aisaassolution).
