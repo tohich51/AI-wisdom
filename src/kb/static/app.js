@@ -2147,6 +2147,16 @@ window.WisdomData.onBeforeInvalidate(status => {
     selected = null;
     activeJob = null;
     libraries = [];
+    const accessTab = byId('access-tab');
+    if (accessTab && !accessTab.hidden) {
+      const workspace = byId('access-workspace');
+      if (workspace) {
+        const alert = node('div', null, {role: 'alert'});
+        alert.append(node('p', 'Текущий профиль не может управлять правами доступа.'));
+        alert.append(node('a', 'Вернуться к библиотекам', {href: '/app/libraries'}));
+        workspace.replaceChildren(alert);
+      }
+    }
   }
 });
 
