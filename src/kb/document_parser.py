@@ -14,7 +14,7 @@ from pypdf import PdfReader
 
 from kb.catalog.parsers.docx_grid import build_grid, own_paragraphs
 from kb.catalog.parsers.docx_parser import paragraph_text
-from kb.catalog.parsers.epub import text_blocks
+from kb.catalog.parsers.epub import EpubEncodingError, decode_xhtml, text_blocks
 from kb.catalog.parsers.pdf import _declared_labels, _normalise
 
 _DOCX_HEADING_NAMES = {
@@ -175,7 +175,7 @@ def parse_document(path: Path, media_type: str):
                     if item:
                         # get_content() reserializes XHTML through EbookLib and
                         # drops direct body text. Parse the original spine bytes.
-                        content = item.content.decode("utf-8", errors="replace")
+                        content = decode_xhtml(item.content)
                         _text, chapter = _html(content)
                         for number, paragraph in enumerate(text_blocks(content), start=1):
                             add(
@@ -213,6 +213,8 @@ def parse_document(path: Path, media_type: str):
         if not rows:
             raise ParseRejected("empty_document")
         return rows
+    except EpubEncodingError:
+        raise ParseRejected("invalid_epub_encoding") from None
     except ParseRejected:
         raise
     except Exception:

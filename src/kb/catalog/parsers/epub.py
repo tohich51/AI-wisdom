@@ -31,6 +31,7 @@ than an honest empty result.
 from __future__ import annotations
 
 import os
+import re
 import tempfile
 import uuid
 import warnings
@@ -192,7 +193,13 @@ def parse_epub(data: bytes, *, source_id: UUID) -> EpubParseResult:
             continue
 
         href = getattr(item, "file_name", None)
-        blocks = _blocks_of(item)
+        try:
+            blocks = _blocks_of(item)
+        except EpubEncodingError:
+            return _failure(
+                f"spine entry {spine_label} has unsupported or invalid XHTML encoding",
+                code="invalid_epub_encoding",
+            )
         if not blocks:
             problems.append(
                 EpubProblem(
@@ -391,6 +398,26 @@ def _spine_position(spine: str | None) -> int | None:
     return position if position >= 1 else None
 
 
+class EpubEncodingError(ValueError):
+    """Original XHTML cannot safely be interpreted as UTF-8."""
+
+
+def decode_xhtml(raw: bytes | str) -> str:
+    """Accept strict UTF-8 only; never replace bytes or pass NUL to storage.
+
+    Other declared encodings (including BOM-marked UTF-16) are deliberately
+    refused rather than guessed. Keep the original markup for block extraction.
+    """
+    try:
+        text = raw.decode("utf-8-sig") if isinstance(raw, bytes) else raw
+    except UnicodeError as exc:
+        raise EpubEncodingError("invalid_epub_encoding") from exc
+    declaration = re.match(r"\s*<\?xml\b[^?]*\bencoding\s*=\s*['\"]([^'\"]+)['\"]", text)
+    if "\0" in text or (declaration and declaration.group(1).lower() not in {"utf-8", "utf8"}):
+        raise EpubEncodingError("invalid_epub_encoding")
+    return text
+
+
 def _blocks_of(item: Any) -> tuple[str, ...]:
     content = getattr(item, "get_content", None)
     if content is None:
@@ -401,9 +428,9 @@ def _blocks_of(item: Any) -> tuple[str, ...]:
         raw = getattr(item, "content", None)
         if raw is None:
             raw = content()
-        text = raw.decode("utf-8", "replace") if isinstance(raw, bytes) else str(raw)
     except Exception:
         return ()
+    text = decode_xhtml(raw if isinstance(raw, bytes) else str(raw))
     return text_blocks(text)
 
 

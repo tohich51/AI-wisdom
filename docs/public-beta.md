@@ -360,7 +360,9 @@ commands are assumed here.
   subscription call when retried.
 - Typed semantic relations are not embedding-similarity edges. Global entity
   merging/clustering and audio/video/slide generation are not implemented.
-  Scanned PDFs require a separate OCR path.
+  Scanned PDFs require a separate OCR path. EPUB XHTML currently requires strict UTF-8
+  (UTF-8 BOM allowed); unsupported encodings fail with `invalid_epub_encoding`
+  before fragments are persisted.
 - There is no 1–2 second cold-latency guarantee. Measure your own accepted
   deployment; a component benchmark is not an end-to-end installation guarantee.
 - No hour-long load-test or blanket acceptance claim is made. Open-source
