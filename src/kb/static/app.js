@@ -1232,9 +1232,14 @@ async function viewSource(id, options = {}) {
     start.setAttribute('data-od-id', 'source-start'); d.append(start);
   }
   d.append(previous, next, pagerLine, targetLine, content);
+  // Keep dismissal outside the scrolling source, including long exact quotations.
+  const sourceBody = node('div', null, {class:'source-dialog-body'});
+  sourceBody.append(...d.childNodes);
+  const sourceActions = node('div', null, {class:'source-dialog-actions'});
+  d.append(sourceActions, sourceBody);
   if (typeof options.onReturn === 'function') {
     const returnLabel = typeof options.returnLabel === 'string' && options.returnLabel.trim() ? options.returnLabel : 'Вернуться';
-    d.append(button(returnLabel, async () => {
+    sourceActions.append(button(returnLabel, async () => {
       const closed = new Promise(resolve => d.addEventListener('close', resolve, {once:true}));
       d.close();
       await closed;
@@ -1242,7 +1247,7 @@ async function viewSource(id, options = {}) {
       return options.onReturn();
     }));
   }
-  d.append(button('Закрыть', () => d.close()));
+  sourceActions.append(button('Закрыть', () => d.close()));
   d.addEventListener('close', () => {
     const ownsView = sourceViewController === controller;
     if (ownsView) sourceViewController = null;
