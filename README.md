@@ -1,128 +1,117 @@
 # AI-wisdom
 
-Project knowledge base: a closed library for the owner plus up to 10 invited
-colleagues. Libraries are created by the owner; files and URLs are uploaded by
-the owner. There is no preloaded content and no migration of an older base.
+A self-hosted knowledge library for an owner and invited colleagues: keep source
+provenance, retrieve published knowledge, curate versioned rules, and record
+explicit use and outcomes. The browser UI and authenticated MCP endpoint share
+the same catalog and access rules. You supply the content; no books, accounts,
+credentials, or populated databases are included.
 
-## Status
+**Public beta:** Python distribution version `0.1.0b1`, release tag
+`v0.1.0-beta.1`. These are release identifiers, not a verification receipt.
+The seven-service stack uses rootless Podman + Quadlet. It is not a portable,
+one-command installer or a production-stability guarantee. See the
+[beta installation guide](docs/public-beta.md) for operator setup and checks.
 
-**`source_bundle_with_pending_gates`** — source only, not deployed.
+## What the beta does
 
-This tree was developed in an isolated cloud sandbox with **no container
-runtime and no systemd**, so Podman/Quadlet (E01) could not be executed. No
-production deployment, no published image, no public endpoint.
+- Ingest PDF, EPUB, DOCX, HTML, and text originals with provenance. Scanned PDFs
+  report `needs_ocr`; this is not an OCR service.
+- Extract draft knowledge and rules through an explicitly requested model job.
+  Generated results require curator approval before publication.
+- Retrieve published material using lexical and vector search, without a
+  generative model call. Unavailable or invalid vector projections are disclosed
+  as lexical fallback.
+- Keep published rule versions immutable; corrections create new versions.
+  Exporting `SKILL.md` neither installs nor runs it.
+- Record application and outcomes explicitly. Retrieval means “served,” not
+  “used,” “successful,” or “proven.” Unknown metadata stays unknown.
 
-| Gate | What | Here |
-|---|---|---|
-| E01 | rootless Podman + Quadlet + systemd | **blocked** — no podman/systemd in the dev environment |
-| E02 | product subscription model-runner | **pending** — no product runner exists; fake adapter used |
-| E03 | real PG / Keycloak / OpenViking + 2 MCP clients | **partial** — real PostgreSQL 16.2 and RLS verified; Keycloak and OpenViking absent |
-| E04 | backup/restore to a separate target | **pending** |
-| E05 | server inventory, domain/issuer, clean install | **pending** |
+Typed semantic relationships and embedding similarity are different views:
+similarity is not a verified relationship. Global entity merging and clustering
+are not implemented. Audio, video, and slide generation are not implemented.
 
-Detail: `docs/handoff/runtime-capabilities.json` and
-`docs/handoff/final-report.md`.
+## Architecture and trust
 
-Owner-host infrastructure update (2026-10-11): see `deploy/xorek/README.md`.
-The 8 GiB parent budget, PostgreSQL and Keycloak start/restart/readiness were
-checked on xorek. Embeddings remain unconfigured; server MiniMax OAuth and a
-writable external backup volume still need owner actions. Both DB exports
-were restored to an isolated target; restic roundtrip remains pending.
-This does not change the full product status above.
-
-## The model
-
-```
-source ──▶ provenance ──▶ knowledge ──▶ rule (immutable version) ──▶ experience
-```
-
-A **retrieved** result means *served*. It does not mean applied, and it does
-not mean the outcome is known. An outcome appears only after a user, an agent
-or a metric reports one; a correction is a new event. Missing attributes stay
-`NULL` — they are never invented.
-
-Library *kind* (`reference`, `brand`, `project`, `playbook`, `experience`) and
-its *audience* are independent axes. Membership in a project library does not
-grant access to the libraries that project links.
-
-## Access
-
-PostgreSQL is the authority. The gateway never decides access in Python and
-then filters — a filter in application code is a filter that can be forgotten.
-`src/kb/access/policy.py` mirrors the SQL rules so the application can fail
-early with a clear error; where the two ever disagree, the SQL wins and the
-mismatch shows up as denied rows.
-
-`kb_app` is the runtime role: not superuser, not a table owner, no `BYPASSRLS`,
-with `FORCE ROW LEVEL SECURITY`. Identity is transaction-local (`app.principal`,
-set by the transport), never taken from a request payload. A missing or
-malformed principal resolves to no role, which is default deny.
-
-Worth knowing when reading the tests: an `UPDATE` under RLS is **filtered**
-(`UPDATE 0`, no error) while an `INSERT` is **rejected** by `WITH CHECK`. Code
-must never read a zero row count as success.
-
-## Commands
-
-```bash
-just prepare      # reproducible install from the lock
-just check        # lint + types + unit tests, no services
-just integration  # real PostgreSQL: RLS, access model, empty bootstrap
-just acceptance   # A01-A20 + S01-S04
-just package      # build the source bundle (never deploys)
-just verify-self  # prove that `check` really fails on a broken tree
-just env          # what this environment can and cannot do
+```text
+Browser / MCP client -> gateway -> PostgreSQL (authoritative rights and records)
+                           |          ^
+                           |       worker -> MiniMax subscription runner
+                           |          |
+                           +-> OpenViking <- single indexer
+                                  |
+                           OpenRouter embeddings
+Keycloak OIDC -> authenticated identity at the gateway
 ```
 
-A mandatory gate that cannot run exits **nonzero**. `just acceptance` exits 5
-with an explicit NOT RUN message when no acceptance tests exist, because the
-absence of tests is not a passing test.
+PostgreSQL is the authority for library rights, provenance, published versions,
+and experience. Runtime roles are non-superuser, have no `BYPASSRLS`, and use row
+level security; missing identity is denied. Library kind and audience are
+independent, and project membership does not grant access to linked libraries.
 
-`just verify-self` injects a real defect and requires `just check` to reject
-it, then confirms the tree is green again. If it ever passes while the defect
-survives, the gate is fake.
+Keycloak provides OIDC authentication. OpenViking is a rebuildable `vectors_only`
+projection, not an authorization database. The embedding profile is OpenRouter
+`qwen/qwen3-embedding-8b`, 4096 dimensions. Product generation uses a separate
+MiniMax subscription runner with `MiniMax-M3.1-Flash-Preview`, not an automatic
+API-key or pay-as-you-go fallback. Bring your own authorized provider accounts
+and credentials; subscription limits still apply. The external CLI's licensing
+boundary is documented in the installation guide; it is not bundled here.
 
-`just` lives in `.tools/` (persistent, NAS-backed), not `/usr/local/bin` —
-the sandbox container is recreated between sessions and wipes the latter. Put
-it on PATH: `export PATH="$PWD/.tools:$PATH"`.
+## Clean-clone package and CLI checks
 
-## Layout
+Use Linux x86_64, Python **3.11 or 3.12** with `venv` and pip, Git, Bash, and
+[`just`](https://github.com/casey/just). Network access to the Python package
+index is required. These commands install the package and development checks;
+they do **not** start the full stack or configure authentication.
 
+```sh
+git clone https://github.com/tohich51/AI-wisdom.git
+cd AI-wisdom
+git checkout --detach v0.1.0-beta.1
+git rev-parse HEAD
+python3 --version                 # must be 3.11.x or 3.12.x
+python3 -m venv .venv
+.venv/bin/python -m pip install --upgrade pip
+.venv/bin/python -m pip install -r requirements.lock
+.venv/bin/python -m pip install -e '.[dev,pgtest]'
+.venv/bin/python -m pip check
+.venv/bin/kb --help
+just check
+.venv/bin/python -m pip wheel --no-deps --wheel-dir dist .
+just package
 ```
-src/kb/contracts/   single source of schema for API + MCP
-src/kb/access/      the one access check
-migrations/         DDL, single owner
-deploy/             target deployment units (Quadlet)
-tests/              unit | integration | acceptance
-spikes/             compatibility probes kept as evidence
-docs/decisions/     dependency and domain decisions
-docs/handoff/       capabilities, checkpoint, per-card results, evidence
-```
 
-## Verified on real infrastructure, not mocks
+An unavailable tag is an error, not permission to silently validate a different
+branch. Release-owner pre-publication checks use the exact assembled candidate
+commit instead. `requirements.lock` is the dependency pin set; the Hatchling
+build backend is not claimed to be bit-for-bit reproducible. `just package`
+builds a source delivery bundle, not a running deployment.
 
-- **PostgreSQL 16.2** (`pgserver` ships real binaries) — RLS isolation,
-  default deny, `WITH CHECK` rejection of forged rows, per-library roles,
-  published-rule immutability, project-membership isolation
-- **MCP SDK 2.3.0** — real server and client in separate processes over a real
-  stdio transport; a spoofed identity argument is ignored
+`just integration` requires real PostgreSQL. `just acceptance` requires its real
+service prerequisites and runtime evidence; neither is implied by `just check`.
+Mandatory gates must fail closed when they cannot run. Do not turn missing
+services, skipped checks, or absent owner receipts into a passing release claim.
 
-## Environment notes
+## Install the real stack
 
-Developed on Debian 12, Python 3.11.2, 2 vCPU, 3 GiB RAM, NAS-backed
-workspace. Target for deployment is Linux x86_64 with rootless Podman +
-Quadlet, which this environment is **not**.
+Read [public beta setup](docs/public-beta.md) before activation. It covers the
+seven services, local image builds, existing-database migration/queue/first-owner
+bootstrap, subscription launcher, OIDC/provider credentials and template mapping.
 
-`pip` here needs `--index-url https://pypi.org/simple/` plus `--trusted-host`;
-`just prepare` passes them. Harmless elsewhere. The pip-packaged PostgreSQL
-ships only `plpgsql` and `vector`, so the schema uses the core
-`gen_random_uuid()` (PG13+) rather than requiring `pgcrypto`.
+- [Product Quadlets](deploy/quadlet/README.md): gateway, worker, model runner, indexer.
+- [Infrastructure Quadlets](deploy/xorek/README.md): PostgreSQL, Keycloak, OpenViking.
+- [Runtime runbook](docs/runbooks/runtime.md): migration and operational safeguards.
+- [Optional SDK MCP client](clients/mcp/README.md): separate client setup and checks.
 
-## Not included
+Deployment/runbook examples can retain installation-specific paths. Use the
+portable mappings in the beta guide; never copy another operator's secrets.
 
-No `node_modules`, no `.venv`, no runtime databases, no OAuth material, no
-tokens, no private keys, no real books. `scripts/build_bundle.py` refuses to
-package anything matching a credential pattern.
+## Limits and license
 
-Independent acceptance is Codex's or the owner's; every result file says
-`review_status: not_reviewed` and this agent does not set it to accepted.
+This beta has no established production-stability or hour-long load-test claim.
+There is no 1–2 second cold-latency guarantee. Review the
+[limitations and release checks](docs/public-beta.md#limitations-and-release-checks)
+before relying on it.
+
+AI-wisdom is [MIT licensed](LICENSE). That license does not relicense external
+CLI packages or include inference, credits, subscriptions, or rights to uploaded
+content. You are responsible for those accounts, terms and rights.

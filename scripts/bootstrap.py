@@ -5,13 +5,15 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import pathlib
-import subprocess
+import re
 import sys
 import uuid
 
 import psycopg
 
+from kb.jobs.schema import install_queue
 from kb.migrate import apply_migrations
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
@@ -23,6 +25,16 @@ ORGANISATION_NAME = "owner-organisation"
 
 class BootstrapError(RuntimeError):
     """Safe operator refusal without identity or connection values."""
+
+
+class ExistingDatabase:
+    """Connection adapter; never expose the DSN in a representation."""
+
+    def __init__(self, dsn: str):
+        self._dsn = dsn
+
+    def get_uri(self) -> str:
+        return self._dsn
 
 
 def apply_schema(srv) -> list[str]:
@@ -46,7 +58,8 @@ def bootstrap(
     principal = _uuid(owner_principal, "owner principal") if issuer else owner_principal
 
     org_uuid = _one(
-        srv, f"SELECT id FROM kb.organisation WHERE name = {_lit(organisation)} LIMIT 1;"
+        srv,
+        f"SELECT id FROM kb.organisation WHERE name = {_lit(organisation)} LIMIT 1;",
     ) or _insert_org(srv, organisation)
     try:
         uuid.UUID(str(org_uuid))
@@ -126,7 +139,9 @@ def setup_owner(
                     (org, principal, issuer, subject),
                 )
             except psycopg.errors.UniqueViolation:
-                raise BootstrapError("membership changed under this bootstrap") from None
+                raise BootstrapError(
+                    "membership changed under this bootstrap"
+                ) from None
             membership = "created"
         else:
             if (row[0], row[1]) != (issuer, subject):
@@ -170,27 +185,10 @@ def _lit(value: str) -> str:
 
 
 def scalar(srv, sql: str) -> str | None:
-    """First column of the first row, or None.
-
-    Uses --tuples-only. Parsing the aligned default output is how you end up
-    reading a table border as if it were data.
-    """
-
-    from pgserver.postgres_server import POSTGRES_BIN_PATH
-
-    proc = subprocess.run(
-        [str(POSTGRES_BIN_PATH / "psql"), srv.get_uri(), "--tuples-only"],
-        input=sql.encode(),
-        capture_output=True,
-        timeout=60,
-    )
-    if proc.returncode != 0:
-        raise RuntimeError(proc.stderr.decode()[:400])
-    for line in proc.stdout.decode().splitlines():
-        line = line.strip()
-        if line and line != "id" and not set(line) <= set("- "):
-            return line
-    return None
+    """Read one scalar using psycopg, including committing INSERT RETURNING."""
+    with psycopg.connect(srv.get_uri()) as conn:
+        row = conn.execute(sql).fetchone()
+    return str(row[0]) if row and row[0] is not None else None
 
 
 def _one(srv, sql: str) -> str | None:
@@ -228,7 +226,13 @@ def content_counts(srv) -> dict:
 
 def main() -> int:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--pgdata", default="/tmp/kb-bootstrap-pg")
+    connection = ap.add_mutually_exclusive_group()
+    connection.add_argument("--pgdata", default=None)
+    connection.add_argument(
+        "--dsn-env",
+        metavar="NAME",
+        help="environment variable containing an existing database administrator DSN",
+    )
     ap.add_argument("--organisation", default=ORGANISATION_NAME)
     ap.add_argument("--owner-principal", default=OWNER_SYSTEM_PRINCIPAL)
     ap.add_argument(
@@ -253,11 +257,29 @@ def main() -> int:
         # Refused here: before pgdata is opened, before any migration or write.
         ap.error("--owner-issuer and --owner-subject must be given together")
 
-    import pgserver
+    if issuer is not None:
+        try:
+            _uuid(a.owner_principal, "owner principal")
+        except BootstrapError:
+            ap.error("owner principal is not a uuid")
+    if a.dsn_env is not None:
+        if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", a.dsn_env):
+            ap.error("--dsn-env must name an environment variable")
+        if issuer is None:
+            ap.error("--dsn-env requires both owner identity flags")
+        dsn = os.environ.get(a.dsn_env)
+        if not dsn or not dsn.strip():
+            ap.error("database environment variable is missing or empty")
+        srv = ExistingDatabase(dsn)
+    else:
+        import pgserver
 
-    srv = pgserver.get_server(pgdata=a.pgdata, cleanup_mode=None)
+        srv = pgserver.get_server(
+            pgdata=a.pgdata or "/tmp/kb-bootstrap-pg", cleanup_mode=None
+        )
     try:
         applied = apply_schema(srv)
+        install_queue(srv.get_uri())
     except Exception as error:
         # migrate deliberately keeps connection details out of its messages, so
         # neither does this.
@@ -275,7 +297,10 @@ def main() -> int:
         # Type only: no connection string, no issuer, no subject.
         print(f"bootstrap failed ({type(error).__name__})", file=sys.stderr)
         return 1
-    counts = content_counts(srv)
+    counts = {
+        key: info[key]
+        for key in ("libraries", "sources", "knowledge", "rules", "fragments")
+    }
     result = {
         **info,
         "content_counts": counts,
@@ -289,7 +314,8 @@ def main() -> int:
         # owner's data and says so; refusing to report success is what turned
         # "preserve the upload" into "delete the upload or fail".
         print(
-            "existing content kept: " + ", ".join(f"{k}={v}" for k, v in counts.items()),
+            "existing content kept: "
+            + ", ".join(f"{k}={v}" for k, v in counts.items()),
             file=sys.stderr,
         )
     return 0
