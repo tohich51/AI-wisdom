@@ -295,6 +295,35 @@ dialog :where(h1, h2, h3, p, blockquote, pre, [role="status"], [role="alert"], .
   overflow-wrap: anywhere;
 }
 dialog pre { white-space: pre-wrap; overflow-wrap: anywhere; }
+/* Source controls stay in their own row; only the source body scrolls.
+   This also keeps focused quotations clear of the controls at any text size. */
+dialog[data-wisdom-source-view][open] {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.source-dialog-actions {
+  display: flex;
+  flex: 0 0 auto;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  padding-bottom: var(--space-2);
+  border-bottom: 1px solid var(--line);
+}
+.source-dialog-actions button {
+  min-block-size: var(--control-min-size);
+  min-inline-size: var(--control-min-size);
+  max-inline-size: 100%;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+.source-dialog-body {
+  min-block-size: 0;
+  overflow: auto;
+  overscroll-behavior: contain;
+  padding: var(--space-2);
+}
+
 .card h2 { color: var(--ink); }
 form { display: grid; gap: var(--space-form-stack); }
 label { font-size: var(--control-font-size); font-weight: var(--font-weight-medium); line-height: 1.4; }
