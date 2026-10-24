@@ -11,11 +11,13 @@ function fixture() {
   let document;
   class Element {
     constructor(tag='div') { this.tagName=tag.toUpperCase(); this.children=[]; this.attrs={}; this.dataset={}; this.listeners={}; this.value=''; this.disabled=false; this.hidden=false; this._text=''; this.className=''; this.type=tag==='input'?'text':''; }
+    get childNodes(){return this.children;}
     get parentNode(){return this.parentElement;}
     get isConnected(){return this===document.body || Boolean(this.parentElement?.isConnected);}
     get textContent(){return this._text+this.children.map(x=>x.textContent).join('');}
     set textContent(v){this.replaceChildren(); this._text=String(v);}
     get options(){return this.children.filter(x=>x.tagName==='OPTION');}
+    get selectedOptions(){return this.options.filter(x=>x.value===this.value);}
     get elements(){const list=this.querySelectorAll('input, select, textarea, button');list.namedItem=name=>list.find(x=>x.name===name);return list;}
     get labels(){return document.querySelectorAll('label').filter(x=>x.getAttribute('for')===this.id);}
     get willValidate(){return ['INPUT','TEXTAREA','SELECT'].includes(this.tagName);}
@@ -52,10 +54,16 @@ function fixture() {
   document.body=new Element('body');document.documentElement=document.body;document.activeElement=document.body;
   const add=(tag,id,parent=document.body)=>{const n=document.createElement(tag);n.setAttribute('id',id);parent.append(n);return n;};
   add('div','status');add('div','library-list');add('button','create-library-type');add('form','search');add('div','search-results');add('div','library-detail');
+  // Current index.html controls: blank project/type filters are global defaults.
+  for(const [id,name,title] of [['search-project','project_id','Без проекта'],['search-library-type','library_type','Все типы']]){
+    assert(source('index.html').includes(`id="${id}" name="${name}"`));
+    const select=add('select',id,document.getElementById('search'));select.name=name;
+    const option=document.createElement('option');option.setAttribute('value','');option.textContent=title;select.append(option);
+  }
   const createForm=add('form','create-library'),kind=add('select','library-kind',createForm);kind.name='kind';for(const key of ['reference','project']){const o=document.createElement('option');o.value=key;o.textContent=key;kind.append(o);}kind.value='reference';
   let handler=()=>{throw Error('Unexpected synthetic request');};const requests=[];
   const route={token:1,name:'libraries',params:[],query:new URLSearchParams()};
-  const context={console,document,Element,HTMLElement:Element,HTMLFormElement:Form,HTMLSelectElement:Select,HTMLInputElement:Input,HTMLTextAreaElement:Textarea,Event,MutationObserver:class{observe(){}},AbortController,DOMException,Headers,URLSearchParams,URL,Blob,crypto:require('node:crypto').webcrypto,setTimeout,clearTimeout,queueMicrotask,location:{pathname:'/app/libraries',search:''},FormData:class{constructor(form){this.entries=form.elements.filter(x=>x.name&&!x.disabled).map(x=>[x.name,x.value]);}get(key){return this.entries.find(x=>x[0]===key)?.[1]??null;}[Symbol.iterator](){return this.entries[Symbol.iterator]();}},fetch:async(url,opts)=>{requests.push({url,opts});const r=await handler(url,opts);return {ok:r.status>=200&&r.status<300,status:r.status,json:async()=>r.body};}};
+  const context={console,document,Element,HTMLElement:Element,HTMLFormElement:Form,HTMLSelectElement:Select,HTMLInputElement:Input,HTMLTextAreaElement:Textarea,Event,MutationObserver:class{observe(){}},AbortController,AbortSignal,DOMException,Headers,URLSearchParams,URL,Blob,crypto:require('node:crypto').webcrypto,setTimeout,clearTimeout,queueMicrotask,location:{pathname:'/app/libraries',search:''},FormData:class{constructor(form){this.entries=form.elements.filter(x=>x.name&&!x.disabled).map(x=>[x.name,x.value]);}get(key){return this.entries.find(x=>x[0]===key)?.[1]??null;}[Symbol.iterator](){return this.entries[Symbol.iterator]();}},fetch:async(url,opts)=>{requests.push({url,opts});const r=await handler(url,opts);return {ok:r.status>=200&&r.status<300,status:r.status,json:async()=>r.body};}};
   context.window=context;context.globalThis=context;
   context.WisdomRouter={current:()=>route,path:(name,params=[])=>'/app/'+name+(params.length?'/'+params.join('/'):''),focusHeading(){},navigate(){}};
   context.WisdomResearch={invalidate(){}};context.WisdomMap={invalidate(){}};
@@ -209,7 +217,9 @@ async function test(name,fn){await fn();passed++;console.log('PASS '+name);}
   let params=new URL(f.requests.at(-1).url,'https://fixture.invalid').searchParams;
   assert.equal(params.get('q'),'synthetic heading');assert.equal(params.has('library_id'),false);
   assert.match(f.document.getElementById('search-results').textContent,/Поиск по смыслу/);
-  assert.match(f.document.getElementById('search-results').textContent,/В библиотеках с неготовым индексом/);
+  assert.match(f.document.getElementById('search-results').textContent,/Для части библиотек индекс не готов: используется поиск по словам/);
+  assert.equal(params.has('project_id'),false);assert.equal(params.has('library_type'),false);
+  assert.equal(params.has('kind'),false);
   assert.doesNotMatch(f.document.getElementById('search-results').textContent,/Пока доступен поиск по словам/);
   scope.value='selected';scope.dispatchEvent(new f.context.Event('change'));
   assert.doesNotMatch(f.document.getElementById('search-results').textContent,/Synthetic shared heading/);
@@ -222,7 +232,30 @@ async function test(name,fn){await fn();passed++;console.log('PASS '+name);}
   assert.equal(f.requests.length,count);assert.equal(scope.value,'all');
   assert.match(f.document.getElementById('search-results').textContent,/больше недоступна/);
  });
- await test('Changing scope cancels pending results and stale citation actions',async()=>{
+ await test('Explicit project/type filters use current API keys without implicit library scope',async()=>{
+  const f=fixture(),form=f.document.getElementById('search');
+  const input=f.add('input','search-query',form);input.name='q';input.value='filtered needle';
+  const scope=f.add('select','search-scope',form);scope.name='scope';scope.value='all';
+  for(const value of ['all','selected']){const o=f.add('option','filter-scope-'+value,scope);o.setAttribute('value',value);}
+  const projectId='22222222-2222-4222-8222-222222222222';
+  f.run('libraries=[{id:'+JSON.stringify(projectId)+',name:"Проект · Пример",kind:"project"}];selected=libraries[0];');
+  const app=source('app.js');f.run(app.slice(app.indexOf('const searchForm ='),app.indexOf("byId('logout')")));
+  const project=f.document.getElementById('search-project'),type=f.document.getElementById('search-library-type');
+  assert(project.options.some(o=>o.value===projectId));assert(type.options.some(o=>o.value==='reference'));
+  project.value=projectId;project.dispatchEvent(new f.context.Event('change'));
+  type.value='reference';type.dispatchEvent(new f.context.Event('change'));
+  f.setHandler(()=>response({mode:'lexical',hits:[]}));await f.submit(form);
+  let params=new URL(f.requests.at(-1).url,'https://fixture.invalid').searchParams;
+  assert.deepEqual(Object.fromEntries(params),{q:'filtered needle',limit:'10',offset:'0',project_id:projectId,library_type:'reference'});
+  project.value='';project.dispatchEvent(new f.context.Event('change'));type.value='';type.dispatchEvent(new f.context.Event('change'));
+  await f.submit(form);params=new URL(f.requests.at(-1).url,'https://fixture.invalid').searchParams;
+  assert.deepEqual(Object.fromEntries(params),{q:'filtered needle',limit:'10',offset:'0'});
+  // Malformed selected IDs must never become a private-library query filter.
+  f.run('selected={id:"not-a-uuid",name:"Invalid"};');scope.value='selected';const count=f.requests.length;
+  await f.submit(form);assert.equal(f.requests.length,count);assert.equal(scope.value,'all');
+  assert.match(f.document.getElementById('search-results').textContent,/больше недоступна/);
+ });
+ for(const changedControl of ['search-scope','search-project','search-library-type']) await test('Changing '+changedControl+' cancels pending results and stale citation actions',async()=>{
   const f=fixture(),form=f.document.getElementById('search');
   const input=f.add('input','search-query',form);input.name='q';input.value='synthetic needle';
   const scope=f.add('select','search-scope',form);scope.name='scope';scope.value='all';
@@ -231,7 +264,9 @@ async function test(name,fn){await fn();passed++;console.log('PASS '+name);}
   const app=source('app.js');f.run(app.slice(app.indexOf('const searchForm ='),app.indexOf("byId('logout')")));
   let resolve;f.setHandler(()=>new Promise(r=>resolve=r));
   await f.submit(form);const request=f.requests.at(-1);assert(resolve);
-  scope.value='selected';scope.dispatchEvent(new f.context.Event('change'));
+  const changed=f.document.getElementById(changedControl);
+  changed.value=changedControl==='search-scope'?'selected':changedControl==='search-project'?'22222222-2222-4222-8222-222222222222':'reference';
+  changed.dispatchEvent(new f.context.Event('change'));
   assert.equal(request.opts.signal.aborted,true);
   resolve(response({mode:'semantic',hits:[{statement:'Forbidden stale result',provenance:[{source_id:'22222222-2222-4222-8222-222222222222',fragment_id:'33333333-3333-4333-8333-333333333333'}]}]}));
   await settle();
