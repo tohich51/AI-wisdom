@@ -173,11 +173,11 @@ def parse_document(path: Path, media_type: str):
                 for ident, _ in book.spine:
                     item = book.get_item_with_id(ident)
                     if item:
-                        text, chapter = _html(item.get_content())
-                        for number, paragraph in enumerate(
-                            text_blocks(item.get_content().decode("utf-8", errors="replace")),
-                            start=1,
-                        ):
+                        # get_content() reserializes XHTML through EbookLib and
+                        # drops direct body text. Parse the original spine bytes.
+                        content = item.content.decode("utf-8", errors="replace")
+                        _text, chapter = _html(content)
+                        for number, paragraph in enumerate(text_blocks(content), start=1):
                             add(
                                 paragraph,
                                 "epub_paragraph",

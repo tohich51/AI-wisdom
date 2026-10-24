@@ -1,6 +1,7 @@
 """Synthetic regressions for the public-main/current-runtime merge boundary."""
 
 from uuid import uuid4
+from zipfile import ZipFile
 
 import httpx
 import pytest
@@ -167,3 +168,67 @@ def test_snapshot_stream_failure_is_sanitized_and_closed():
     assert refusal.value.reason == "fetch_failed"
     assert "private peer detail" not in str(refusal.value)
     assert closed == [True]
+
+
+@pytest.mark.parametrize(
+    ("markup", "expected"),
+    [
+        (
+            "<div>Before<p>Nested paragraph</p>After nested paragraph</div>",
+            ["Before", "Nested paragraph", "After nested paragraph"],
+        ),
+        (
+            "Loose <b>inline</b> text<div>Container <em>inline</em></div>Tail",
+            ["Loose inline text", "Container inline", "Tail"],
+        ),
+        (
+            "<blockquote>Outer<p>Inner</p>Outer tail</blockquote>"
+            "<div>Next</div><section>Last</section>",
+            ["Outer", "Inner", "Outer tail", "Next", "Last"],
+        ),
+        (
+            "<div>Before<br/>after<script>hidden</script><style>hidden</style>"
+            "<noscript>hidden</noscript><iframe>hidden</iframe> end</div>",
+            ["Before after end"],
+        ),
+    ],
+)
+def test_current_ingestion_preserves_epub_container_text_and_provenance(tmp_path, markup, expected):
+    book = epub.EpubBook()
+    book.set_identifier("synthetic-container-text")
+    book.set_title("Synthetic")
+    book.set_language("en")
+    chapters = []
+    for ident, content in [("one", markup), ("two", "<p>Second spine</p>")]:
+        chapter = epub.EpubHtml(title=ident, file_name=f"{ident}.xhtml", uid=ident)
+        chapter.content = content
+        book.add_item(chapter)
+        chapters.append(chapter)
+    book.spine = chapters
+    book.toc = chapters
+    book.add_item(epub.EpubNcx())
+    book.add_item(epub.EpubNav())
+    path = tmp_path / "synthetic-containers.epub"
+    epub.write_epub(str(path), book)
+    # EbookLib's writer drops direct body text. Put the exact synthetic XHTML
+    # into the archive, like a book produced by another EPUB authoring tool.
+    with ZipFile(path) as archive:
+        entries = [(entry, archive.read(entry)) for entry in archive.infolist()]
+    with ZipFile(path, "w") as archive:
+        for entry, content in entries:
+            if entry.filename.endswith("/one.xhtml"):
+                content = (
+                    '<html xmlns="http://www.w3.org/1999/xhtml"><head><title>one</title>'
+                    f"</head><body>{markup}</body></html>"
+                ).encode()
+            archive.writestr(entry, content)
+    rows = parse_document(path, "application/epub+zip")
+    assert [r["text"] for r in rows] == [*expected, "Second spine"]
+    assert [(r["spine"], r["paragraph"]) for r in rows] == [
+        *(("one", n) for n in range(1, len(expected) + 1)),
+        ("two", 1),
+    ]
+    assert [r["ordinal"] for r in rows] == list(range(len(rows)))
+    assert all(r["locator_kind"] == "epub_paragraph" for r in rows)
+    assert all(r["file_page"] is None and r["printed_label"] is None for r in rows)
+    assert all(r["parser_name"] == "ebooklib" and r["parser_version"] for r in rows)

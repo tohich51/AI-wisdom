@@ -83,12 +83,31 @@ _BLOCK_TAGS = frozenset(
         "dt",
         "dd",
         "figcaption",
+        # Containers delimit runs of direct text as well as nested blocks.
+        "div",
+        "section",
+        "article",
+        "main",
+        "header",
+        "footer",
+        "aside",
+        "address",
+        "figure",
+        "ul",
+        "ol",
+        "dl",
+        "table",
+        "thead",
+        "tbody",
+        "tfoot",
+        "tr",
+        "body",
     }
 )
 
 #: Elements that carry no body text. ``head``/``title`` is document metadata,
 #: ``nav`` is the table of contents, and script/style text is not the book.
-_IGNORED_TAGS = frozenset({"head", "title", "script", "style", "nav", "svg"})
+_IGNORED_TAGS = frozenset({"head", "title", "script", "style", "nav", "svg", "noscript", "iframe"})
 
 
 @dataclass(frozen=True, slots=True)
@@ -377,7 +396,11 @@ def _blocks_of(item: Any) -> tuple[str, ...]:
     if content is None:
         return ()
     try:
-        raw = content()
+        # EbookLib's get_content() serializer drops direct body text. Its
+        # loaded content attribute retains the original spine document bytes.
+        raw = getattr(item, "content", None)
+        if raw is None:
+            raw = content()
         text = raw.decode("utf-8", "replace") if isinstance(raw, bytes) else str(raw)
     except Exception:
         return ()
@@ -453,8 +476,13 @@ class _BlockExtractor(HTMLParser):
             self._flush()
 
     def handle_data(self, data: str) -> None:
-        if self._ignored or self._buffer is None:
+        if self._ignored:
             return
+        # Visible text may sit directly in body/container elements, or after
+        # a nested block closed its parent's buffer. Start a new text run;
+        # inline tags keep sharing it, while block boundaries flush it.
+        if self._buffer is None:
+            self._buffer = []
         self._buffer.append(data)
 
     def close(self) -> None:
