@@ -286,6 +286,7 @@ OPERATIONS: Final[tuple[Operation, ...]] = (
         _WRITE,
         "kb:contribute",
         "Submit an uploaded original file for durable ingestion.",
+        mcp_tool="upload_source",
     ),
     _op(
         "sources.read",

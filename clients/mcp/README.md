@@ -101,3 +101,12 @@ export PYTHONDONTWRITEBYTECODE=1
 ```
 
 The retained SDK test uses synthetic loopback callback fixtures only, on 127.0.0.1 ports 19391/19392. All other HTTP is mocked with the real SDK/httpx2 transport; no live OAuth, external network, model calls or products are used. Run with those ports free. Tests exercise configuration binding, discovery/snapshot behavior, metadata fail-closed boundaries, scope/PKCE, same-task lifetime, no replay, graph wire integrity and opt-in cleanup. They do not certify a live server, current grants, RLS or citations from customer data. Root owns integration/acceptance; the changed OAuth configuration seam requires independent security review before release.
+
+## Local material upload on current main
+
+The default remote tool discovery advertises `upload_source` when the upgraded
+server provides it. See [the upload contract](../../docs/mcp-local-upload.md) for
+UTF-8/base64 inputs, byte limits, SHA-256, retry keys and processing readback.
+Reconnect a running client after a server upgrade to refresh its tool catalog.
+The explicitly pinned 35-tool sample snapshot below belongs to an older release;
+use default remote discovery for the new upload tool.

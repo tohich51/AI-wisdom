@@ -109,6 +109,13 @@ bootstrap, subscription launcher, OIDC/provider credentials and template mapping
 - [Runtime runbook](docs/runbooks/runtime.md): migration and operational safeguards.
 - [Optional SDK MCP client](clients/mcp/README.md): separate client setup and checks.
 
+The latest **`main`** includes `upload_source` for local UTF-8 Markdown/text/HTML
+(up to **1 MiB**) or base64 file bytes (up to **4 MiB**), with SHA-256 checks,
+idempotent retries, existing library permissions and queued parsing. Materials
+remain drafts. See [local MCP upload](docs/mcp-local-upload.md) for arguments
+and examples. To obtain this feature after `v0.1.0-beta.1`, update the `main`
+checkout, rebuild the gateway and reconnect the MCP client to refresh its catalog.
+
 Deployment/runbook examples can retain installation-specific paths. Use the
 portable mappings in the beta guide; never copy another operator's secrets.
 

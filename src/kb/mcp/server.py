@@ -172,6 +172,10 @@ def build_mcp(app, hosts):
 
     install_tools(server, call)
 
+    from kb.mcp.uploads import install_upload_tool
+
+    install_upload_tool(server, call, app)
+
     @server.tool()
     def approve_browser_login(pairing_id: UUID, nonce: str, origin: str, ctx: Context):
         """Approve a one-use browser challenge using this authenticated human session."""

@@ -34,6 +34,7 @@ HANDLER_SCOPES = {
     "review_batch": "kb:contribute",
     "edit_knowledge": "kb:contribute",
     "submit_url": "kb:contribute",
+    "upload_source_file": "kb:contribute",
     "submit_processing": "kb:contribute",
     "submit_research": "kb:contribute",
     "save_note": "kb:contribute",
