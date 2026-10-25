@@ -58,6 +58,7 @@ TOOL_HANDLER: dict[str, str] = {
     "start_use": "start_use",
     "record_outcome": "record_outcome",
     "submit_source": "submit_url",
+    "upload_source": "upload_source_file",
     "job_status": "job_status",
     "export_skill": "export_skill",
     "list_jobs": "list_jobs",

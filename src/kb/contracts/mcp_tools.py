@@ -13,7 +13,7 @@ from __future__ import annotations
 from typing import Any, Literal
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from kb.contracts.entities import (
     JobStatusResult,
@@ -141,6 +141,61 @@ class RecordOutcomeArgs(ToolArgs):
 
 
 # 8 -------------------------------------------------------- submit source
+MCP_MAX_TEXT_BYTES = 1024 * 1024
+MCP_MAX_FILE_BYTES = 4 * 1024 * 1024
+MCP_MAX_BASE64_CHARS = 4 * ((MCP_MAX_FILE_BYTES + 2) // 3)
+
+
+class UploadSourceArgs(ToolArgs):
+    library_id: UUID
+    title: str = Field(min_length=1, max_length=300)
+    filename: str = Field(min_length=1, max_length=255)
+    idempotency_key: str = Field(min_length=8, max_length=200)
+    sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    content_text: str | None = Field(default=None, min_length=1, max_length=MCP_MAX_TEXT_BYTES)
+    content_base64: str | None = Field(default=None, min_length=4, max_length=MCP_MAX_BASE64_CHARS)
+    media_type: str | None = Field(
+        default=None, max_length=127, pattern=r"^[A-Za-z0-9.+-]+/[A-Za-z0-9.+-]+$"
+    )
+    process: bool = True
+    extract: bool = False
+
+    @model_validator(mode="after")
+    def check_payload(self):
+        if (self.content_text is None) == (self.content_base64 is None):
+            raise ValueError("supply_exactly_one_text_or_base64")
+        if (
+            self.filename in {".", ".."}
+            or "/" in self.filename
+            or "\\" in self.filename
+            or any(ord(c) < 32 or ord(c) == 127 for c in self.filename)
+        ):
+            raise ValueError("filename_must_be_basename")
+        if self.content_text is not None and self.media_type not in {
+            None,
+            "text/plain",
+            "text/markdown",
+            "text/html",
+        }:
+            raise ValueError("text_media_type_required")
+        if self.extract and not self.process:
+            raise ValueError("extraction_requires_processing")
+        return self
+
+
+class UploadSourceResult(BaseModel):
+    source_id: UUID
+    library_id: UUID
+    status: Literal["stored", "replayed", "deduplicated"]
+    sha256: str
+    byte_size: int
+    media_type: str
+    processing: str
+    publication: str
+    job_id: UUID | None = None
+    duplicate_of_existing: bool = False
+
+
 class SubmitSourceArgs(ToolArgs):
     library_id: UUID
     title: str = Field(min_length=1, max_length=500)
@@ -236,6 +291,7 @@ MCP_TOOLS: dict[str, tuple[type[BaseModel], type[BaseModel] | None]] = {
     "start_use": (StartUseArgs, StartUseResult),
     "record_outcome": (RecordOutcomeArgs, None),
     "submit_source": (SubmitSourceArgs, SubmitSourceResult),
+    "upload_source": (UploadSourceArgs, UploadSourceResult),
     "job_status": (JobStatusArgs, JobStatusResult),
     "export_skill": (ExportSkillArgs, ExportSkillResult),
     "list_jobs": (ListJobsArgs, None),
@@ -263,6 +319,7 @@ EXPECTED_TOOLS: frozenset[str] = frozenset(
         "start_use",
         "record_outcome",
         "submit_source",
+        "upload_source",
         "job_status",
         "export_skill",
         "list_jobs",
