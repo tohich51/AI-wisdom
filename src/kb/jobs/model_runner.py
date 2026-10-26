@@ -104,6 +104,16 @@ class _RunnerFailure(Exception):
         super().__init__(reason)
 
 
+def _response_model_matches_request(value: object) -> bool:
+    # The managed endpoint reports this canonical name for the unchanged
+    # Preview request. Pin that observed pair; never accept arbitrary models
+    # or apply the compatibility rule to another configured request.
+    return isinstance(value, str) and (
+        value == _MODEL
+        or (_MODEL == "MiniMax-M3.1-Flash-Preview" and value == "MiniMax-M3.1-Flash")
+    )
+
+
 def _object_without_duplicate_keys(
     pairs: list[tuple[str, object]],
 ) -> dict[str, object]:
@@ -316,7 +326,7 @@ def _run_cli(
                     raise ValueError("missing_completion_proof")
                 proof = proofs[0]
                 if (
-                    proof.get("model") != _MODEL
+                    not _response_model_matches_request(proof.get("model"))
                     or proof.get("stop_reason") != "end_turn"
                     or proof.get("message_stop") is not True
                     or proof.get("error") is not False
@@ -362,7 +372,7 @@ def _text_from_provider_output(stdout: bytes) -> str:
     if status != 0:
         raise _RunnerFailure("model_unavailable")
 
-    if envelope.get("model") != _MODEL:
+    if not _response_model_matches_request(envelope.get("model")):
         raise _RunnerFailure("invalid_output")
     if envelope.get("stop_reason") != "end_turn":
         raise _RunnerFailure("incomplete_output")

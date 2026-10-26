@@ -392,3 +392,9 @@ Read their coverage and limitations: package installation, a disposable database
 and synthetic provider checks do not establish a new seven-service deployment
 with your identity and provider accounts. The published source does not activate
 or change an existing deployment.
+
+## Native extraction response identity
+
+The subscription runner keeps requesting `MiniMax-M3.1-Flash-Preview`. The managed endpoint can report `MiniMax-M3.1-Flash` in the response. The runner accepts this observed response name only for that exact request, as well as the exact requested name. Other model identities remain rejected. This compatibility handling does not select another provider or change the requested model.
+
+A matching name is not sufficient for acceptance: extraction still requires complete `end_turn` output, valid structured JSON, and permitted source fragment IDs. Streaming also requires the independent completion proof. Truncated, malformed, error and thinking-only responses remain failures; generated knowledge and rules remain drafts for review.
